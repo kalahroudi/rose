@@ -135,7 +135,7 @@ Already have a service? → [docs/multi-tenanting-a-service.md](docs/multi-tenan
 | [Building UI](docs/ui.md) | Page template, tables, drawers, help |
 | [Multi-tenanting a service](docs/multi-tenanting-a-service.md) | Gateway, dispatch namespaces, custom domains |
 | [Building with AI agents](docs/agents.md) | The guardrails and their limits |
-| [Testing](docs/testing.md) · [Local development](docs/local-development.md) · [Deployment](docs/deployment.md) · [Branding](docs/branding.md) | |
+| [Testing](docs/testing.md) · [Penetration tests](docs/pentest.md) · [Local development](docs/local-development.md) · [Deployment](docs/deployment.md) · [Branding](docs/branding.md) | |
 
 ## Status and limits
 
