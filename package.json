@@ -1,0 +1,28 @@
+{
+  "name": "rose",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Security-first multi-tenant SaaS starter kit for Cloudflare, built for AI-agent development",
+  "license": "Apache-2.0",
+  "author": "kalahroudi",
+  "repository": { "type": "git", "url": "https://github.com/kalahroudi/rose.git" },
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "pnpm -r --filter './apps/*' build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "guard": "node scripts/guard.mjs",
+    "guard:approve": "node scripts/guard.mjs --approve",
+    "verify": "pnpm guard && pnpm typecheck && pnpm test",
+    "brand": "node scripts/brand.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
