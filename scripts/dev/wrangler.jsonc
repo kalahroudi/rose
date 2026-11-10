@@ -1,0 +1,11 @@
+{
+  // Development-only router. See router.js.
+  "name": "rose-dev-router",
+  "main": "router.js",
+  "compatibility_date": "2026-10-01",
+  "services": [
+    { "binding": "APP", "service": "rose-app" },
+    { "binding": "ADMIN", "service": "rose-admin" }
+  ],
+  "vars": { "ADMIN_PORT": "5173" }
+}
