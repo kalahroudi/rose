@@ -64,7 +64,9 @@ function Root() {
   }
   const signOut = async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    qc.clear();
+    // Drop everything cached for this person, then re-check who is signed in. The bootstrap
+    // query itself must stay mounted, or the screen would keep showing the old session.
+    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "bootstrap" });
     await qc.invalidateQueries({ queryKey: ["bootstrap"] });
   };
   return (

@@ -203,19 +203,19 @@ if (resendKey) {
   putSecret(wranglerAdmin, ADMIN_DIR, "RESEND_API_KEY", resendKey, haveAdmin, { keepExisting: false });
 }
 
-const sub = adminHost.endsWith(`.${domain}`) ? adminHost.slice(0, -domain.length - 1) : adminHost;
 console.log(`
 ${c.bold(dry ? "What would happen next" : "Almost there")}
 
 ${c.bold("DNS")} — this script does not create DNS records. In the Cloudflare dashboard for ${c.bold(zone)}, make sure these exist and are ${c.bold("proxied")} (orange cloud):
 
   Type   Name   Content   Purpose
-  AAAA   @      100::     signup and workspace finder   https://${domain}
-  AAAA   *      100::     every tenant                  https://<workspace>.${domain}
-  AAAA   ${sub.padEnd(6)} 100::     operator console              https://${adminHost}
+  AAAA   ${domain}      100::     signup and workspace finder
+  AAAA   *.${domain}    100::     every tenant
+  AAAA   ${adminHost}   100::     operator console
 
   (100:: is a placeholder; the Worker routes answer the requests. If you already have records for these names, keep them proxied.)
-  Wildcard certificates for *.${domain} are covered by Universal SSL. Deeper levels (a.b.${domain}) are intentionally never tenants.
+  ${domain === zone ? `Certificates for *.${domain} are covered by Universal SSL.` : `${c.bold("Certificate needed")}: ${domain} is a subdomain of ${zone}, so Universal SSL does not cover *.${domain}. Order an Advanced Certificate Manager pack for it, or tenant addresses will fail with a TLS error.`}
+  Deeper levels (a.b.${domain}) are intentionally never tenants.
 
 ${c.bold("Then")}
   1. Open https://${adminHost} and sign in as ${operatorEmail} (a 6-digit code is emailed).
