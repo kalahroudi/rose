@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Run: node --test examples/upstream-service/
+// Run: node --test "examples/upstream-service/*.test.mjs"
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";

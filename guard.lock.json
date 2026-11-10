@@ -5,7 +5,7 @@
     ".claude/settings.json": "8cb72558bc5abe0fc7bdb31773874fcf74145ba0713efd525fa876242ddfc392",
     ".githooks/pre-commit": "f48bea418c17b23120f86289713fc6fa7fb3398ee1f63711db4425cf3a9eac5c",
     ".githooks/pre-push": "b6994b3d5d76a50596f21a05612e2c26e16933b306da2db7c361c1c179d4dc82",
-    ".github/workflows/ci.yml": "9768be7e18cd844a34bcb0a770544e4f193afe2281bd4d08db55f4e1191eec66",
+    ".github/workflows/ci.yml": "64772280201cbf7581e858f8516e5afa2ffce3b8e9db69363d6fd15544d5913c",
     ".github/workflows/pentest-live.yml": "80875629717860efde4c08eba850746241a0a77d47f4da74616c12ddf50ee7a6",
     "CODEOWNERS": "bc948f83cde0fd9e40bb9b8d00b169928915b274b5c64cdd949c21898d06d16f",
     "apps/admin/public/_headers": "73e33d92fa52cabcda4fea4912003481a8374d18bc9a28c0008d1cf240807e2d",

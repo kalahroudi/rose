@@ -35,7 +35,8 @@ jobs:
       - name: Guardrails (security invariants and protected-core lock)
         run: pnpm guard
       - name: Guard self-tests
-        run: node --test scripts/
+        # File patterns, not directories: Node 22 does not accept a directory here.
+        run: pnpm test:scripts
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)

@@ -35,7 +35,7 @@ security headers from your responses, so this service can not affect the tenant'
 ## Try it
 
 ```sh
-node --test examples/upstream-service/          # verification tests, no install needed
+node --test "examples/upstream-service/*.test.mjs"          # verification tests, no install needed
 
 # run it next to `pnpm dev`:
 cd examples/upstream-service

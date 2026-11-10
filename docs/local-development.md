@@ -38,7 +38,7 @@ is sent in development.
 | `pnpm build` | Production build of both SPAs |
 | `pnpm setup` | (Re)create local secrets, git hooks, local database |
 | `pnpm brand --name … --color …` | Rebrand ([branding.md](branding.md)) |
-| `node --test scripts/ examples/` | Tests for the guard, scripts and the example upstream |
+| `pnpm test:scripts` | Tests for the guard, scripts and the example upstream |
 
 ## Resetting local data
 
