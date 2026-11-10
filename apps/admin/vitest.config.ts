@@ -11,7 +11,6 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        assets: undefined,
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("../../packages/core/migrations"),
           ENVIRONMENT: "test",

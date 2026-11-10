@@ -1,0 +1,7 @@
+{
+  // Example upstream service. Not part of the kit's deployment.
+  "name": "rose-example-upstream",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01"
+  // Secret: UPSTREAM_SIGNING_SECRET (the same value the Rose app worker has)
+}

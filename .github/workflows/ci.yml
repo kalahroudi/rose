@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# The same gate as `pnpm verify` locally, plus a production build.
+# Actions are referenced by major version tag. For a stricter supply chain, pin each to a
+# full commit SHA (Dependabot keeps SHA pins up to date; see .github/dependabot.yml).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Guard, types, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install (lockfile is authoritative; no lifecycle scripts beyond the allow-list)
+        run: pnpm install --frozen-lockfile
+      - name: Guardrails (security invariants and protected-core lock)
+        run: pnpm guard
+      - name: Guard self-tests
+        run: node --test scripts/
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Tests (includes the tenant-isolation contract for every module)
+        run: pnpm test
+      - name: Build
+        run: pnpm build

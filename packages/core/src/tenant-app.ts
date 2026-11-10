@@ -7,14 +7,14 @@ import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { enqueueJob, listJobs, runDueJobs, type JobHandler } from "./control/jobs";
 import { consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
-import { createTenant, deleteTenantRecords, getTenant, markTenantDeleting, slugAvailable, updateTenant, type TenantRow } from "./control/tenants";
+import { createTenant, deleteTenantRecords, getTenant, markTenantDeleting, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
   addMembership, changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
 } from "./control/users";
 import { sendEmail } from "./email";
 import { isDev, type TenantWorkerEnv } from "./env";
-import { forbidden, invalid, notFound, unauthorized } from "./errors";
+import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
 import { forwardToUpstream } from "./gateway";
 import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";
 import { listQuerySchema } from "./http/pagination";
@@ -202,6 +202,10 @@ export function createTenantApp(options: TenantAppOptions) {
   app.post("/api/root/enter", async (c) => {
     rootOnly(c);
     const body = await readJson(c, z.object({ ticket: z.string().max(100), slug: z.string().max(40).optional(), create: z.object({ name: z.string().max(80), slug: z.string().max(40) }).optional() }));
+    // Check the address first: a typo must not cost the person their verified ticket.
+    if (body.create && !(await slugAvailable(c.env.DB, validateSlug(body.create.slug)))) {
+      throw conflict("That workspace address is taken.", { slug: "Already in use." });
+    }
     const userId = await consumeHandoff(c.env.DB, body.ticket, "signup", ROOT_SCOPE);
     if (!userId) throw unauthorized("Your verification expired. Start again.");
     let tenant: TenantRow | null;

@@ -17,7 +17,8 @@
     "test": "pnpm -r test",
     "guard": "node scripts/guard.mjs",
     "guard:approve": "node scripts/guard.mjs --approve",
-    "verify": "pnpm guard && pnpm typecheck && pnpm test",
+    "test:scripts": "node --test scripts/ examples/",
+    "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
     "brand": "node scripts/brand.mjs",
     "deploy": "node scripts/deploy.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
