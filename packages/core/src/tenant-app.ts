@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAuthRoutes, checkCode, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
-import { enqueueJob, listJobs, runDueJobs, type JobHandler } from "./control/jobs";
+import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } from "./control/jobs";
 import { consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
 import { createTenant, deleteTenantRecords, getTenant, markTenantDeleting, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
@@ -99,6 +99,9 @@ export function createTenantWorker(options: TenantAppOptions) {
   return {
     app,
     fetch: (request: Request, env: TenantWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+    /** Jobs start as soon as they are queued. */
+    queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: TenantWorkerEnv) => runJobMessages(env, tenantJobHandlers(options.modules), batch),
+    /** Hourly: expiry sweep, plus a safety net for jobs whose queue message was lost. */
     scheduled: async (_event: unknown, env: TenantWorkerEnv, _ctx: unknown) => tenantTick(env, options.modules),
   };
 }
@@ -375,7 +378,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (confirm !== t.slug) throw invalid("Type the workspace address to confirm.", { confirm: "Does not match." });
     await markTenantDeleting(c.env.DB, t.id);
     invalidateHostCache();
-    await enqueueJob(c.env.DB, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label });
+    await enqueueJob(c.env, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label });
     await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner" }, ip: clientIp(c) });
     return c.json({ ok: true }, 202);
   });
@@ -394,7 +397,7 @@ export function createTenantApp(options: TenantAppOptions) {
           audit: (action, target, meta) => audit(c, `${mod.id}.${action}`, target, meta),
           enqueue: async (job, title, payload) => {
             if (!mod.jobs?.[job]) throw new Error(`Module ${mod.id} has no job "${job}"`);
-            const row = await enqueueJob(c.env.DB, { type: `m.${mod.id}.${job}`, scope: tenant.id, title, payload, createdBy: c.get("actor").label });
+            const row = await enqueueJob(c.env, { type: `m.${mod.id}.${job}`, scope: tenant.id, title, payload, createdBy: c.get("actor").label });
             return row.id;
           },
           req: {

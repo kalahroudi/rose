@@ -111,7 +111,13 @@ ${c.bold("Plan")}
   Email              ${emailProvider}${emailFrom ? `, from ${emailFrom}` : ""}
 `);
 
-// 3. Database
+// 3. Queues that start background jobs. Creating one that already exists is not an error here.
+for (const queue of ["rose-app-jobs", "rose-admin-jobs"]) {
+  const r = step(`Creating queue ${queue}`, wranglerApp, ["queues", "create", queue], { cwd: APP_DIR, capture: true, allowFail: true });
+  if (!dry && r.status !== 0 && !/already (exists|taken)|11009/i.test(`${r.stdout}${r.stderr}`)) fail(`Could not create queue ${queue}.\n${r.stdout}\n${r.stderr}`);
+}
+
+// 4. Database
 let dbId = null;
 const appCfgPath = join(APP_DIR, "wrangler.jsonc");
 const adminCfgPath = join(ADMIN_DIR, "wrangler.jsonc");

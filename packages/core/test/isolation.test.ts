@@ -125,3 +125,67 @@ describe("queued work and deletion", () => {
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'failed'").first()).toEqual({ n: 0 });
   });
 });
+
+describe("job queue", () => {
+  const fakeQueue = () => {
+    const sent: { body: { jobId: string }; delaySeconds?: number }[] = [];
+    return { sent, send: async (body: { jobId: string }, o?: { delaySeconds?: number }) => void sent.push({ body, delaySeconds: o?.delaySeconds }) };
+  };
+  const batchOf = (ids: unknown[]) => {
+    const acked: number[] = [];
+    return { acked, messages: ids.map((jobId, i) => ({ body: { jobId }, ack: () => void acked.push(i) })) };
+  };
+
+  it("queuing a job wakes the right worker, and the message runs it exactly once", async () => {
+    const { enqueueJob, runJobMessages } = await import("../src/control/jobs");
+    const app = fakeQueue();
+    const admin = fakeQueue();
+    const qenv = { DB: env.DB, APP_JOBS: app, ADMIN_JOBS: admin };
+    const a = await enqueueJob(qenv, { type: "t.app", scope: "platform", title: "app job" });
+    const d = await enqueueJob(qenv, { type: "domain.verify", scope: "platform", title: "admin job", delayMs: 30_000 });
+    expect(app.sent).toEqual([{ body: { jobId: a.id }, delaySeconds: undefined }]);
+    expect(admin.sent).toEqual([{ body: { jobId: d.id }, delaySeconds: 30 }]);
+
+    let runs = 0;
+    const handlers = { "t.app": async () => (runs++, { done: true as const }) };
+    // The same message delivered twice, plus junk: one run, everything acknowledged.
+    const batch = batchOf([a.id, a.id, "job_missing", null, { $ne: 1 }]);
+    await runJobMessages(qenv, handlers, batch);
+    expect(runs).toBe(1);
+    expect(batch.acked).toHaveLength(5);
+    expect(await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(a.id).first()).toEqual({ status: "succeeded" });
+    // A message for a job that is not due yet does nothing.
+    await runJobMessages(qenv, { "domain.verify": async () => (runs++, { done: true as const }) }, batchOf([d.id]));
+    expect(runs).toBe(1);
+  });
+
+  it("retries are scheduled with a delayed message and stop after five failures", async () => {
+    const { enqueueJob, runJobMessages, retryJob } = await import("../src/control/jobs");
+    const app = fakeQueue();
+    const qenv = { DB: env.DB, APP_JOBS: app };
+    const wait = await enqueueJob(qenv, { type: "t.wait", scope: "platform", title: "waits" });
+    await runJobMessages(qenv, { "t.wait": async () => ({ done: false as const, retryInMs: 45_000 }) }, batchOf([wait.id]));
+    expect(app.sent.at(-1)).toEqual({ body: { jobId: wait.id }, delaySeconds: 45 });
+
+    const bad = await enqueueJob(qenv, { type: "t.bad", scope: "platform", title: "fails" });
+    const boom = { "t.bad": async () => { throw new Error("boom"); } };
+    for (let i = 0; i < 5; i++) {
+      await env.DB.prepare("UPDATE jobs SET run_after = 0 WHERE id = ?").bind(bad.id).run();
+      await runJobMessages(qenv, boom, batchOf([bad.id]));
+    }
+    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(bad.id).first()).toEqual({ status: "failed", attempts: 5, error: "boom" });
+    const before = app.sent.length;
+    await runJobMessages(qenv, boom, batchOf([bad.id]));
+    expect(app.sent.length).toBe(before);
+    await retryJob(qenv, bad.id);
+    expect(app.sent.at(-1)).toEqual({ body: { jobId: bad.id }, delaySeconds: undefined });
+  });
+
+  it("a failing queue never loses the job: the sweep still runs it", async () => {
+    const { enqueueJob, runDueJobs } = await import("../src/control/jobs");
+    const qenv = { DB: env.DB, APP_JOBS: { send: async () => { throw new Error("queue down"); } } };
+    const j = await enqueueJob(qenv, { type: "t.sweep", scope: "platform", title: "swept" });
+    expect(await runDueJobs(qenv, { "t.sweep": async () => ({ done: true as const }) })).toBe(1);
+    expect(await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(j.id).first()).toEqual({ status: "succeeded" });
+  });
+});

@@ -117,13 +117,15 @@ migrations the next time it starts after a deploy.
 
 ## Operations
 
-- **Cron** runs every minute in both workers: background jobs and cleanup of expired
-  sessions, codes, handoffs, challenges and invitations.
+- **Queues** (`rose-app-jobs`, `rose-admin-jobs`, created by `pnpm setup`) start
+  background jobs as soon as they are queued.
+- **Cron** runs hourly in both workers: cleanup of expired sessions, codes, handoffs,
+  challenges and invitations, and a safety-net sweep for jobs whose message was lost.
 - **Logs**: Workers observability is enabled. Errors are JSON lines with a `requestId`,
   which is also returned to the client in `X-Request-Id` and in error bodies.
 - **Suspending a tenant** (console) blocks its sessions and API keys on the next request.
 - **Deleting a tenant** is asynchronous and irreversible: the tenant database and its
-  encryption key are destroyed by the next cron tick.
+  encryption key are destroyed by a background job that starts within seconds.
 - **Backups**: D1 has point-in-time recovery (Time Travel). Durable Object storage has
   its own point-in-time recovery API; Rose does not wrap it yet.
 - **Rotating secrets**: [encryption.md](encryption.md#rotating-the-master-key). Rotating
