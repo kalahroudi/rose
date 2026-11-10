@@ -113,3 +113,15 @@ describe("roles and API keys", () => {
     expect(((await (await b.fetch("/api/jobs")).json()) as { items: unknown[] }).items).toHaveLength(0);
   });
 });
+
+describe("queued work and deletion", () => {
+  it("a deleted workspace's queued jobs are removed, not left to fail", async () => {
+    const { tenantTick } = await import("../src");
+    const a = await createTestTenant(env, SELF);
+    expect((await a.fetch("/api/m/notes/stamp", { body: {} })).status).toBe(201);
+    expect((await a.fetch("/api/workspace/delete", { body: { confirm: a.slug } })).status).toBe(202);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE scope = ?").bind(a.id).first()).toEqual({ n: 0 });
+    await tenantTick(env, modules);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'failed'").first()).toEqual({ n: 0 });
+  });
+});

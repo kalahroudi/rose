@@ -5,7 +5,8 @@
     ".claude/settings.json": "8cb72558bc5abe0fc7bdb31773874fcf74145ba0713efd525fa876242ddfc392",
     ".githooks/pre-commit": "f48bea418c17b23120f86289713fc6fa7fb3398ee1f63711db4425cf3a9eac5c",
     ".githooks/pre-push": "b6994b3d5d76a50596f21a05612e2c26e16933b306da2db7c361c1c179d4dc82",
-    ".github/workflows/ci.yml": "3224a597ed88013aedfed6ced526eefca63ad9bf35c6843ecca8ecaab5a7a306",
+    ".github/workflows/ci.yml": "9768be7e18cd844a34bcb0a770544e4f193afe2281bd4d08db55f4e1191eec66",
+    ".github/workflows/pentest-live.yml": "80875629717860efde4c08eba850746241a0a77d47f4da74616c12ddf50ee7a6",
     "CODEOWNERS": "bc948f83cde0fd9e40bb9b8d00b169928915b274b5c64cdd949c21898d06d16f",
     "apps/admin/public/_headers": "73e33d92fa52cabcda4fea4912003481a8374d18bc9a28c0008d1cf240807e2d",
     "apps/app/public/_headers": "73e33d92fa52cabcda4fea4912003481a8374d18bc9a28c0008d1cf240807e2d",
@@ -20,7 +21,7 @@
     "packages/core/src/control/otp.ts": "871ff4ca2f3ce35cab7913cd55b01411e2fb64dae83535bc1badd9caac5bd187",
     "packages/core/src/control/sessions.ts": "f25b200e5e21b5fcdacdae742bf0e8a78208d03c995c9089feb0bc8032c20117",
     "packages/core/src/control/settings.ts": "b9c8a6d44cdb0e24191fe80f1379c04a945fe1c442e1af43f4736e91908bbde3",
-    "packages/core/src/control/tenants.ts": "96f59113a42abb2381adfe31b293c8a62c2fcaca9515484d54b9a0a35ac484f5",
+    "packages/core/src/control/tenants.ts": "055e660393e4a11a726897462490b02f8603f08cd2f8d1abfe30a094ae0d6f00",
     "packages/core/src/control/users.ts": "55ac51d839f4b844ddd99c6ff3df3457cccb44971ae773b6688d2d0f2158d369",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb3fc57481ba4159e980e1c585eccfc56e",
     "packages/core/src/email.ts": "5d197705cca73c0bf627a9ab2122124f0a65ed494c86189ab7aa2edfa8353ffb",
@@ -28,8 +29,8 @@
     "packages/core/src/env.ts": "268fb7e33f8a3d53418d0f893bbaa4daf4ab3380b63adb61a135fafa234d1fa5",
     "packages/core/src/errors.ts": "5d77f0dd7e66fe870ff42648cd53c9380418e210638d2535677b41ddfa2821dc",
     "packages/core/src/gateway.ts": "bd13e9c1e0df3dd80d0c842c0f853381e8441d20383b7b83f24072af6d4e9f48",
-    "packages/core/src/http/base.ts": "27912eb43802d13b9da88899bb2064113efe082d45e3696b18794a6f1d555469",
-    "packages/core/src/http/pagination.ts": "0721628d5446c70963f4046468e20245b74eeb5b0def437ff52e4c03efb1d759",
+    "packages/core/src/http/base.ts": "50221b350c1ca6456b898873b8f0851d4042f044bd73a44f31f1935546e8cccf",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f1809b9a174f693c040dd7a59767a3c9a",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1fe3fcab8536b90f1e093f8132fc2588d",
     "packages/core/src/index.ts": "fceea2855fde711d3e78b8ee6835c4ce995c247205a2b3ea9599b170cef31119",
     "packages/core/src/modules.ts": "db199c1a8c9f436ae0ca61509e52632b0d4676fde0204e32153e538a841f9df4",
@@ -38,7 +39,7 @@
     "packages/core/src/tenancy/resolve.ts": "c4fd0928645b46f313b484d342818c8a49d329800ac4684d591681dc7e6f3186",
     "packages/core/src/tenancy/store.ts": "9a2fab47f03eaaa73e2c81911a687635f6be6a0cfbeef2c5453ab33986c53a2c",
     "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6fb6759ec9c6a8bb0f76193ca0a8a512e",
-    "packages/core/src/tenant-app.ts": "626e63d859a910e8a5d901653b125b096da99988be6bda58cc0dcbc0c09db08d",
+    "packages/core/src/tenant-app.ts": "60c69f609bb696849fbfe9ce7670ace11c7caebb0a4e4c0f17f09afe324e7840",
     "scripts/guard.mjs": "0357b81fc9ba99692a6875c0486e63a214755f9276ad09a9f42ffc2912b58415"
   }
 }

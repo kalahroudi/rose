@@ -236,3 +236,14 @@ describe("abuse limits", () => {
     expect(r.total).toBe(0);
   });
 });
+
+describe("sort keys", () => {
+  it("inherited object properties are not valid sort columns", async () => {
+    const { orderBy } = await import("../src/http/pagination");
+    for (const k of ["__proto__", "constructor", "toString", "-hasOwnProperty", "constructor.prototype"]) expect(orderBy(k, { name: "name" }, "created_at DESC")).toBe("created_at DESC");
+    expect(orderBy("-name", { name: "name" }, "x")).toBe("name DESC");
+    const a = await createTestTenant(env, SELF);
+    expect((await a.fetch("/api/members?sort=__proto__")).status).toBe(200);
+    expect((await a.fetch("/api/members?sort=constructor")).status).toBe(200);
+  });
+});

@@ -71,6 +71,8 @@ export async function readJson<T>(c: Context, schema: ZodType<T>): Promise<T> {
   if (!(c.req.header("Content-Type") ?? "").toLowerCase().startsWith("application/json")) {
     throw badRequest("Send JSON with Content-Type: application/json.");
   }
+  // Refuse an oversized body from its declared length, before spending time reading it.
+  if (Number(c.req.header("Content-Length") ?? 0) > MAX_BODY * 4) throw new AppError(413, "too_large", "Request body is too large.");
   const text = await c.req.text();
   if (text.length > MAX_BODY) throw new AppError(413, "too_large", "Request body is too large.");
   let raw: unknown;

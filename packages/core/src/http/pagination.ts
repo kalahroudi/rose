@@ -66,6 +66,8 @@ export function likePrefix(q: string): string {
  */
 export function orderBy(sort: string, allowed: Record<string, string>, fallback: string): string {
   const desc = sort.startsWith("-");
-  const column = allowed[desc ? sort.slice(1) : sort];
+  const key = desc ? sort.slice(1) : sort;
+  // Own properties only: "__proto__" or "constructor" must not resolve to something inherited.
+  const column = Object.hasOwn(allowed, key) ? allowed[key] : undefined;
   return column ? `${column} ${desc ? "DESC" : "ASC"}` : fallback;
 }

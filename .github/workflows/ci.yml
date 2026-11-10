@@ -42,3 +42,35 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+
+  pentest:
+    name: Penetration tests (local stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start the local stack
+        run: |
+          nohup node scripts/dev.mjs > dev.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf http://localhost:5174/api/bootstrap | grep -q '"root"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0
+            sleep 1
+          done
+          cat dev.log; exit 1
+      - name: Attack it
+        run: pnpm pentest
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pentest-report
+          path: .rose/pentest-report.json
+          if-no-files-found: ignore

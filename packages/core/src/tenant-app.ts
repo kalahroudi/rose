@@ -67,7 +67,9 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
       // that tenant's own request. The payload can not redirect it to another tenant.
       handlers[`m.${mod.id}.${name}`] = async (env, job, payload) => {
         const row = await getTenant(env.DB, job.scope);
-        if (!row || row.status !== "active") throw new Error("Workspace is not active");
+        // The tenant was deleted or suspended after queuing: drop the work instead of retrying it.
+        if (!row || row.status === "deleting") return { done: true, result: { skipped: "workspace no longer exists" } };
+        if (row.status !== "active") return { done: false, retryInMs: 10 * 60_000, note: "Workspace is suspended" };
         const tenant = bindTenant(row);
         const db = new TenantDb(env, tenant);
         const result = await run(

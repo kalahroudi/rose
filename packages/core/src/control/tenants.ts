@@ -149,6 +149,8 @@ export async function markTenantDeleting(db: D1Database, id: string): Promise<vo
     db.prepare("UPDATE tenants SET status = 'deleting', updated_at = ? WHERE id = ?").bind(now(), id),
     // Cut every live session immediately; the data purge follows as a background job.
     db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
+    // Work the tenant queued must not outlive it.
+    db.prepare("DELETE FROM jobs WHERE scope = ?").bind(id),
   ]);
 }
 
@@ -156,6 +158,7 @@ export async function markTenantDeleting(db: D1Database, id: string): Promise<vo
 export async function deleteTenantRecords(db: D1Database, id: string): Promise<void> {
   await db.batch([
     db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
+    db.prepare("DELETE FROM jobs WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM passkeys WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM login_codes WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM handoffs WHERE scope = ?").bind(id),
