@@ -4,7 +4,7 @@
 import { sha256Hex, timingSafeEqual } from "../crypto";
 import type { Role } from "../control/users";
 import { notFound } from "../errors";
-import { likePattern, offsetOf, type ListQuery, type Page } from "../http/pagination";
+import { likePattern, likePrefix, offsetOf, type ListQuery, type Page } from "../http/pagination";
 import { newId, now, randomToken } from "../ids";
 import type { TenantDb } from "./context";
 
@@ -33,7 +33,7 @@ export async function listTenantAudit(db: TenantDb, f: ListQuery & { action?: st
   }
   if (f.action) {
     where.push("action LIKE ? ESCAPE '\\'");
-    args.push(`${f.action.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+    args.push(likePrefix(f.action));
   }
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const [rows, count] = await db.batch([

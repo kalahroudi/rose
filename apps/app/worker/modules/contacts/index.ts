@@ -5,7 +5,7 @@
 //   - a table in each tenant's private database        - paginated, searchable, sortable lists
 //   - encrypted sensitive fields + blind-index search  - bulk actions with server-side "select all"
 //   - permissions by role and an audit trail           - a background job (CSV import)
-import { defineModule, invalid, likePattern, newId, notFound, now, offsetOf, orderBy, type ModuleContext, type ModuleJobContext, type SqlValue } from "@rose/core";
+import { defineModule, invalid, likePattern, newId, notFound, now, offsetOf, orderBy, searchTermSchema, type ModuleContext, type ModuleJobContext, type SqlValue } from "@rose/core";
 import { z } from "zod";
 
 const STATUSES = ["lead", "active", "archived"] as const;
@@ -195,7 +195,7 @@ export const contacts = defineModule({
             action: z.enum(["delete", "archive", "activate"]),
             ids: z.array(z.string().max(40)).max(100).optional(),
             // "Select all matching": the server re-applies the filter; ids are never loaded into the browser.
-            filter: z.object({ q: z.string().max(100).default(""), status: z.string().max(20).default("") }).optional(),
+            filter: z.object({ q: searchTermSchema, status: z.string().max(20).default("") }).optional(),
           }),
         );
         let w: { sql: string; args: SqlValue[] };

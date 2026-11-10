@@ -78,3 +78,13 @@ describe("contacts", () => {
     expect(parseCsvLine('a,"b,c","d ""e"""')).toEqual(["a", "b,c", 'd "e"']);
   });
 });
+
+describe("contacts bulk filter safety", () => {
+  it("a NUL byte or over-long filter can not widen a bulk delete", async () => {
+    const t = await createTestTenant(env, SELF);
+    for (const name of ["One", "Two"]) await t.fetch("/api/m/contacts", { body: { name } });
+    expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { q: "zzz\u0000" } } }))).toEqual({ affected: 0 });
+    expect((await t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { q: "x".repeat(60) } } })).status).toBe(422);
+    expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(2);
+  });
+});

@@ -6,7 +6,9 @@
 //   Vite for the operator console (hot reload)                              :5173
 //   Vite for the tenant app (hot reload)                                    :5174
 //
+import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { join } from "node:path";
 import { ADMIN_DIR, APP_DIR, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, ok, spawnChild } from "./lib.mjs";
 
 const WORKERS_PORT = 8787;
@@ -74,8 +76,19 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 process.on("SIGHUP", () => shutdown(0));
 
+// Production routes make the local runtime rewrite every request to the production host,
+// which breaks tenant resolution and the same-origin check. Run from generated copies of
+// the worker configs with the routes removed (git-ignored, next to the originals so
+// relative paths and .dev.vars keep working).
+for (const dir of [APP_DIR, ADMIN_DIR]) {
+  const text = readFileSync(join(dir, "wrangler.jsonc"), "utf8").replace(/^\s*"routes"\s*:\s*\[.*\],?\s*$/m, "")
+    // Local development never sends real email: codes are shown on screen instead.
+    .replace(/("EMAIL_PROVIDER"\s*:\s*)"[^"]*"/, '$1"console"');
+  writeFileSync(join(dir, "wrangler.dev.jsonc"), text);
+}
+
 start("workers", c.magenta, bin(APP_DIR, "wrangler"), [
-  "dev", "-c", "scripts/dev/wrangler.jsonc", "-c", "apps/app/wrangler.jsonc", "-c", "apps/admin/wrangler.jsonc",
+  "dev", "-c", "scripts/dev/wrangler.jsonc", "-c", "apps/app/wrangler.dev.jsonc", "-c", "apps/admin/wrangler.dev.jsonc",
   "--persist-to", ".wrangler/state", "--port", String(WORKERS_PORT), "--show-interactive-dev-session=false",
 ], ROOT);
 start("admin", c.blue, bin(ADMIN_DIR, "vite"), ["dev"], ADMIN_DIR);

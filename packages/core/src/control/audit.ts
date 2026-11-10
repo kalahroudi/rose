@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { likePattern, offsetOf, type ListQuery, type Page } from "../http/pagination";
+import { likePattern, likePrefix, offsetOf, type ListQuery, type Page } from "../http/pagination";
 import { newId, now } from "../ids";
 
 export interface AuditEntry {
@@ -32,7 +32,7 @@ export async function listPlatformAudit(db: D1Database, f: ListQuery & { action?
   }
   if (f.action) {
     where.push("action LIKE ? ESCAPE '\\'");
-    args.push(`${f.action.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+    args.push(likePrefix(f.action));
   }
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const [rows, count] = await db.batch([

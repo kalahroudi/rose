@@ -20,6 +20,7 @@
     "test:scripts": "node --test scripts/ examples/",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
     "brand": "node scripts/brand.mjs",
+    "pentest": "node scripts/pentest.mjs",
     "deploy": "node scripts/deploy.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
   },

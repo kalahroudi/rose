@@ -95,7 +95,7 @@ describe("upstream gateway", () => {
       return new Response("upstream-ok", { headers: { "Set-Cookie": "evil=1", "X-Kept": "yes" } });
     }) as typeof fetch;
     try {
-      const res = await a.fetch("/svc/orders?x=1", { headers: { "X-Rose-Tenant-Id": "tn_forged", Authorization: "Basic abc" } });
+      const res = await a.fetch("/svc/orders?x=1", { headers: { "X-Rose-Tenant-Id": "tn_forged" } });
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("upstream-ok");
       expect(res.headers.get("Set-Cookie")).toBeNull();

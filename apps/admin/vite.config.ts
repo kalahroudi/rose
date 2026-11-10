@@ -15,6 +15,8 @@ export default defineConfig({
     port: Number(env.ROSE_PORT ?? 5173),
     strictPort: true,
     allowedHosts: [".localhost"],
+    // The dev server serves the project folder; keep secrets and config out of reach.
+    fs: { deny: [".dev.vars", ".dev.vars.*", ".env", ".env.*", "*.{crt,pem}", "wrangler*.jsonc"] },
     proxy: { "/api": workers, "/auth": workers, "/svc": workers },
   },
   build: { outDir: "dist/client", emptyOutDir: true, target: "es2022", sourcemap: false },

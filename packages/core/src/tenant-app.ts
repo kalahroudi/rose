@@ -240,13 +240,16 @@ export function createTenantApp(options: TenantAppOptions) {
     const db = new TenantDb(c.env, tenant);
     let actor: Actor | null = null;
     const authz = c.req.header("Authorization");
-    if (authz?.startsWith("Bearer ")) {
+    // Any Authorization header selects the API-key path, even a malformed one. A session
+    // cookie never rescues a bad token, so one request has exactly one identity.
+    if (authz !== undefined) {
       // API keys bypass the session query, so re-check tenant status against the database here.
       const fresh = await getTenant(c.env.DB, row.id);
       if (fresh?.status !== "active") throw forbidden("This workspace is suspended.");
-      await rateLimit(c, `key-ip:${clientIp(c) ?? "unknown"}`);
-      const key = await verifyApiKey(db, authz.slice(7).trim());
+      const key = /^Bearer\s+\S/.test(authz) ? await verifyApiKey(db, authz.replace(/^Bearer\s+/, "").trim()) : null;
       if (key) actor = { type: "api_key", id: key.id, label: `key:${key.name}`, role: key.role };
+      // Only failed attempts spend rate-limit budget, so legitimate API traffic is never throttled by it.
+      else await rateLimit(c, `key-fail:${clientIp(c) ?? "unknown"}`);
     } else {
       const s = await currentSession(c, { scope: row.id, cookie: SESSION_COOKIE });
       if (s) actor = { type: "user", id: s.userId, label: s.email, role: s.role as Role, sessionId: s.publicId, name: s.name };

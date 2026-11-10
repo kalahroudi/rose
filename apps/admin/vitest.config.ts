@@ -14,6 +14,7 @@ export default defineConfig({
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("../../packages/core/migrations"),
           ENVIRONMENT: "test",
+          EMAIL_PROVIDER: "console",
           APP_BASE_DOMAIN: "rose.test",
           BOOTSTRAP_OPERATOR_EMAIL: "root@rose.test",
           ROSE_MASTER_KEY: "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",

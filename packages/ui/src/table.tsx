@@ -123,7 +123,7 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange(v
   return (
     <div className="search">
       <Icon name="search" />
-      <input className="input input-sm" type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
+      <input className="input input-sm" type="search" maxLength={40} value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
     </div>
   );
 }

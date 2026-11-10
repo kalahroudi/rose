@@ -14,7 +14,7 @@ import {
   tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
 } from "@rose/core/platform";
-import { forbidden, invalid, isDev, listQuerySchema, notFound, unauthorized, type PlatformWorkerEnv } from "@rose/core";
+import { forbidden, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
 import { setupStatus } from "./setup";
 
 const COOKIE = "rose_admin";
@@ -179,7 +179,7 @@ app.post("/api/tenants/bulk", async (c) => {
     z.object({
       action: z.enum(["suspend", "resume"]),
       ids: z.array(z.string().max(40)).max(100).optional(),
-      filter: z.object({ q: z.string().max(100).default(""), status: z.enum(["", "active", "suspended", "deleting"]).default("") }).optional(),
+      filter: z.object({ q: searchTermSchema, status: z.enum(["", "active", "suspended", "deleting"]).default("") }).optional(),
     }),
   );
   const target = body.ids?.length ? { ids: body.ids } : body.filter ? { filter: body.filter } : null;

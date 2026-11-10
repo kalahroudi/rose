@@ -203,3 +203,36 @@ describe("http hardening", () => {
     expect((await a.fetch("/api/members?pageSize=100000")).status).toBe(422);
   });
 });
+
+describe("search patterns", () => {
+  it("long and hostile search terms never reach SQLite as an over-long LIKE pattern", async () => {
+    const { likePattern, likePrefix } = await import("../src/http/pagination");
+    const enc = new TextEncoder();
+    for (const q of ["%".repeat(40), "\\".repeat(40), "é".repeat(40), "a".repeat(40), "_%\\".repeat(13)]) {
+      expect(enc.encode(likePattern(q)).length).toBeLessThanOrEqual(50);
+      expect(enc.encode(likePrefix(q)).length).toBeLessThanOrEqual(50);
+      expect(likePattern(q)).not.toMatch(/(^|[^\\])(\\\\)*\\%$/);
+    }
+    const a = await createTestTenant(env, SELF);
+    expect((await a.fetch(`/api/m/notes?q=${"x".repeat(41)}`)).status).toBe(200);
+    expect((await a.fetch(`/api/members?q=${encodeURIComponent("%".repeat(40))}`)).status).toBe(200);
+    expect((await a.fetch(`/api/members?q=${"x".repeat(41)}`)).status).toBe(422);
+    expect((await a.fetch(`/api/audit?action=${"x".repeat(300)}`)).status).toBe(200);
+  });
+
+  it("a malformed Authorization header is never rescued by a valid cookie", async () => {
+    const a = await createTestTenant(env, SELF);
+    for (const h of ["Bearer", "Bearer ", "Basic abc", "bearer x", "x"]) {
+      expect((await a.fetch("/api/members", { headers: { Authorization: h } })).status, h).toBe(401);
+    }
+  });
+});
+
+describe("abuse limits", () => {
+  it("a NUL byte in a search term can not turn it into match-everything", async () => {
+    const a = await createTestTenant(env, SELF);
+    await a.fetch("/api/invitations", { body: { email: "nul@example.com", role: "member" } });
+    const r = (await (await a.fetch("/api/invitations?q=zzz%00")).json()) as { total: number };
+    expect(r.total).toBe(0);
+  });
+});
