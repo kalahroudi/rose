@@ -16,7 +16,7 @@ Nothing security-relevant is mocked.
 | **Isolation contract** | `apps/app/worker/test/isolation.test.ts` | The same seven isolation checks against **every registered module** |
 | Module tests | `apps/app/worker/modules/<id>/*.test.ts` | Each module's behaviour |
 | Operator console | `apps/admin/worker/test/admin.test.ts` | Bootstrap, operator auth, tenant lifecycle, domains, setup, secrets at rest |
-| Guard and scripts | `scripts/*.test.mjs` (`node --test scripts/`) | Every guard rule fires and the repo passes; config editing |
+| Guard and scripts | `scripts/*.test.mjs` (`pnpm test:scripts`) | Every guard rule fires and the repo passes; config editing |
 | Example upstream | `examples/upstream-service/worker.test.mjs` | Token verification |
 
 ## Writing a module test

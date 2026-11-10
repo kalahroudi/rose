@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Proves every guard rule fires on a bad example, stays quiet on the good one, and that
-// the repository itself is clean. Run: node --test scripts/
+// the repository itself is clean. Run: pnpm test:scripts
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";

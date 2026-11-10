@@ -17,7 +17,7 @@
     "test": "pnpm -r test",
     "guard": "node scripts/guard.mjs",
     "guard:approve": "node scripts/guard.mjs --approve",
-    "test:scripts": "node --test scripts/ examples/",
+    "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
@@ -25,6 +25,6 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   }
 }
