@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "ask": [
+      "Edit(/packages/core/src/**)",
+      "Edit(/packages/core/migrations/**)",
+      "Edit(/apps/*/worker/test/isolation.test.ts)",
+      "Edit(/apps/*/public/_headers)",
+      "Edit(/apps/*/wrangler.jsonc)",
+      "Edit(/scripts/guard.mjs)",
+      "Edit(/guard.lock.json)",
+      "Edit(/.github/workflows/**)",
+      "Edit(/.githooks/**)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/CODEOWNERS)",
+      "Bash(git push *)",
+      "Bash(git commit --no-verify *)",
+      "Bash(*wrangler deploy*)",
+      "Bash(*wrangler secret*)",
+      "Bash(*wrangler d1 * --remote*)",
+      "Bash(pnpm deploy*)",
+      "Bash(pnpm setup --production*)",
+      "Bash(*guard:approve*)",
+      "Bash(*guard.mjs --approve*)"
+    ],
+    "deny": [
+      "Read(**/.dev.vars)",
+      "Read(**/.dev.vars.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.mjs\"", "timeout": 30 }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.mjs\"", "timeout": 60 }]
+      }
+    ]
+  }
+}

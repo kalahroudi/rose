@@ -1,0 +1,19 @@
+{
+  // Test-only worker configuration for @rose/core.
+  "name": "rose-core-test",
+  "main": "test/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{ "binding": "DB", "database_name": "rose-test", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "durable_objects": { "bindings": [{ "name": "TENANT_DO", "class_name": "TenantDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO"] }],
+  "vars": {
+    "ENVIRONMENT": "test",
+    "APP_NAME": "Rose",
+    "APP_BASE_DOMAIN": "rose.test",
+    "ROSE_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "UPSTREAM_MODE": "origin",
+    "UPSTREAM_ORIGIN": "https://upstream.test",
+    "UPSTREAM_SIGNING_SECRET": "test-signing-secret-test-signing-secret"
+  }
+}

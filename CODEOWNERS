@@ -1,0 +1,15 @@
+# Every change needs review by the maintainer.
+*                                           @kalahroudi
+
+# Security core: changes here also require `pnpm guard:approve` (see docs/agents.md).
+/packages/core/src/                         @kalahroudi
+/packages/core/migrations/                  @kalahroudi
+/apps/*/worker/test/isolation.test.ts       @kalahroudi
+/apps/*/public/_headers                     @kalahroudi
+/apps/*/wrangler.jsonc                      @kalahroudi
+/scripts/guard.mjs                          @kalahroudi
+/guard.lock.json                            @kalahroudi
+/.github/                                   @kalahroudi
+/.githooks/                                 @kalahroudi
+/.claude/                                   @kalahroudi
+/CODEOWNERS                                 @kalahroudi
