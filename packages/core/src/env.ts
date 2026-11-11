@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import type { JobQueue } from "./control/jobs";
 import type { TenantDurableObject } from "./tenancy/tenant-do";
 
 export interface RateLimiter {
@@ -21,6 +22,10 @@ export interface CoreEnv {
   EMAIL_FROM?: string;
   RESEND_API_KEY?: string;
   RL_AUTH?: RateLimiter;
+  /** Queue that wakes the tenant worker to run a job. Producer binding in both workers. */
+  APP_JOBS?: JobQueue;
+  /** Queue that wakes the operator worker. Bound in the operator worker only. */
+  ADMIN_JOBS?: JobQueue;
 }
 
 /** Bindings of the tenant-facing app worker. */

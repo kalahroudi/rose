@@ -14,8 +14,9 @@ pnpm dev
    small development router (`scripts/dev/`), so they share the same database;
 4. starts Vite for the operator console (`:5173`) and the tenant app (`:5174`) with hot
    reload; API calls are proxied to the runtime with the original `Host` header;
-5. pings both workers every 3 seconds to run background jobs (cron triggers do not fire
-   locally).
+5. pings both workers every 3 seconds to run the sweep that the hourly cron runs in
+   production (cron triggers do not fire locally). Jobs themselves start through the
+   local queue, as in production.
 
 | URL | What |
 |---|---|
@@ -69,4 +70,4 @@ See [`examples/upstream-service`](../examples/upstream-service/README.md).
 - One runtime and a dev router instead of two deployed Workers on separate hostnames.
 - `http://` and plain cookie names (`rose_session`) instead of `__Host-` cookies.
 - Codes on screen instead of email; custom domains activate without verification.
-- Jobs tick every 3 seconds instead of every minute.
+- The hourly sweep runs every 3 seconds.

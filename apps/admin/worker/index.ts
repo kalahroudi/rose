@@ -10,7 +10,7 @@ import {
   addDomain, addOperator, clientIp, cloudflare, createAuthRoutes, createInvitation, createTenant, csrfGuard, currentSession,
   deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, isOperatorEmail, listDomains, listJobs,
   listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, markTenantDeleting, normalizeEmail, operatorCount, parse, putSetting,
-  readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
+  readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
   tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
 } from "@rose/core/platform";
@@ -194,7 +194,7 @@ app.post("/api/tenants/:id/delete", async (c) => {
   const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
   if (confirm !== t.slug) throw invalid("Type the tenant address to confirm.", { confirm: "Does not match." });
   await markTenantDeleting(c.env.DB, t.id);
-  const job = await enqueueJob(c.env.DB, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email });
+  const job = await enqueueJob(c.env, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email });
   await audit(c, "tenant.delete.requested", t.id, { slug: t.slug });
   return c.json({ jobId: job.id }, 202);
 });
@@ -221,7 +221,7 @@ app.post("/api/tenants/:id/domains", async (c) => {
   const t = await tenantOr404(c, c.req.param("id"));
   const body = await readJson(c, z.object({ hostname: z.string().max(253) }));
   const row = await addDomain(c.env.DB, t.id, validateHostname(body.hostname, c.env.APP_BASE_DOMAIN));
-  const job = await enqueueJob(c.env.DB, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
+  const job = await enqueueJob(c.env, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
   await audit(c, "domain.add", row.hostname, { tenant: t.slug });
   return c.json({ ...row, tenant_slug: t.slug, tenant_name: t.name, jobId: job.id }, 202);
 });
@@ -230,7 +230,7 @@ app.post("/api/domains/:hostname/recheck", async (c) => {
   const row = await getDomain(c.env.DB, c.req.param("hostname"));
   if (!row) throw notFound();
   await setDomainState(c.env.DB, row.hostname, { status: "pending", detail: row.detail });
-  const job = await enqueueJob(c.env.DB, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
+  const job = await enqueueJob(c.env, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
   return c.json({ jobId: job.id }, 202);
 });
 
@@ -262,7 +262,7 @@ app.delete("/api/operators/:userId", async (c) => {
 app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), action: c.req.query("action") })));
 app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, null, { ...listQ(c), status: c.req.query("status") })));
 app.post("/api/jobs/:id/retry", async (c) => {
-  await retryJob(c.env.DB, c.req.param("id"));
+  await retryJob(c.env, c.req.param("id"));
   await audit(c, "job.retry", c.req.param("id"));
   return c.json({ ok: true });
 });
@@ -326,5 +326,8 @@ app.all("/api/*", () => {
 
 export default {
   fetch: (request: Request, env: PlatformWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  /** Jobs start as soon as they are queued. */
+  queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: PlatformWorkerEnv) => runJobMessages(env, jobHandlers, batch),
+  /** Hourly: expiry sweep, plus a safety net for jobs whose queue message was lost. */
   scheduled: async (_event: unknown, env: PlatformWorkerEnv) => tick(env),
 };

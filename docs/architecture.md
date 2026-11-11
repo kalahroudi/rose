@@ -40,8 +40,9 @@ flowchart LR
 | Can read tenant business data | Only for the tenant the request host resolves to | **No.** There is no binding and no key that would allow it |
 
 The operator worker manages tenants purely through control-plane rows. Deleting a
-tenant, for example, marks the row `deleting` and queues a job; the *tenant* worker's
-cron picks the job up and destroys the storage. The only thing the planes share is D1.
+tenant, for example, marks the row `deleting` and queues a job; the *tenant* worker
+runs the job and destroys the storage. The planes share only D1 and the queue that
+carries job ids (never data).
 
 ## Where data lives
 
@@ -105,8 +106,13 @@ Key points, each implemented in `packages/core/src/tenant-app.ts`:
 ## Background jobs
 
 Jobs are rows in the control-plane `jobs` table (`packages/core/src/control/jobs.ts`).
-Each worker's cron trigger (every minute) claims the job types it handles with an atomic
-compare-and-set, runs them, and retries failures with exponential backoff (five attempts).
+Queuing a job also sends its id to a Cloudflare Queue (`rose-app-jobs` or
+`rose-admin-jobs`), which wakes the worker that owns that job type at once. The worker
+claims the job with an atomic compare-and-set, runs it, and schedules retries itself with
+a delayed message and exponential backoff (five attempts). The job row is the source of
+truth: a lost message costs time, not the job, because an hourly cron in each worker
+sweeps for due jobs and for jobs left running by a worker that died. The operator worker
+can send to the tenant worker's queue, but a message only ever names a job id.
 
 | Job | Runs in | Does |
 |---|---|---|

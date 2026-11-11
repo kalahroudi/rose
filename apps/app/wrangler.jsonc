@@ -16,7 +16,12 @@
   "durable_objects": { "bindings": [{ "name": "TENANT_DO", "class_name": "TenantDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO"] }],
   "ratelimits": [{ "name": "RL_AUTH", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }],
-  "triggers": { "crons": ["* * * * *"] },
+  // Jobs start when queued. The hourly cron only sweeps expired records and re-runs any job whose message was lost.
+  "queues": {
+    "producers": [{ "binding": "APP_JOBS", "queue": "rose-app-jobs" }],
+    "consumers": [{ "queue": "rose-app-jobs", "max_batch_size": 10, "max_batch_timeout": 1, "max_retries": 3 }]
+  },
+  "triggers": { "crons": ["17 * * * *"] },
   "observability": { "enabled": true },
   "vars": {
     "ENVIRONMENT": "production",
