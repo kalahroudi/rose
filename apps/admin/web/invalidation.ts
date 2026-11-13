@@ -4,11 +4,9 @@
 import { createInvalidator } from "@rose/ui";
 
 export const touches = {
-  "tenant.create": [["tenants"], ["overview"]],
   "tenant.update": [["tenants"], ["tenant"]],
   "tenant.status": [["tenants"], ["tenant"], ["overview"]],
   "tenant.delete": [["tenants"], ["tenant"], ["overview"], ["jobs"]],
-  "tenant.owner": [["tenant-members"]],
   "domain.add": [["domains"], ["tenants"], ["overview"], ["jobs"]],
   "domain.recheck": [["domains"], ["jobs"]],
   "domain.remove": [["domains"], ["tenants"], ["overview"]],

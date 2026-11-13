@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
-  Advanced, api, Badge, Button, Callout, CopyChip, DataTable, Drawer, errorMessage, ExternalLink, Field, Flow, FormDrawer, Gate, Input, Page, Select, Time,
+  api, Badge, Button, Callout, CopyChip, DataTable, Drawer, errorMessage, ExternalLink, Field, Flow, FormDrawer, Gate, Input, Page, Select, Time,
   useConfirm, useListState, useToast, type Column, type HelpContent, type PageData, type Selection, type Tone,
 } from "@rose/ui";
 import { useState } from "react";
@@ -14,8 +14,6 @@ import { AddDomainDrawer, domainTone } from "./Domains";
 export const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", deleting: "bad" };
 export const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", deleting: "Deleting" };
 
-const slugify = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-
 function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
   const boot = useSession();
   const confirm = useConfirm();
@@ -23,7 +21,6 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
   const invalidate = useInvalidate();
   const [editing, setEditing] = useState(false);
   const [addingDomain, setAddingDomain] = useState(false);
-  const [addingOwner, setAddingOwner] = useState(false);
   const tenant = useQuery({ queryKey: ["tenant", id], queryFn: () => api<Tenant>(`/api/tenants/${id}`), enabled: !!id });
   const members = useQuery({ queryKey: ["tenant-members", id], queryFn: () => api<PageData<Member>>(`/api/tenants/${id}/members?pageSize=10`), enabled: !!id });
   const domains = useQuery({ queryKey: ["domains", `tenantId=${id}`], queryFn: () => api<PageData<Domain>>(`/api/domains?tenantId=${id}&pageSize=10`), enabled: !!id });
@@ -68,7 +65,7 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
   return (
     <>
       <Drawer
-        open={!!id && !editing && !addingDomain && !addingOwner}
+        open={!!id && !editing && !addingDomain}
         onClose={onClose}
         size="lg"
         title={t?.name ?? "Tenant"}
@@ -104,7 +101,6 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
                 <section className="card">
                   <div className="card-head">
                     <h3 className="card-title grow">Members <span className="muted">({members.data!.total})</span></h3>
-                    {boot.session.role === "owner" && t!.status !== "deleting" ? <Button size="sm" icon="plus" onClick={() => setAddingOwner(true)}>Invite an owner</Button> : null}
                   </div>
                   {members.data!.items.length === 0 ? (
                     <div className="card-pad muted">Nobody has signed in yet. The invited owner joins the first time they sign in at the tenant address.</div>
@@ -171,27 +167,6 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
         )}
       </FormDrawer>
 
-      <FormDrawer
-        open={addingOwner && !!t}
-        onClose={() => setAddingOwner(false)}
-        title="Invite an owner"
-        subtitle={`Gives a person owner access to ${t?.name ?? "this tenant"}. Use it when the customer's only owner has left.`}
-        initial={{ email: "" }}
-        submitLabel="Send invitation"
-        onSubmit={async (v) => {
-          await api(`/api/tenants/${t!.id}/owners`, { body: v });
-          await invalidate("tenant.owner");
-          toast.success(`${v.email} can now sign in as an owner`);
-        }}
-      >
-        {(f) => (
-          <>
-            <Callout tone="warn">This is recorded in the audit log. The person gets full control of the workspace the first time they sign in with this address.</Callout>
-            <Field label="Email address" error={f.errors.email}>{(p) => <Input {...p} {...f.text("email")} type="email" autoComplete="off" placeholder="new-owner@customer.com" />}</Field>
-          </>
-        )}
-      </FormDrawer>
-
       <AddDomainDrawer open={addingDomain} onClose={() => setAddingDomain(false)} tenant={t ? { id: t.id, name: t.name } : null} />
     </>
   );
@@ -203,25 +178,22 @@ export function TenantsPage() {
   const confirm = useConfirm();
   const toast = useToast();
   const invalidate = useInvalidate();
-  const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [fresh, setFresh] = useState<string | null>(null);
   const q = useQuery({ queryKey: ["tenants", list.query], queryFn: () => api<PageData<Tenant>>(`/api/tenants?${list.query}`), placeholderData: keepPreviousData });
 
   const help: HelpContent = {
-    what: "Everyone you serve. Create a tenant for a new customer, open one to see its members and domains, or suspend and delete tenants. Customers can also create their own workspace by signing up at your app's main address.",
+    what: "Everyone you serve. Customers create their own workspace by signing up at your app's main address. Open a tenant to see its members and domains, or suspend and delete tenants.",
     diagram: {
       node: <Flow title="Tenant lifecycle" steps={[{ label: "Active", sub: "people can sign in", tone: "ok" }, { label: "Suspended", sub: "access paused", via: "suspend" }, { label: "Deleting", sub: "sessions cut", via: "delete", tone: "bad" }, { label: "Gone", sub: "data and key destroyed", via: "task" }]} />,
       caption: "Suspending is reversible. Deleting is not: the private database and its encryption key are destroyed.",
     },
     terms: terms("tenant", "address", "owner", "suspended", "deleting", "privateDatabase"),
     why: [
-      { q: "Why do I enter an owner's email instead of creating a password?", a: "There are no passwords. The owner proves they control that mailbox the first time they sign in at the tenant address, and is then asked to add a passkey. Nothing secret is ever sent to you or by you." },
+      { q: "Why can I not create a tenant for a customer?", a: "Tenants are created only by self-serve sign-up. The person who signs up proves they control their mailbox and becomes the owner, so no operator ever chooses who owns a workspace." },
       { q: "Why can the address not be changed?", a: "Browsers scope sign-in cookies and passkeys to the exact host name. Keeping the address fixed is what stops one tenant's session from ever being valid on another tenant's site." },
       { q: "Why must I type the name to delete?", a: "Deletion destroys the tenant's database and encryption key, so there is no undo and no backup to restore from. Typing the name makes an accidental click impossible." },
     ],
     tasks: [
-      { label: "Create a tenant", detail: "Name, address and the owner's email.", run: () => setCreating(true) },
       { label: "Suspend several tenants at once", detail: "Tick rows, or tick the header and choose “Select all matching”, then Suspend." },
       { label: "Give a tenant its own domain", detail: "Open the tenant, then Add domain." },
     ],
@@ -257,7 +229,7 @@ export function TenantsPage() {
   ];
 
   return (
-    <Page title="Tenants" description="Your customers, each in its own isolated workspace" help={help} actions={<Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New tenant</Button>}>
+    <Page title="Tenants" description="Your customers, each in its own isolated workspace" help={help}>
       <Gate queries={[q]}>
         {() => (
           <DataTable
@@ -267,7 +239,6 @@ export function TenantsPage() {
             columns={columns}
             rowKey={(t) => t.id}
             onRowClick={(t) => setOpenId(t.id)}
-            freshKey={fresh}
             noun={["tenant", "tenants"]}
             searchPlaceholder="Search by name or address"
             filters={
@@ -285,59 +256,10 @@ export function TenantsPage() {
               </>
             )}
             rowActions={(t) => <ExternalLink href={tenantUrl(boot, t.slug)}>Open</ExternalLink>}
-            empty={{ icon: "building", title: "No tenants yet", body: "Create your first tenant, or let customers sign up themselves at your app's main address.", action: <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New tenant</Button> }}
+            empty={{ icon: "building", title: "No tenants yet", body: "Customers create their own workspace by signing up at your app's main address." }}
           />
         )}
       </Gate>
-
-      <FormDrawer
-        open={creating}
-        onClose={() => setCreating(false)}
-        title="New tenant"
-        subtitle="Creates an isolated workspace and invites its first owner."
-        initial={{ name: "", slug: "", slugTouched: false, ownerEmail: "", plan: "free" }}
-        submitLabel="Create tenant"
-        validate={(v) => ({ ...(v.name.trim() ? {} : { name: "Enter a name." }), ...(v.slug.length >= 3 ? {} : { slug: "Use at least 3 characters." }), ...(v.ownerEmail.includes("@") ? {} : { ownerEmail: "Enter the owner's email address." }) })}
-        onSubmit={async (v) => {
-          const t = await api<Tenant>("/api/tenants", { body: { name: v.name, slug: v.slug, ownerEmail: v.ownerEmail, plan: v.plan } });
-          await invalidate("tenant.create");
-          setFresh(t.id);
-          toast.success(`${t.name} created`, { label: "View", run: () => setOpenId(t.id) });
-        }}
-      >
-        {(f) => (
-          <>
-            <Field label="Name" hint="The customer's company or team name." error={f.errors.name}>
-              {(p) => (
-                <Input
-                  {...p}
-                  value={f.values.name}
-                  maxLength={80}
-                  placeholder="Acme Inc"
-                  onChange={(e) => {
-                    f.set("name", e.target.value);
-                    if (!f.values.slugTouched) f.set("slug", slugify(e.target.value));
-                  }}
-                />
-              )}
-            </Field>
-            <Field label="Address" help="The tenant's permanent URL. Lowercase letters, numbers and hyphens." hint="Permanent. Choose something the customer will recognise." error={f.errors.slug}>
-              {(p) => (
-                <div className="input-group">
-                  <Input {...p} className="mono" value={f.values.slug} maxLength={40} spellCheck={false} autoCapitalize="none" onChange={(e) => (f.set("slug", e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")), f.set("slugTouched", true))} />
-                  <span className="affix">.{boot.app.baseDomain}</span>
-                </div>
-              )}
-            </Field>
-            <Field label="Owner's email" hint="They become the owner by signing in with this address. No password or link is sent by you." error={f.errors.ownerEmail}>
-              {(p) => <Input {...p} {...f.text("ownerEmail")} type="email" autoComplete="off" placeholder="owner@customer.com" />}
-            </Field>
-            <Advanced id="tenant-create" changed={f.values.plan !== "free" ? 1 : 0}>
-              <Field label="Plan" hint="A free-form label for your own billing or feature rules." error={f.errors.plan}>{(p) => <Input {...p} {...f.text("plan")} maxLength={30} />}</Field>
-            </Advanced>
-          </>
-        )}
-      </FormDrawer>
 
       <TenantDetail id={openId} onClose={() => setOpenId(null)} />
     </Page>

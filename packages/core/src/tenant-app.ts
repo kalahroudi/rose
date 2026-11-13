@@ -139,6 +139,24 @@ export function createTenantApp(options: TenantAppOptions) {
     return `${u.protocol}//${slug}.${c.env.APP_BASE_DOMAIN}${u.port ? `:${u.port}` : ""}${path}`;
   };
 
+  /** Audit a new member in the workspace's own log and tell the other owners (only when there are several). */
+  const recordJoin = async (c: Ctx, tenant: TenantRow, user: UserRow, role: Role): Promise<void> => {
+    await writeTenantAudit(new TenantDb(c.env, bindTenant(tenant)), { actor: user.email, action: "member.join", target: user.id, meta: { role }, ip: clientIp(c) });
+    const owners = (await c.env.DB.prepare("SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role = 'owner' AND m.user_id != ? LIMIT 100").bind(tenant.id, user.id).all<{ email: string }>()).results;
+    const others = owners.map((o) => o.email);
+    if (role !== "owner" && others.length < 2) return;
+    if (role === "owner" && others.length < 1) return;
+    c.executionCtx.waitUntil(
+      Promise.all(
+        others.map((to) =>
+          sendEmail(c.env, { to, subject: `New ${role} in ${tenant.name}`, text: `${user.email} joined ${tenant.name} as ${role}.\n\nIf this is unexpected, review the member list and audit log at ${tenantUrl(c, tenant.slug)}` }).catch((err) =>
+            console.error(JSON.stringify({ level: "error", at: "join-email", error: String(err) })),
+          ),
+        ),
+      ),
+    );
+  };
+
   const realmFor = (c: Ctx, tenant: TenantRow): AuthRealm => ({
     scope: tenant.id,
     displayName: tenant.name,
@@ -149,7 +167,10 @@ export function createTenantApp(options: TenantAppOptions) {
     },
     admit: async (user: UserRow) => {
       if (await getMembership(c.env.DB, tenant.id, user.id)) return true;
-      return (await redeemInvitation(c.env.DB, tenant.id, user)) !== null;
+      const role = await redeemInvitation(c.env.DB, tenant.id, user);
+      if (!role) return false;
+      await recordJoin(c, tenant, user, role);
+      return true;
     },
     audit: (e) => writeTenantAudit(new TenantDb(c.env, bindTenant(tenant)), e),
   });
@@ -223,6 +244,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (body.create) {
       tenant = await createTenant(c.env.DB, body.create);
       await addMembership(c.env.DB, tenant.id, userId, "owner");
+      await writeTenantAudit(new TenantDb(c.env, bindTenant(tenant)), { actor: userId, action: "member.join", target: userId, meta: { role: "owner" }, ip: clientIp(c) });
       await writePlatformAudit(c.env.DB, { actor: userId, action: "tenant.signup", target: tenant.id, meta: { slug: tenant.slug }, ip: clientIp(c) });
     } else {
       tenant = body.slug ? await c.env.DB.prepare("SELECT * FROM tenants WHERE slug = ? AND status = 'active'").bind(body.slug).first<TenantRow>() : null;

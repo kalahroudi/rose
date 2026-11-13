@@ -7,7 +7,7 @@ import { Hono, type Context } from "hono";
 import { etag } from "hono/etag";
 import { z } from "zod";
 import {
-  addDomain, addOperator, clientIp, cloudflare, createAuthRoutes, createInvitation, createTenant, csrfGuard, currentSession,
+  addDomain, addOperator, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
   deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, isOperatorEmail, listDomains, listJobs,
   listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, markTenantDeleting, normalizeEmail, operatorCount, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
@@ -154,16 +154,6 @@ const statusFilter = (c: Ctx) => {
 };
 app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), status: statusFilter(c) })));
 
-app.post("/api/tenants", async (c) => {
-  const body = await readJson(c, z.object({ name: z.string().max(80), slug: z.string().max(40), plan: z.string().trim().max(30).default("free"), ownerEmail: z.string().max(254) }));
-  const ownerEmail = normalizeEmail(body.ownerEmail);
-  const tenant = await createTenant(c.env.DB, body);
-  // The owner joins by proving they control this address when they first sign in.
-  await createInvitation(c.env.DB, tenant.id, { email: ownerEmail, role: "owner", invitedBy: c.get("operator").email, actorRole: "owner" });
-  await audit(c, "tenant.create", tenant.id, { slug: tenant.slug, ownerEmail });
-  return c.json({ ...tenant, members: 0, domains: 0 }, 201);
-});
-
 app.get("/api/tenants/:id", async (c) => c.json(await tenantOr404(c, c.req.param("id"))));
 
 app.patch("/api/tenants/:id", async (c) => {
@@ -202,16 +192,6 @@ app.post("/api/tenants/:id/delete", async (c) => {
 app.get("/api/tenants/:id/members", async (c) => {
   await tenantOr404(c, c.req.param("id"));
   return c.json(await listMembers(c.env.DB, c.req.param("id"), { ...listQ(c), role: c.req.query("role") }));
-});
-
-/** Break-glass: grant a person owner access, e.g. when the only owner has left the customer. */
-app.post("/api/tenants/:id/owners", async (c) => {
-  ownerOnly(c);
-  const t = await tenantOr404(c, c.req.param("id"));
-  const email = normalizeEmail((await readJson(c, z.object({ email: z.string().max(254) }))).email);
-  const inv = await createInvitation(c.env.DB, t.id, { email, role: "owner", invitedBy: c.get("operator").email, actorRole: "owner" });
-  await audit(c, "tenant.owner.invite", t.id, { email });
-  return c.json(inv, 201);
 });
 
 // Custom domains (Cloudflare for SaaS)

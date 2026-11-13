@@ -6,7 +6,7 @@ import { terms } from "../help/glossary";
 import type { AuditEntry } from "../types";
 
 const help: HelpContent = {
-  what: "A permanent record of what operators did in this console: sign-ins, tenants created or deleted, domains and connections changed. Use it to answer “who did this, and when?”.",
+  what: "A permanent record of what operators did in this console: sign-ins, tenants suspended or deleted, domains and connections changed. Use it to answer “who did this, and when?”.",
   terms: terms("auditLog", "operator", "tenant"),
   why: [
     { q: "Why can entries not be edited or deleted?", a: "An audit trail is only useful if it can be trusted after an incident. The console has no way to change it." },

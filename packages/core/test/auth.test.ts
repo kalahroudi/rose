@@ -87,6 +87,8 @@ describe("invitations", () => {
     expect(members.total).toBe(1);
     expect(members.items[0]!.role).toBe("member");
     expect(((await (await a.fetch("/api/invitations")).json()) as { total: number }).total).toBe(0);
+    const audit = (await (await a.fetch("/api/audit?action=member.join")).json()) as { items: { actor: string; action: string }[] };
+    expect(audit.items.some((e) => e.actor === "new@example.com" && e.action === "member.join")).toBe(true);
   });
 
   it("only owners can invite owners or change owner access; last owner is protected", async () => {

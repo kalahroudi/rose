@@ -84,6 +84,13 @@ An invitation is a pending membership for an email address (7 days). There is no
 invitation link to forward or leak: the invited address signs in on the workspace with
 an email code, which proves ownership, and the invitation becomes a membership.
 
+Joining is written to the workspace's own audit log (`member.join`, with the role). When
+a workspace has more than one owner, the other owners are emailed whenever someone joins
+(and, for a new owner, even when there is just one other owner). Owner access can only come from
+self-serve sign-up or from an existing owner's invitation: the operator console has no way
+to add an owner to a tenant, so platform staff cannot give themselves access to a
+customer's workspace.
+
 ## Operators
 
 - The first operator is whoever controls the mailbox in `BOOTSTRAP_OPERATOR_EMAIL`, and
