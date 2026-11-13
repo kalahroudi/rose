@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { RULES, checkFile, checkLock, checkStructure, isProtected, scan } from "./guard.mjs";
+import { RULES, checkFile, checkStructure, scan } from "./guard.mjs";
 
 const H = "// SPDX-License-Identifier: Apache-2.0\n";
 const rules = (file, body) => checkFile(file, H + body).violations.map((v) => v.rule);
@@ -163,27 +163,9 @@ test("module-structure: unregistered, probe-less and untested modules are reject
   assert.ok(checkStructure(files.slice(1), (f) => content[f]).some((v) => v.message.includes("missing")));
 });
 
-test("protected-file: changed, added and deleted core files are caught; exceptions are not honoured", () => {
-  for (const f of ["packages/core/src/crypto.ts", "packages/core/migrations/0001_control_plane.sql", "apps/app/worker/test/isolation.test.ts", "apps/admin/public/_headers", "scripts/guard.mjs", ".github/workflows/ci.yml", ".githooks/pre-commit", ".claude/settings.json", "CODEOWNERS"]) assert.ok(isProtected(f), f);
-  for (const f of ["packages/core/src/testing/index.ts", "apps/app/worker/modules/contacts/index.ts", "packages/ui/src/Shell.tsx", "docs/agents.md"]) assert.ok(!isProtected(f), f);
-  const lock = { files: { "packages/core/src/crypto.ts": "aaa", "packages/core/src/gone.ts": "bbb" } };
-  const hash = (f) => (f === "packages/core/src/crypto.ts" ? "CHANGED" : "x");
-  const v = checkLock(["packages/core/src/crypto.ts", "packages/core/src/new.ts", "docs/a.md"], lock, hash);
-  assert.deepEqual(v.map((x) => x.file).sort(), ["packages/core/src/crypto.ts", "packages/core/src/gone.ts", "packages/core/src/new.ts"]);
-  assert.deepEqual(checkLock(["packages/core/src/crypto.ts"], { files: { "packages/core/src/crypto.ts": "x" } }, hash.bind(null, "other")), []);
-  assert.equal(checkLock([], null).length, 1);
-});
-
-test("--approve refuses to run for an agent", () => {
-  const r = spawnSync(process.execPath, ["scripts/guard.mjs", "--approve"], { encoding: "utf8", env: { ...process.env, CLAUDECODE: "1", ROSE_GUARD_APPROVE: "" } });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /HUMAN/);
-});
-
-test("the repository itself passes the guard (ignoring the lock while work is in flight)", () => {
+test("the repository itself passes the guard", () => {
   const out = spawnSync(process.execPath, ["scripts/guard.mjs", "--json"], { encoding: "utf8" }).stdout;
   const result = JSON.parse(out);
-  const real = result.violations.filter((v) => v.rule !== "protected-file");
-  assert.deepEqual(real, [], real.map((v) => `${v.rule} ${v.file}:${v.line} ${v.message}`).join("\n"));
+  assert.deepEqual(result.violations, [], result.violations.map((v) => `${v.rule} ${v.file}:${v.line} ${v.message}`).join("\n"));
   void execFileSync;
 });

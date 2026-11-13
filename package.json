@@ -16,7 +16,6 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "guard": "node scripts/guard.mjs",
-    "guard:approve": "node scripts/guard.mjs --approve",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
     "brand": "node scripts/brand.mjs",

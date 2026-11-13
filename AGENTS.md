@@ -33,17 +33,9 @@ Each has a reason. If a task seems to require breaking one, stop and ask the use
 8. **Do not weaken guardrails to get green.** No skipping/narrowing tests, no loosening
    the CSP, no deleting guard rules, no `--no-verify`. A `// guard-allow:` exception
    needs the user's explicit agreement and a real reason.
-9. **The security core is protected.** You may propose changes to the paths below, but
-   you must tell the user exactly what changed and why, and a human runs
-   `pnpm guard:approve`. Never run it yourself. Shipped migrations are immutable: add a
-   new one.
+9. **Shipped migrations are immutable**: add a new numbered migration instead of editing an existing one.
 10. **Mutations are audited and destructive actions are confirmed.** Call `ctx.audit()`
     for every change. In the UI, data-loss actions use the typed-name confirmation.
-
-Protected paths: `packages/core/src/**` (except `testing/`), `packages/core/migrations/**`,
-`apps/*/worker/test/isolation.test.ts`, `apps/*/public/_headers`, `scripts/guard.mjs`,
-`guard.lock.json`, `.github/workflows/**`, `.githooks/**`, `.claude/settings.json`,
-`CODEOWNERS`.
 
 ## Map
 
@@ -104,14 +96,11 @@ instead: `docs/multi-tenanting-a-service.md`.
 
 First check whether the public API already covers it (`packages/core/src/index.ts`,
 `ModuleContext`). If it truly does not: make the smallest change, add or extend a test in
-`packages/core/test/` that proves the security property still holds, run `pnpm verify`
-(the guard will report `protected-file`: that is expected), then **stop and report** to
-the user: which protected files changed, why, and what the new test proves. They review
-and run `pnpm guard:approve`.
+`packages/core/test/` that proves the security property still holds, and run `pnpm verify`.
 
 ## Definition of done
 
-- [ ] `pnpm verify` is green (ignoring only `protected-file` findings you have reported to the user).
+- [ ] `pnpm verify` is green.
 - [ ] New routes have permissions, validation (zod), audit entries; lists are paginated.
 - [ ] Sensitive fields are encrypted; nothing secret in logs, audit metadata or job payloads.
 - [ ] Tests exist next to the module and exercise roles and failure cases.

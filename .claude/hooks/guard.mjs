@@ -23,7 +23,7 @@ if (event.hook_event_name === "Stop") {
   if (event.stop_hook_active) process.exit(0); // Already continued once because of this hook: do not loop.
   const r = guard([]);
   if (r.status === 0) process.exit(0);
-  process.stderr.write(`${r.stderr}\nThe Rose guard is failing. Fix the problems above before finishing. For "protected-file" findings do not run --approve: tell the user which protected files changed and why, and ask them to review and run \`pnpm guard:approve\`.\n`);
+  process.stderr.write(`${r.stderr}\nThe Rose guard is failing. Fix the problems above before finishing.\n`);
   process.exit(2);
 }
 

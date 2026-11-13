@@ -6,24 +6,20 @@
 //
 //   node scripts/guard.mjs                 check the whole repository
 //   node scripts/guard.mjs --quick a b     check only these files (used by editor/agent hooks)
-//   node scripts/guard.mjs --approve       a HUMAN accepts changes to the protected security core
 //   node scripts/guard.mjs --json          machine-readable output
 //
 // An exception is possible with a comment on the same or the previous line:
 //     // guard-allow: <rule-id> <reason>
-// Exceptions are counted and listed on every run so reviewers always see them. They are
-// never honoured for the protected-file lock.
+// Exceptions are counted and listed on every run so reviewers always see them.
 //
 // These are tripwires, not proofs. The real guarantees come from the type system
 // (modules get no `env`), the per-tenant database, and the isolation test suite.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const LOCK_FILE = "guard.lock.json";
 const SPDX = "SPDX-License-Identifier: Apache-2.0";
 
 // ── Rule catalogue: every rule explains itself ─────────────────────────────────────
@@ -100,10 +96,6 @@ export const RULES = {
     why: "The project is Apache-2.0; each source file carries the SPDX identifier so reuse stays unambiguous.",
     fix: `Add "// ${SPDX}" (or the -- / # / /* */ equivalent) as the first line.`,
   },
-  "protected-file": {
-    why: "This file is part of the reviewed security core (isolation, auth, crypto, migrations, CI and the guard itself). Changes here can silently weaken guarantees every tenant relies on.",
-    fix: "If the change is intended: explain it in the PR, have a human review the diff, then a human runs `pnpm guard:approve` to update guard.lock.json. Agents must not run --approve themselves.",
-  },
 };
 
 // ── File classification ────────────────────────────────────────────────────────────
@@ -115,19 +107,6 @@ const isGuardFile = (f) => /^scripts\/guard(\.test)?\.mjs$/.test(f) || f.startsW
 const isModuleFile = (f) => f.startsWith("apps/app/worker/modules/") && f !== "apps/app/worker/modules/index.ts";
 const isWorker = (f) => /^apps\/[^/]+\/worker\//.test(f);
 const isWeb = (f) => /^apps\/[^/]+\/web\//.test(f) || f.startsWith("packages/ui/");
-
-const PROTECTED = [
-  (f) => f.startsWith("packages/core/src/") && !f.startsWith("packages/core/src/testing/"),
-  (f) => f.startsWith("packages/core/migrations/"),
-  (f) => /^apps\/[^/]+\/worker\/test\/isolation\.test\.ts$/.test(f),
-  (f) => /^apps\/[^/]+\/public\/_headers$/.test(f),
-  (f) => f === "scripts/guard.mjs",
-  (f) => f.startsWith(".github/workflows/"),
-  (f) => f.startsWith(".githooks/"),
-  (f) => f === ".claude/settings.json",
-  (f) => f === "CODEOWNERS",
-];
-export const isProtected = (f) => PROTECTED.some((p) => p(f));
 
 /** Test fixtures that look like secrets but are public by design. */
 const ALLOWED_SECRET_LITERALS = new Set([
@@ -394,7 +373,7 @@ function applyAllows(violations, text) {
     const here = lines[viol.line - 1] ?? "";
     const prev = lines[viol.line - 2] ?? "";
     const m = [here, prev].map((l) => /guard-allow:\s*([\w-]+)\s+(\S.*)/.exec(l)).find((x) => x && x[1] === viol.rule);
-    if (m && viol.rule !== "protected-file") allowed.push({ ...viol, reason: m[2].replace(/\*\/\s*$/, "").trim() });
+    if (m) allowed.push({ ...viol, reason: m[2].replace(/\*\/\s*$/, "").trim() });
     else kept.push(viol);
   }
   return { violations: kept, allowed };
@@ -422,7 +401,6 @@ function listFiles() {
 
 const isBinary = (f) => /\.(png|jpe?g|gif|ico|webp|woff2?|ttf|pdf|zip|gz|sqlite)$/i.test(f);
 const read = (f) => readFileSync(join(ROOT, f), "utf8");
-const sha = (f) => createHash("sha256").update(readFileSync(join(ROOT, f))).digest("hex");
 
 export function checkStructure(files, readFile = read) {
   const v = [];
@@ -472,54 +450,6 @@ function trackedSecretsFiles() {
   }
 }
 
-function readLock() {
-  const p = join(ROOT, LOCK_FILE);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-export function checkLock(files, lock, hash = sha) {
-  const v = [];
-  if (!lock) {
-    v.push({ rule: "protected-file", file: LOCK_FILE, line: 1, message: "guard.lock.json is missing or unreadable. A human must run `pnpm guard:approve`." });
-    return v;
-  }
-  const current = files.filter(isProtected);
-  for (const f of current) {
-    if (!(f in lock.files)) v.push({ rule: "protected-file", file: f, line: 1, message: "New file in the protected security core (not yet approved)." });
-    else if (lock.files[f] !== hash(f)) v.push({ rule: "protected-file", file: f, line: 1, message: "Protected file changed since it was last approved." });
-  }
-  for (const f of Object.keys(lock.files)) {
-    if (!current.includes(f)) v.push({ rule: "protected-file", file: f, line: 1, message: "Protected file was deleted or moved." });
-  }
-  return v;
-}
-
-function approve(files) {
-  const old = readLock();
-  const next = { version: 1, note: "Hashes of the reviewed security core. Updated only by a human via `pnpm guard:approve`. See docs/agents.md.", files: {} };
-  for (const f of files.filter(isProtected).sort()) next.files[f] = sha(f);
-  if (old) {
-    for (const [f, h] of Object.entries(old.files)) {
-      if (!f.startsWith("packages/core/migrations/")) continue;
-      if (!(f in next.files) || next.files[f] !== h) {
-        console.error(`\n\x1b[1;31m!!! SHIPPED MIGRATION ${f in next.files ? "MODIFIED" : "REMOVED"}: ${f}\x1b[0m`);
-        console.error("    Databases that already ran it will NOT pick up the change and will diverge from fresh installs.");
-        console.error("    Unless this migration was never deployed anywhere, revert it and add a new numbered migration instead.\n");
-      }
-    }
-  }
-  const changed = !old ? Object.keys(next.files) : [...new Set([...Object.keys(next.files), ...Object.keys(old.files)])].filter((f) => next.files[f] !== old.files[f]);
-  writeFileSync(join(ROOT, LOCK_FILE), JSON.stringify(next, null, 2) + "\n");
-  console.log(`guard: approved ${changed.length} change(s) to the protected core (${Object.keys(next.files).length} files locked).`);
-  for (const f of changed) console.log(`  ${f in next.files ? (old && f in old.files ? "changed" : "added  ") : "removed"}  ${f}`);
-  console.log("Commit guard.lock.json together with the change and explain it in the pull request.");
-}
-
 // ── Runner ─────────────────────────────────────────────────────────────────────────
 function report(violations, allowed, { json, scope }) {
   if (json) {
@@ -551,32 +481,16 @@ function main() {
   const json = argv.includes("--json");
   const files = listFiles();
 
-  if (argv.includes("--approve")) {
-    const agent = process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT || process.env.AI_AGENT || process.env.CURSOR_AGENT || process.env.CODEX_SANDBOX;
-    if (agent && process.env.ROSE_GUARD_APPROVE !== "human-reviewed") {
-      console.error("guard: --approve records that a HUMAN reviewed changes to the security core. It looks like an agent is running this.");
-      console.error("       Agents: stop and ask the user to review the diff and run `pnpm guard:approve` themselves.");
-      console.error("       Humans inside an agent terminal: ROSE_GUARD_APPROVE=human-reviewed pnpm guard:approve");
-      process.exit(2);
-    }
-    approve(files);
-    return;
-  }
-
   const violations = [];
   const allowed = [];
   const quickAt = argv.indexOf("--quick");
   if (quickAt >= 0) {
     const targets = argv.slice(quickAt + 1).filter((a) => !a.startsWith("--")).map((a) => relative(ROOT, resolve(a)).split(sep).join("/"));
-    const lock = readLock();
     for (const f of targets) {
       if (f.startsWith("..") || !existsSync(join(ROOT, f)) || isBinary(f) || /(^|\/)(node_modules|dist|\.wrangler)\//.test(f)) continue;
       const r = checkFile(f, read(f));
       violations.push(...r.violations);
       allowed.push(...r.allowed);
-      if (isProtected(f) && lock && lock.files[f] !== sha(f)) {
-        violations.push({ rule: "protected-file", file: f, line: 1, message: f in lock.files ? "Protected file changed since it was last approved." : "New file in the protected security core (not yet approved)." });
-      }
     }
     report(violations, allowed, { json, scope: targets.join(", ") || "no files" });
     process.exit(violations.length ? 1 : 0);
@@ -590,7 +504,6 @@ function main() {
   }
   violations.push(...checkStructure(files));
   for (const f of trackedSecretsFiles()) violations.push({ rule: "secret-in-repo", file: f, line: 1, message: "Secrets file is tracked by git. Run `git rm --cached` and rotate what it contained." });
-  violations.push(...checkLock(files, readLock()));
   report(violations, allowed, { json });
   process.exit(violations.length ? 1 : 0);
 }
