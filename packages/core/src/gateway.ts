@@ -18,6 +18,18 @@ const STRIP_RESPONSE = ["set-cookie", "content-security-policy", "strict-transpo
  *  - origin mode:   an existing HTTP service (yours, anywhere). It verifies the token.
  *  - dispatch mode: a per-tenant Worker in a Workers for Platforms dispatch namespace.
  */
+/**
+ * Put `path` and `search` on `base` without letting the path choose the host. Resolving them
+ * with `new URL(path, base)` is unsafe: `//attacker.example/x` is a scheme-relative reference
+ * and would replace the origin. Assigning `pathname` can only ever change the path.
+ */
+function onOrigin(base: string, path: string, search: string): URL {
+  const target = new URL(base);
+  target.pathname = path;
+  target.search = search;
+  return target;
+}
+
 export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, tenant: TenantContext, actor: Actor): Promise<Response> {
   const mode = env.UPSTREAM_MODE ?? "off";
   if (mode === "off") throw notFound("No upstream service is configured.");
@@ -43,7 +55,7 @@ export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, 
   let res: Response;
   if (mode === "dispatch") {
     if (!env.DISPATCHER) throw misconfigured("Dispatch namespace binding DISPATCHER is missing.");
-    res = await env.DISPATCHER.get(`tenant-${tenant.slug}`).fetch(new Request(`https://upstream${path}${url.search}`, init));
+    res = await env.DISPATCHER.get(`tenant-${tenant.slug}`).fetch(new Request(onOrigin("https://upstream", path, url.search), init));
   } else {
     if (!env.UPSTREAM_ORIGIN) throw misconfigured("UPSTREAM_ORIGIN is not set.");
     // Never resolve the client's path against the origin: `//host/x` or `\host` would

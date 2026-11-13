@@ -28,6 +28,8 @@ const HOSTILE = [
   "/svc/@attacker.example/x",
   "/svc/%2F%2Fattacker.example/x",
   "/svc/%09/attacker.example",
+  "/svc/https://attacker.example/x",
+  "/svc/.//attacker.example",
 ];
 
 describe("gateway origin pinning", () => {
@@ -115,5 +117,20 @@ describe("gateway origin pinning", () => {
       forwardToUpstream({ UPSTREAM_MODE: "origin", UPSTREAM_SIGNING_SECRET: "x".repeat(32) } as never, new Request("https://a.example.com/svc/x"), tenant, actor),
     ).rejects.toBeTruthy();
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("dispatch mode keeps the request on the tenant's dispatch Worker", async () => {
+    const seen: string[] = [];
+    const dispatchEnv = {
+      ...(env as object),
+      UPSTREAM_MODE: "dispatch",
+      DISPATCHER: { get: () => ({ fetch: async (r: Request) => (seen.push(r.url), new Response("ok")) }) },
+    } as never;
+    const spy = captureFetch();
+    for (const p of HOSTILE) {
+      await forwardToUpstream(dispatchEnv, new Request(`https://a.example.com${p}`), tenant, actor).catch(() => undefined);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    for (const u of seen) expect(new URL(u).host).toBe("upstream");
   });
 });
