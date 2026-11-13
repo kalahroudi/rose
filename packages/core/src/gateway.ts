@@ -46,7 +46,15 @@ export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, 
     res = await env.DISPATCHER.get(`tenant-${tenant.slug}`).fetch(new Request(`https://upstream${path}${url.search}`, init));
   } else {
     if (!env.UPSTREAM_ORIGIN) throw misconfigured("UPSTREAM_ORIGIN is not set.");
-    res = await fetch(new URL(path + url.search, env.UPSTREAM_ORIGIN), init);
+    // Never resolve the client's path against the origin: `//host/x` or `\host` would
+    // replace the host and send the tenant token to it. Set it as a pathname instead and
+    // refuse anything that does not stay on the configured origin.
+    const upstream = new URL(env.UPSTREAM_ORIGIN);
+    const target = new URL(upstream.origin);
+    target.pathname = path.replace(/^[/\\]+/, "/");
+    target.search = url.search;
+    if (target.origin !== upstream.origin) throw notFound();
+    res = await fetch(target, init);
   }
   const out = new Response(res.body, res);
   for (const name of STRIP_RESPONSE) out.headers.delete(name);
