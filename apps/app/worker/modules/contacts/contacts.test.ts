@@ -74,6 +74,104 @@ describe("contacts", () => {
     expect(audit.items).toHaveLength(1);
   });
 
+  it("never stores the import CSV in clear text in the control database and clears it when done", async () => {
+    const t = await createTestTenant(env, SELF);
+    const res = await t.fetch("/api/m/contacts/import", { body: { csv: "name,email,company\nLeaky,leaky@example.com,Acme" } });
+    const { jobId } = await json<{ jobId: string }>(res);
+    const queued = await env.DB.prepare("SELECT payload FROM jobs WHERE id = ?").bind(jobId).first<{ payload: string }>();
+    expect(queued!.payload).not.toContain("leaky@example.com");
+    expect(queued!.payload).not.toContain("Leaky");
+    await tenantTick(env, modules);
+    const done = await env.DB.prepare("SELECT status, payload FROM jobs WHERE id = ?").bind(jobId).first<{ status: string; payload: string }>();
+    expect(done).toEqual({ status: "succeeded", payload: "{}" });
+    expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(1);
+  });
+
+  describe("import job payload sealing", () => {
+    const rowOf = (id: string) => env.DB.prepare("SELECT status, attempts, payload, result, error FROM jobs WHERE id = ?").bind(id).first<{ status: string; attempts: number; payload: string; result: string | null; error: string | null }>();
+    const queueImport = async (t: Awaited<ReturnType<typeof createTestTenant>>, csv: string) => (await json<{ jobId: string }>(t.fetch("/api/m/contacts/import", { body: { csv } }))).jobId;
+
+    it("seals the payload as { enc } only, with fresh ciphertext per job, and keeps nothing readable in any jobs column", async () => {
+      const t = await createTestTenant(env, SELF);
+      const csv = "name,email,company\nZelda Sealed,zelda.sealed@example.com,Hyrule";
+      const a = await queueImport(t, csv);
+      const b = await queueImport(t, csv);
+      const pa = JSON.parse((await rowOf(a))!.payload) as Record<string, unknown>;
+      const pb = JSON.parse((await rowOf(b))!.payload) as Record<string, unknown>;
+      expect(Object.keys(pa)).toEqual(["enc"]);
+      expect(typeof pa.enc).toBe("string");
+      expect(pa.enc).not.toBe(pb.enc);
+      await tenantTick(env, modules);
+      for (const needle of ["zelda.sealed", "Zelda", "Hyrule", "csv"]) {
+        const hit = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE payload LIKE ? OR result LIKE ? OR error LIKE ? OR title LIKE ?").bind(`%${needle}%`, `%${needle}%`, `%${needle}%`, `%${needle}%`).first<{ n: number }>();
+        expect(hit!.n).toBe(0);
+      }
+      expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(2);
+    });
+
+    it("a tampered payload fails safely without leaking contents, imports nothing, and is cleared on the final failure", async () => {
+      const t = await createTestTenant(env, SELF);
+      const id = await queueImport(t, "name,email\nTamper,tamper@example.com");
+      const enc = (JSON.parse((await rowOf(id))!.payload) as { enc: string }).enc;
+      const flipped = enc.slice(0, -4) + (enc.endsWith("AAAA") ? "BBBB" : "AAAA");
+      await env.DB.prepare("UPDATE jobs SET payload = ? WHERE id = ?").bind(JSON.stringify({ enc: flipped }), id).run();
+      await tenantTick(env, modules);
+      const retry = (await rowOf(id))!;
+      expect(retry.status).toBe("queued");
+      expect(retry.payload).toBe(JSON.stringify({ enc: flipped })); // kept (still sealed) for the retry
+      expect(retry.error ?? "").not.toContain("tamper@example.com");
+      await env.DB.prepare("UPDATE jobs SET attempts = 4, run_after = 0 WHERE id = ?").bind(id).run();
+      await tenantTick(env, modules);
+      const final = (await rowOf(id))!;
+      expect(final.status).toBe("failed");
+      expect(final.payload).toBe("{}");
+      expect(final.error ?? "").not.toContain("tamper@example.com");
+      expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(0);
+    });
+
+    it("a sealed payload moved to another tenant's job can not be opened or imported there", async () => {
+      const a = await createTestTenant(env, SELF);
+      const b = await createTestTenant(env, SELF);
+      const idA = await queueImport(a, "name,email\nVictim,victim@example.com");
+      const idB = await queueImport(b, "name,email\nOwn,own@example.com");
+      const sealedA = (await rowOf(idA))!.payload;
+      await env.DB.prepare("UPDATE jobs SET payload = ? WHERE id = ?").bind(sealedA, idB).run();
+      await env.DB.prepare("UPDATE jobs SET attempts = 4 WHERE id = ?").bind(idB).run();
+      await tenantTick(env, modules);
+      expect((await rowOf(idB))!.status).toBe("failed");
+      const names = (await json<List>(b.fetch("/api/m/contacts"))).items.map((i) => i.name);
+      expect(names).not.toContain("Victim");
+      expect(names).not.toContain("Own");
+    });
+
+    it("a legacy or forged plain-JSON payload is not trusted as the module's input", async () => {
+      const t = await createTestTenant(env, SELF);
+      const id = await queueImport(t, "name,email\nReal,real@example.com");
+      await env.DB.prepare("UPDATE jobs SET payload = ? WHERE id = ?").bind(JSON.stringify({ csv: "name,email\nForged,forged@example.com" }), id).run();
+      await tenantTick(env, modules);
+      const names = (await json<List>(t.fetch("/api/m/contacts"))).items.map((i) => i.name);
+      expect(names).not.toContain("Forged");
+      expect(names).not.toContain("Real");
+    });
+
+    it("a payload with a non-string enc is rejected without importing", async () => {
+      const t = await createTestTenant(env, SELF);
+      const id = await queueImport(t, "name,email\nX,x@example.com");
+      await env.DB.prepare("UPDATE jobs SET payload = ? WHERE id = ?").bind(JSON.stringify({ enc: { csv: "name\nObj" } }), id).run();
+      await tenantTick(env, modules);
+      expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(0);
+    });
+
+    it("a succeeded job is not re-run by a second tick (no duplicate imports)", async () => {
+      const t = await createTestTenant(env, SELF);
+      const id = await queueImport(t, "name,email\nOnce,once@example.com");
+      await tenantTick(env, modules);
+      await tenantTick(env, modules);
+      expect((await rowOf(id))!.payload).toBe("{}");
+      expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(1);
+    });
+  });
+
   it("parses CSV lines", () => {
     expect(parseCsvLine('a,"b,c","d ""e"""')).toEqual(["a", "b,c", 'd "e"']);
   });

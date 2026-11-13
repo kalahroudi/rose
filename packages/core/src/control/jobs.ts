@@ -88,7 +88,7 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
   try {
     const outcome = await handler(env, job, JSON.parse(job.payload) as Record<string, unknown>);
     if (outcome.done) {
-      await env.DB.prepare("UPDATE jobs SET status = 'succeeded', result = ?, error = NULL, updated_at = ? WHERE id = ?").bind(JSON.stringify(outcome.result ?? null), now(), job.id).run();
+      await env.DB.prepare("UPDATE jobs SET status = 'succeeded', payload = '{}', result = ?, error = NULL, updated_at = ? WHERE id = ?").bind(JSON.stringify(outcome.result ?? null), now(), job.id).run();
     } else {
       await env.DB.prepare("UPDATE jobs SET status = 'queued', run_after = ?, error = ?, updated_at = ? WHERE id = ?").bind(now() + outcome.retryInMs, outcome.note ?? null, now(), job.id).run();
       await notify(env, job, outcome.retryInMs);
@@ -98,8 +98,8 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
     const final = job.attempts + 1 >= MAX_ATTEMPTS;
     const backoff = 2 ** job.attempts * 15_000;
     await env.DB
-      .prepare("UPDATE jobs SET status = ?, error = ?, run_after = ?, updated_at = ? WHERE id = ?")
-      .bind(final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id)
+      .prepare("UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? WHERE id = ?")
+      .bind(final ? "failed" : "queued", final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id)
       .run();
     if (!final) await notify(env, job, backoff);
   }

@@ -46,6 +46,8 @@ export function tenantMigrations(modules: ModuleDefinition[]): TenantMigration[]
   return [...CORE_TENANT_MIGRATIONS, ...modules.flatMap((m) => m.migrations)];
 }
 
+const JOB_PAYLOAD_FIELD = "jobs.payload";
+
 /** Background work owned by the tenant worker: platform jobs plus every module's jobs. */
 export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, JobHandler<TenantWorkerEnv>> {
   const handlers: Record<string, JobHandler<TenantWorkerEnv>> = {
@@ -72,14 +74,18 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
         if (row.status !== "active") return { done: false, retryInMs: 10 * 60_000, note: "Workspace is suspended" };
         const tenant = bindTenant(row);
         const db = new TenantDb(env, tenant);
+        // Module payloads are stored sealed with the tenant key (see `enqueue`), never as plain JSON.
+        const crypto = () => tenantCrypto(env, tenant);
+        const sealed = typeof payload.enc === "string" ? payload.enc : null;
+        const plain = sealed ? (JSON.parse(await (await crypto()).decrypt(sealed, JOB_PAYLOAD_FIELD)) as Record<string, unknown>) : {};
         const result = await run(
           {
             tenant,
             db,
-            crypto: () => tenantCrypto(env, tenant),
+            crypto,
             audit: (action, target, meta) => writeTenantAudit(db, { actor: `job:${job.created_by ?? "system"}`, action: `${mod.id}.${action}`, target, meta }),
           },
-          payload,
+          plain,
         );
         return { done: true, result };
       };
@@ -397,7 +403,9 @@ export function createTenantApp(options: TenantAppOptions) {
           audit: (action, target, meta) => audit(c, `${mod.id}.${action}`, target, meta),
           enqueue: async (job, title, payload) => {
             if (!mod.jobs?.[job]) throw new Error(`Module ${mod.id} has no job "${job}"`);
-            const row = await enqueueJob(c.env, { type: `m.${mod.id}.${job}`, scope: tenant.id, title, payload, createdBy: c.get("actor").label });
+            // Tenant business data must not sit in the shared control-plane database in clear text.
+            const sealed = { enc: await (await tenantCrypto(c.env, tenant)).encrypt(JSON.stringify(payload ?? {}), JOB_PAYLOAD_FIELD) };
+            const row = await enqueueJob(c.env, { type: `m.${mod.id}.${job}`, scope: tenant.id, title, payload: sealed, createdBy: c.get("actor").label });
             return row.id;
           },
           req: {
