@@ -1,9 +1,9 @@
 {
-  // Tenant app worker. `pnpm setup` fills in the ids and domain; do not edit them by hand.
+  // Tenant app worker. Placeholders only: `pnpm setup --production` writes your real ids and domain to the git-ignored wrangler.production.jsonc.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rose-app",
   "main": "worker/index.ts",
-  "routes": [{ "pattern": "rose.acme-corp.dev/*", "zone_name": "acme-corp.dev" }, { "pattern": "*.rose.acme-corp.dev/*", "zone_name": "acme-corp.dev" }],
+  "routes": [{ "pattern": "example.com/*", "zone_name": "example.com" }, { "pattern": "*.example.com/*", "zone_name": "example.com" }],
   // Serve only through the routes below: no workers.dev URL and no preview URLs to bypass them.
   "workers_dev": false,
   "preview_urls": false,
@@ -11,7 +11,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": { "directory": "./dist/client", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*", "/auth/*", "/svc/*", "/__dev/*"] },
   "d1_databases": [
-    { "binding": "DB", "database_name": "rose-control", "database_id": "11111111-2222-4333-8444-555555555555", "migrations_dir": "../../packages/core/migrations" }
+    { "binding": "DB", "database_name": "rose-control", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "../../packages/core/migrations" }
   ],
   "durable_objects": { "bindings": [{ "name": "TENANT_DO", "class_name": "TenantDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO"] }],
@@ -26,10 +26,10 @@
   "vars": {
     "ENVIRONMENT": "production",
     "APP_NAME": "Rose",
-    "APP_BASE_DOMAIN": "rose.acme-corp.dev",
+    "APP_BASE_DOMAIN": "example.com",
     "EMAIL_PROVIDER": "resend",
     "UPSTREAM_MODE": "off",
-    "EMAIL_FROM": "Rose <no-reply@update.acme-corp.dev>"
+    "EMAIL_FROM": "Rose <no-reply@update.example.com>"
   }
   // Secrets (set by `pnpm setup`): ROSE_MASTER_KEY, UPSTREAM_SIGNING_SECRET, RESEND_API_KEY
 }

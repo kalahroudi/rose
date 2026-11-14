@@ -23,6 +23,8 @@ export interface AuthRealm {
   /** Identity is proven; confirm or grant access (e.g. redeem an invitation). False refuses sign-in. */
   admit(user: UserRow): Promise<boolean>;
   audit(event: { actor: string; action: string; ip: string | null }): Promise<void>;
+  /** Once a user has a passkey here, emailed codes stop working for them (mailbox control must not equal account control). */
+  enforcePasskey?: boolean;
 }
 
 type Env = { Bindings: CoreEnv; Variables: BaseVars };
@@ -73,6 +75,13 @@ export async function checkCode(c: Context, scope: string, email: string, code: 
   if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code))) throw unauthorized(BAD_CODE);
 }
 
+/** True when this realm refuses emailed codes for the address because the user has registered a passkey. */
+async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Promise<boolean> {
+  if (!realm.enforcePasskey) return false;
+  const user = await getUserByEmail(db, email);
+  return !!user && (await listPasskeys(db, user.id, realm.scope)).length > 0;
+}
+
 const emailBody = z.object({ email: z.string().max(254) });
 const verifyBody = z.object({ email: z.string().max(254), code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.") });
 
@@ -92,7 +101,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.post("/code/request", async (c) => {
     const realm = await getRealm(c);
     const email = normalizeEmail((await readJson(c, emailBody)).email);
-    return c.json(await requestCode(c, { scope: realm.scope, label: realm.displayName, email, eligible: () => realm.eligible(email) }));
+    return c.json(await requestCode(c, { scope: realm.scope, label: realm.displayName, email, eligible: async () => (await realm.eligible(email)) && !(await codeDisabled(c.env.DB, realm, email)) }));
   });
 
   app.post("/code/verify", async (c) => {
@@ -100,6 +109,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     const body = await readJson(c, verifyBody);
     const email = normalizeEmail(body.email);
     await checkCode(c, realm.scope, email, body.code);
+    if (await codeDisabled(c.env.DB, realm, email)) throw unauthorized(BAD_CODE);
     const user = await ensureUser(c.env.DB, email);
     if (!(await realm.admit(user))) throw unauthorized(BAD_CODE);
     await startSession(c, realm, user, "code");

@@ -8,9 +8,10 @@
 //                   --email-provider resend|console --email-from --resend-api-key (or RESEND_API_KEY)
 //                   --dry-run (print the plan and commands, change nothing)  --skip-deploy  --yes
 import { createInterface } from "node:readline/promises";
-import { join } from "node:path";
+import { copyFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
-  ADMIN_DIR, APP_DIR, DB_NAME, PLACEHOLDER_DB_ID, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, fail, info, installGitHooks,
+  ADMIN_DIR, APP_DIR, DB_NAME, PLACEHOLDER_DB_ID, PROD_CONFIG, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, fail, info, installGitHooks,
   newHexSecret, newMasterKey, ok, parseArgs, readText, run, setDatabaseId, setRoutes, setVar, warn, writeText,
 } from "./lib.mjs";
 
@@ -119,9 +120,10 @@ for (const queue of ["rose-app-jobs", "rose-admin-jobs"]) {
 
 // 4. Database
 let dbId = null;
-const appCfgPath = join(APP_DIR, "wrangler.jsonc");
-const adminCfgPath = join(ADMIN_DIR, "wrangler.jsonc");
-const current = /"database_id"\s*:\s*"([^"]+)"/.exec(readText(appCfgPath))?.[1];
+const appCfgPath = join(APP_DIR, PROD_CONFIG);
+const adminCfgPath = join(ADMIN_DIR, PROD_CONFIG);
+for (const dir of [APP_DIR, ADMIN_DIR]) if (!existsSync(join(dir, PROD_CONFIG)) && !dry) copyFileSync(join(dir, "wrangler.jsonc"), join(dir, PROD_CONFIG));
+const current = /"database_id"\s*:\s*"([^"]+)"/.exec(readText(existsSync(appCfgPath) ? appCfgPath : join(APP_DIR, "wrangler.jsonc")))?.[1];
 if (dry) {
   console.log(`${c.dim("[dry-run]")} wrangler d1 list --json   ${c.dim("(reuse rose-control if it exists)")}`);
   console.log(`${c.dim("[dry-run]")} wrangler d1 create ${DB_NAME}   ${c.dim("(only if missing)")}`);
@@ -144,7 +146,7 @@ if (dry) {
 
 // 4. Config files
 function configure(path, edit) {
-  const before = readText(path);
+  const before = readText(existsSync(path) ? path : join(dirname(path), "wrangler.jsonc"));
   const after = edit(before);
   if (dry) console.log(`${c.dim("[dry-run]")} update ${path.replace(/^.*\/apps\//, "apps/")}  ${c.dim(after === before ? "(no change)" : "(database_id, vars, routes)")}`);
   else if (after !== before) writeText(path, after);
@@ -165,10 +167,10 @@ configure(adminCfgPath, (t) => {
   s = setVar(s, "BOOTSTRAP_OPERATOR_EMAIL", operatorEmail);
   return setRoutes(s, [{ pattern: `${adminHost}/*`, zone_name: adminZone }]);
 });
-if (!dry) ok("Wrote database id, vars and routes to apps/app/wrangler.jsonc and apps/admin/wrangler.jsonc (commit these)");
+if (!dry) ok(`Wrote database id, vars and routes to apps/app/${PROD_CONFIG} and apps/admin/${PROD_CONFIG} (git-ignored: do not commit)`);
 
 // 5. Migrations
-step("Applying migrations", wranglerApp, ["d1", "migrations", "apply", DB_NAME, "--remote"], { cwd: APP_DIR, env: { CI: "1" } });
+step("Applying migrations", wranglerApp, ["d1", "migrations", "apply", DB_NAME, "--remote", "-c", PROD_CONFIG], { cwd: APP_DIR, env: { CI: "1" } });
 
 // 6. Build
 if (!args["skip-deploy"]) {
@@ -177,15 +179,15 @@ if (!args["skip-deploy"]) {
 
 // 7. Deploy. Until the secrets below are attached the workers fail closed (HTTP 503), never open.
 if (!args["skip-deploy"]) {
-  step("Deploying the tenant app", wranglerApp, ["deploy"], { cwd: APP_DIR });
-  step("Deploying the operator console", wranglerAdmin, ["deploy"], { cwd: ADMIN_DIR });
+  step("Deploying the tenant app", wranglerApp, ["deploy", "-c", PROD_CONFIG], { cwd: APP_DIR });
+  step("Deploying the operator console", wranglerAdmin, ["deploy", "-c", PROD_CONFIG], { cwd: ADMIN_DIR });
 }
 
 // 8. Secrets. Generated here, piped straight to Cloudflare, never printed or written to disk.
 //    An existing ROSE_MASTER_KEY is never replaced: doing so would make stored data unreadable.
 function existingSecrets(wrangler, cwd) {
   if (dry) return new Set();
-  const r = run(wrangler, ["secret", "list", "--format", "json"], { cwd, capture: true });
+  const r = run(wrangler, ["secret", "list", "--format", "json", "-c", PROD_CONFIG], { cwd, capture: true });
   try {
     return new Set(JSON.parse(r.stdout.slice(r.stdout.indexOf("["))).map((s) => s.name));
   } catch {
@@ -197,7 +199,7 @@ function putSecret(wrangler, cwd, name, value, have, { keepExisting }) {
     ok(`${name} already set on ${cwd === APP_DIR ? "rose-app" : "rose-admin"} (kept)`);
     return;
   }
-  step(`Setting ${name}`, wrangler, ["secret", "put", name], { cwd, input: value, capture: true });
+  step(`Setting ${name}`, wrangler, ["secret", "put", name, "-c", PROD_CONFIG], { cwd, input: value, capture: true });
 }
 const haveApp = existingSecrets(wranglerApp, APP_DIR);
 const haveAdmin = existingSecrets(wranglerAdmin, ADMIN_DIR);
@@ -228,7 +230,7 @@ ${c.bold("Then")}
   2. Add a passkey when prompted, then add a second owner under Operators.
   3. Open Setup: every item should be green. Connect Cloudflare there if tenants will bring their own domains.
   4. Recommended: put Cloudflare Access in front of ${adminHost} as a second lock (docs/deployment.md).
-  5. Commit the changed wrangler.jsonc files. They contain no secrets.
+  5. Keep the generated wrangler.production.jsonc files out of git (they are git-ignored); they hold your database id, domains and operator email. Back them up privately.
 
 ${c.bold("Not automated")}: DNS records, Cloudflare Access, the Resend domain verification, and (for custom customer domains) enabling Cloudflare for SaaS with a fallback origin on the zone.
 ${c.dim("This production path is exercised by --dry-run only in this repository; read docs/deployment.md before the first real run.")}

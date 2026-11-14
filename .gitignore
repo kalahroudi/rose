@@ -12,3 +12,4 @@ coverage/
 .rose/
 *.tsbuildinfo
 wrangler.dev.jsonc
+wrangler.production.jsonc

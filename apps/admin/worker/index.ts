@@ -89,6 +89,7 @@ const realm = (c: Ctx): AuthRealm => ({
   scope: SCOPE,
   displayName: `${c.env.APP_NAME} Admin`,
   cookie: COOKIE,
+  enforcePasskey: true,
   eligible: async (email) => (await isOperatorEmail(c.env.DB, email)) || bootstrapEligible(c.env, email),
   admit: async (user) => {
     if (await getOperator(c.env.DB, user.id)) return true;
