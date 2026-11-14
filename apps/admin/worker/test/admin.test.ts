@@ -23,7 +23,7 @@ async function signIn(email: string): Promise<string | null> {
 
 // Storage is shared within this file, so sign the bootstrap owner in once (codes are rate limited).
 let rootCookie: string | null = null;
-const root = async () => (rootCookie ??= await signIn("root@rose.test"))!;
+const root = async () => (rootCookie ??= await signIn("root@example.com"))!;
 
 describe("operator console", () => {
   it("has no path to tenant data: no tenant database binding, no tenant key", () => {

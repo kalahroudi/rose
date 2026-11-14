@@ -8,7 +8,7 @@ const post = (path: string, json: unknown) =>
 
 describe("operators with a passkey can not sign in by emailed code", () => {
   it("refuses codes once a passkey is registered, even a valid one", async () => {
-    const email = "root@rose.test";
+    const email = "root@example.com";
     // First sign-in (bootstrap or existing operator) by code works while there is no passkey.
     const first = (await (await post("/api/auth/code/request", { email })).json()) as { devCode?: string };
     const staleCode = first.devCode;
