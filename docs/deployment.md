@@ -31,9 +31,9 @@ RESEND_API_KEY=… pnpm setup --production --yes \
 What it does, in order:
 
 1. Checks `wrangler whoami`.
-2. Creates the D1 database `rose-control` (or reuses it) and writes its id into both
-   `wrangler.jsonc` files.
-3. Writes non-secret vars and routes into both `wrangler.jsonc` files
+2. Creates the D1 database `rose-control` (or reuses it) and writes its id into
+   `wrangler.production.jsonc` in each app (git-ignored copies of `wrangler.jsonc`).
+3. Writes non-secret vars and routes into both `wrangler.production.jsonc` files
    (`APP_BASE_DOMAIN`, `APP_NAME`, `EMAIL_*`, `BOOTSTRAP_OPERATOR_EMAIL`; app routes
    `<base>/*` and `*.<base>/*`; admin route `<admin-host>/*`, which wins over the
    wildcard because it is more specific).
@@ -45,7 +45,10 @@ What it does, in order:
    **kept** on re-runs (replacing one would orphan encrypted data). Between step 5 and
    this step the workers fail closed (HTTP 503).
 
-It is safe to re-run. Commit the changed `wrangler.jsonc` files; they contain no secrets.
+It is safe to re-run. The committed `wrangler.jsonc` files keep placeholders only
+(`pnpm guard` fails if a real database id, domain or operator email appears there); your
+real values live in the git-ignored `wrangler.production.jsonc` files, so back those up
+privately. Wrangler commands for production take `-c wrangler.production.jsonc`.
 
 ## What you do by hand
 
@@ -79,8 +82,8 @@ pnpm deploy
 ```
 
 Runs `pnpm verify` (guard, types, all tests), builds, applies migrations and deploys
-both workers. It stops at the first failure and refuses to run while `wrangler.jsonc`
-still has placeholder values. In CI, run the same command with `CLOUDFLARE_API_TOKEN`.
+both workers. It stops at the first failure and refuses to run while
+`wrangler.production.jsonc` is missing or still has placeholder values. In CI, run the same command with `CLOUDFLARE_API_TOKEN`.
 
 Tenant database migrations need no step: each tenant's Durable Object applies new module
 migrations the next time it starts after a deploy.

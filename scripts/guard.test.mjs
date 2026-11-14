@@ -108,6 +108,15 @@ test("admin-isolation: operator worker must not bind tenant storage", () => {
   assert.deepEqual(checkFile("apps/app/wrangler.jsonc", bad).violations, []);
 });
 
+test("deployment-values: wrangler.jsonc may hold placeholders only", () => {
+  const ok = '{\n  "routes": [{ "pattern": "*.example.com/*", "zone_name": "example.com" }],\n  "vars": { "BOOTSTRAP_OPERATOR_EMAIL": "admin@example.com", "EMAIL_FROM": "Rose <no-reply@update.example.com>" },\n  "d1_databases": [{ "database_id": "00000000-0000-0000-0000-000000000000" }]\n}';
+  assert.deepEqual(checkFile("apps/admin/wrangler.jsonc", ok).violations, []);
+  for (const bad of ['"database_id": "11111111-2222-4333-8444-555555555555"', '"BOOTSTRAP_OPERATOR_EMAIL": "ops@acme.io"', '"APP_BASE_DOMAIN": "acme.io"', '"routes": [{ "pattern": "acme.io/*", "zone_name": "acme.io" }]']) {
+    assert.ok(checkFile("apps/app/wrangler.jsonc", `{\n  ${bad}\n}`).violations.some((v) => v.rule === "deployment-values"), bad);
+  }
+  assert.deepEqual(checkFile("apps/app/wrangler.production.jsonc", '{\n  "database_id": "11111111-2222-4333-8444-555555555555"\n}').violations, []);
+});
+
 test("csp: script-src must stay strict", () => {
   const ok = "/*\n  Content-Security-Policy: default-src 'self'; script-src 'self'; frame-ancestors 'none'\n";
   assert.deepEqual(checkFile("apps/app/public/_headers", ok).violations, []);

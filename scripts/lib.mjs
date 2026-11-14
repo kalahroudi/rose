@@ -11,6 +11,8 @@ export const APP_DIR = join(ROOT, "apps/app");
 export const ADMIN_DIR = join(ROOT, "apps/admin");
 export const PLACEHOLDER_DB_ID = "00000000-0000-0000-0000-000000000000";
 export const DB_NAME = "rose-control";
+/** Deployment values (database id, domains, operator email) live here, git-ignored; wrangler.jsonc holds placeholders. */
+export const PROD_CONFIG = "wrangler.production.jsonc";
 
 const tty = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));

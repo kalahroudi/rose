@@ -3,7 +3,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rose-admin",
   "main": "worker/index.ts",
-  "routes": [{ "pattern": "rose-admin.acme-corp.dev/*", "zone_name": "acme-corp.dev" }],
+  "routes": [{ "pattern": "admin.example.com/*", "zone_name": "example.com" }],
   // Serve only through the routes below: no workers.dev URL and no preview URLs to bypass them.
   "workers_dev": false,
   "preview_urls": false,
@@ -11,7 +11,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": { "directory": "./dist/client", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*", "/__dev/*"] },
   "d1_databases": [
-    { "binding": "DB", "database_name": "rose-control", "database_id": "11111111-2222-4333-8444-555555555555", "migrations_dir": "../../packages/core/migrations" }
+    { "binding": "DB", "database_name": "rose-control", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "../../packages/core/migrations" }
   ],
   "ratelimits": [{ "name": "RL_AUTH", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }],
   // Jobs start when queued. The hourly cron only sweeps expired records and re-runs any job whose message was lost.
@@ -24,11 +24,11 @@
   "vars": {
     "ENVIRONMENT": "production",
     "APP_NAME": "Rose",
-    "APP_BASE_DOMAIN": "rose.acme-corp.dev",
+    "APP_BASE_DOMAIN": "example.com",
     "APP_URL_TEMPLATE": "https://{host}",
     "EMAIL_PROVIDER": "resend",
-    "BOOTSTRAP_OPERATOR_EMAIL": "mo@acme-mail.dev",
-    "EMAIL_FROM": "Rose <no-reply@update.acme-corp.dev>"
+    "BOOTSTRAP_OPERATOR_EMAIL": "admin@example.com",
+    "EMAIL_FROM": "Rose <no-reply@update.example.com>"
   }
   // Secrets (set by `pnpm setup`): ROSE_MASTER_KEY (different from the app worker's), RESEND_API_KEY
 }

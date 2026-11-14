@@ -122,3 +122,11 @@ JSON bodies require `Content-Type: application/json`.
 | 5 guesses per code | D1 | global |
 
 If `RL_AUTH` is missing in production, auth endpoints fail closed.
+
+## Operators: passkey replaces emailed codes
+
+In the operator console, once an operator registers a passkey, emailed codes stop working
+for them (no code is sent, and a code issued earlier is refused). Controlling the mailbox
+is then not enough to control the platform. Register a passkey, and a second one on another
+device, before relying on this. If an operator loses every passkey, recovery is manual: delete that user's rows in
+`passkeys` (scope `platform`) from the control-plane database.

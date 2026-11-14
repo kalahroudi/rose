@@ -84,6 +84,10 @@ export const RULES = {
     why: "The operator console must have no path to tenant data: no tenant database binding and no tenant key. A stolen operator session then can not read customer data.",
     fix: "Remove the binding from apps/admin/wrangler.jsonc. Tenant data operations run in the tenant worker (e.g. as a background job).",
   },
+  "deployment-values": {
+    why: "A public repo that names the production database, domains or bootstrap operator mailbox tells an attacker exactly what to target.",
+    fix: "Keep placeholders in apps/*/wrangler.jsonc (database_id all zeros, example.com hosts and addresses). `pnpm setup --production` writes real values to the git-ignored wrangler.production.jsonc.",
+  },
   csp: {
     why: "The Content-Security-Policy is the last line of defence against XSS. Inline or eval'd script must stay blocked.",
     fix: "Keep script-src 'self' with no 'unsafe-inline'/'unsafe-eval' in apps/*/public/_headers. Put scripts in files.",
@@ -279,6 +283,20 @@ export function checkFile(file, text) {
       if (!/script-src/.test(csp)) v.push({ rule: "csp", file, line, message: "CSP has no script-src directive." });
       if (/unsafe-inline|unsafe-eval|\*|https?:|data:/.test(script)) v.push({ rule: "csp", file, line, message: "script-src must be exactly 'self' (no unsafe-inline, unsafe-eval, wildcards or remote hosts)." });
       if (!/frame-ancestors 'none'/.test(csp)) v.push({ rule: "csp", file, line, message: "CSP must keep frame-ancestors 'none' (clickjacking)." });
+    }
+  }
+
+  if (/^apps\/[^/]+\/wrangler\.jsonc$/.test(file)) {
+    const { code } = scan(text);
+    const bad = (idx, message) => v.push({ rule: "deployment-values", file, line: idx + 1, message });
+    // Match across the whole text so a value on the line after its key is still seen.
+    const lineAt = (i) => code.slice(0, i).split("\n").length - 1;
+    for (const m of code.matchAll(/"database_id"\s*:\s*"([^"]*)"/g)) {
+      if (m[1] !== "00000000-0000-0000-0000-000000000000") bad(lineAt(m.index), "database_id must be the all-zero placeholder.");
+    }
+    for (const m of code.matchAll(/"(?:APP_BASE_DOMAIN|BOOTSTRAP_OPERATOR_EMAIL|EMAIL_FROM|pattern|zone_name)"\s*:\s*"([^"]*)"/g)) {
+      const hosts = m[1].match(/[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? [];
+      if (hosts.some((h) => h !== "example.com" && !h.endsWith(".example.com"))) bad(lineAt(m.index), "Deployment domain or address must use the example.com placeholder.");
     }
   }
 
