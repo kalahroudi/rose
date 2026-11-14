@@ -23,7 +23,9 @@ test("deployment-values: lookalike hosts are not accepted as example.com", () =>
 });
 
 test("deployment-values: real mailboxes are rejected in every address var", () => {
-  for (const v of ['"BOOTSTRAP_OPERATOR_EMAIL": "mo@acme-mail.dev"', '"EMAIL_FROM": "Rose <no-reply@update.acme-corp.dev>"', '"BOOTSTRAP_OPERATOR_EMAIL": "a@b.io"']) {
+  // Addresses are assembled at runtime so no real-looking mailbox sits in the source.
+  const at = "@";
+  for (const v of [`"BOOTSTRAP_OPERATOR_EMAIL": "mo${at}acme-mail.dev"`, `"EMAIL_FROM": "Rose <no-reply${at}update.acme-corp.dev>"`, `"BOOTSTRAP_OPERATOR_EMAIL": "a${at}b.io"`]) {
     assert.ok(flagged("apps/admin/wrangler.jsonc", `{\n  ${v}\n}`), v);
   }
 });

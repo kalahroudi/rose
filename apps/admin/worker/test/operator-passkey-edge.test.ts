@@ -3,7 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 const ORIGIN = "https://admin.rose.test";
-const EMAIL = "root@rose.test";
+const EMAIL = "root@example.com";
 const post = (path: string, json: unknown) =>
   SELF.fetch(ORIGIN + path, { method: "POST", redirect: "manual", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(json) });
 const body = async <T>(r: Response) => (await r.json()) as T;
@@ -37,7 +37,7 @@ describe("operator passkey enforcement: edge cases", () => {
 
   it("email case and whitespace variants do not bypass the block", async () => {
     await addPasskey(EMAIL, "platform", "cred-case");
-    for (const variant of ["ROOT@rose.test", "Root@Rose.Test", " root@rose.test "]) {
+    for (const variant of ["ROOT@example.com", "Root@Example.Com", " root@example.com "]) {
       expect(await codeFor(variant), variant).toBeUndefined();
       const r = await post("/api/auth/code/verify", { email: variant, code: "000000" });
       expect(r.status, variant).toBe(401);

@@ -16,7 +16,7 @@ export default defineConfig({
           ENVIRONMENT: "test",
           EMAIL_PROVIDER: "console",
           APP_BASE_DOMAIN: "rose.test",
-          BOOTSTRAP_OPERATOR_EMAIL: "root@rose.test",
+          BOOTSTRAP_OPERATOR_EMAIL: "root@example.com",
           ROSE_MASTER_KEY: "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
         },
       },

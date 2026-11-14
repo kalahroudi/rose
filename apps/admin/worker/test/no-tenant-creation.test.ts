@@ -22,7 +22,7 @@ const json = async <T>(r: Response | Promise<Response>) => (await (await r).json
 let rootCookie: string | null = null;
 async function root(): Promise<string> {
   if (rootCookie) return rootCookie;
-  const email = "root@rose.test";
+  const email = "root@example.com";
   const { devCode } = await json<{ devCode: string }>(call("/api/auth/code/request", { json: { email } }));
   const res = await call("/api/auth/code/verify", { json: { email, code: devCode } });
   return (rootCookie = (res.headers.get("Set-Cookie") ?? "").split(";")[0]!);

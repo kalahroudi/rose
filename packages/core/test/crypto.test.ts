@@ -30,7 +30,8 @@ describe("field encryption", () => {
   it("rejects tampered ciphertext", async () => {
     const c = await TenantCrypto.fromDek("tn_a", generateDek());
     const sealed = await c.encrypt("secret", "f");
-    const flipped = sealed.slice(0, -2) + (sealed.endsWith("A") ? "B" : "A") + sealed.slice(-1);
+    const at = sealed.length - 2;
+    const flipped = sealed.slice(0, at) + (sealed[at] === "A" ? "B" : "A") + sealed.slice(at + 1);
     await expect(c.decrypt(flipped, "f")).rejects.toThrow();
   });
 
