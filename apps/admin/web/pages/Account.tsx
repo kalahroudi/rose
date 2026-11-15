@@ -17,7 +17,7 @@ const helps: Record<(typeof TABS)[number], HelpContent> = {
     what: "The ways you can sign in, and the devices that are signed in right now. Add a passkey on each device you use; sign out any device you do not recognise.",
     diagram: {
       node: <Flow title="Signing in" steps={[{ label: "Passkey", sub: "fingerprint, face, PIN", tone: "ok" }, { label: "or email code", sub: "6 digits, 10 minutes" }, { label: "Session", sub: "this site only", via: "creates", tone: "on" }]} />,
-      caption: "Either method creates a session that is valid on this console only and ends after 7 days.",
+      caption: "Either method creates a session that is valid on this console only and ends after 7 days, or after 12 hours without use.",
     },
     terms: terms("passkey", "signInCode"),
     why: [
