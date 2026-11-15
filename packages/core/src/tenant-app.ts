@@ -178,7 +178,7 @@ export function createTenantApp(options: TenantAppOptions) {
       return !!member || !!(await getPendingInvitation(c.env.DB, tenant.id, email));
     },
     admit: async (user: UserRow) => {
-      // The host cache can be 30 s stale: never open a session unless the database says active.
+      // The host cache can be a few seconds stale: never open a session unless the database says active.
       if ((await getTenant(c.env.DB, tenant.id))?.status !== "active") return false;
       if (await getMembership(c.env.DB, tenant.id, user.id)) return true;
       const role = await redeemInvitation(c.env.DB, tenant.id, user);

@@ -57,7 +57,9 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
 - Cookie: `HttpOnly; Secure; SameSite=Lax; Path=/` with the `__Host-` prefix, so it is
   bound to the exact host and can not be set or read by a sibling subdomain. (Plain-HTTP
   localhost can not use the prefix; it is dropped in development only.)
-- Absolute lifetime 7 days. Every lookup also requires a live membership (or operator
+- Absolute lifetime 7 days, and an idle timeout of 12 hours: a session not used for 12 hours is
+  refused and swept (activity is recorded at most every 5 minutes, so active people are never
+  signed out by it). Every lookup also requires a live membership (or operator
   row) and an active tenant, so access ends immediately when either is removed.
 - People can see and revoke their sessions (`GET/DELETE /api/auth/sessions`).
   Signing out deletes the session server-side.

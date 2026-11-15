@@ -83,7 +83,7 @@ sequenceDiagram
   participant T as Tenant DO (SQLite)
   B->>W: GET https://acme.example.com/api/m/contacts (cookie)
   W->>W: security headers, request id, CSRF check (unsafe methods)
-  W->>D: resolve host → tenant (cached 30 s per isolate)
+  W->>D: resolve host → tenant (cached 5 s per isolate)
   W->>D: session lookup: token hash + scope = tenant id<br/>JOIN membership JOIN active tenant
   W->>W: permission check for the route (role → permission)
   W->>T: SQL through TenantDb (tenant id re-asserted)
@@ -140,8 +140,8 @@ push; see [known limits](#known-limits).
 ## Known limits
 
 - Job progress is polled, not pushed.
-- The host→tenant cache is per isolate with a 30-second TTL: a rename, a new custom
-  domain or a deleted tenant can take up to 30 s to be reflected for anonymous requests
+- The host→tenant cache is per isolate with a 5-second TTL: a rename, a new custom
+  domain or a deleted tenant can take up to 5 s to be reflected for anonymous requests
   in other isolates. Authenticated requests re-check tenant status on every call.
 - The Workers rate limiter counts per Cloudflare location, not globally. The hard limits
   on sign-in codes (attempts, codes per window) are enforced in D1 and are global.
