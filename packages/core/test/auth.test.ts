@@ -46,27 +46,53 @@ describe("email sign-in codes", () => {
 
   it("codes are single use, expire, and lock after five wrong guesses", async () => {
     const key = env.ROSE_MASTER_KEY;
-    const code = await issueLoginCode(env.DB, key, "s1", "u@example.com");
-    expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code)).toBe(true);
-    expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code)).toBe(false);
+    const code = await issueLoginCode(env.DB, key, "s1", "u@example.com", "r1");
+    expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code, "r1")).toBe(true);
+    expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code, "r1")).toBe(false);
 
-    const second = await issueLoginCode(env.DB, key, "s2", "u@example.com");
+    const second = await issueLoginCode(env.DB, key, "s2", "u@example.com", "r1");
     const wrong = second === "000000" ? "111111" : "000000";
-    for (let i = 0; i < 5; i++) expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", wrong)).toBe(false);
-    expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", second)).toBe(false);
+    for (let i = 0; i < 5; i++) expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", wrong, "r1")).toBe(false);
+    expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", second, "r1")).toBe(false);
 
-    const third = await issueLoginCode(env.DB, key, "s3", "u@example.com");
+    const third = await issueLoginCode(env.DB, key, "s3", "u@example.com", "r1");
     await env.DB.prepare("UPDATE login_codes SET expires_at = 1 WHERE scope = 's3'").run();
-    expect(await verifyLoginCode(env.DB, key, "s3", "u@example.com", third)).toBe(false);
+    expect(await verifyLoginCode(env.DB, key, "s3", "u@example.com", third, "r1")).toBe(false);
   });
 
   it("limits how many codes can be requested", async () => {
-    for (let i = 0; i < 5; i++) await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com");
-    await expect(issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com")).rejects.toThrow(/Too many/);
+    for (let i = 0; i < 5; i++) await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com", "r1");
+    await expect(issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com", "r1")).rejects.toThrow(/Too many/);
+  });
+
+  it("limits codes per requester, with a higher overall cap per address", async () => {
+    const k = env.ROSE_MASTER_KEY;
+    for (let i = 0; i < 5; i++) await issueLoginCode(env.DB, k, "s6", "v@example.com", "abuser");
+    await expect(issueLoginCode(env.DB, k, "s6", "v@example.com", "abuser")).rejects.toThrow(/Too many/);
+    // A different requester can still get and use a code.
+    const code = await issueLoginCode(env.DB, k, "s6", "v@example.com", "legit");
+    expect(await verifyLoginCode(env.DB, k, "s6", "v@example.com", code, "legit")).toBe(true);
+    // The overall per-address cap holds across many requesters.
+    for (let i = 0; i < 14; i++) await issueLoginCode(env.DB, k, "s6", "v@example.com", `r${i}`);
+    await expect(issueLoginCode(env.DB, k, "s6", "v@example.com", "fresh")).rejects.toThrow(/Too many/);
+    // Other scopes are unaffected.
+    await issueLoginCode(env.DB, k, "s7", "v@example.com", "abuser");
+  });
+
+  it("one requester's new code does not invalidate another's, and verification falls back for a new address", async () => {
+    const k = env.ROSE_MASTER_KEY;
+    const b = await issueLoginCode(env.DB, k, "s8", "w@example.com", "B");
+    await new Promise((r) => setTimeout(r, 5));
+    const a = await issueLoginCode(env.DB, k, "s8", "w@example.com", "A");
+    expect(await verifyLoginCode(env.DB, k, "s8", "w@example.com", b, "B")).toBe(true);
+    expect(await verifyLoginCode(env.DB, k, "s8", "w@example.com", a, "A")).toBe(true);
+    // Verifying from an address that never requested falls back to the latest code.
+    const c = await issueLoginCode(env.DB, k, "s9", "w@example.com", "A");
+    expect(await verifyLoginCode(env.DB, k, "s9", "w@example.com", c, "elsewhere")).toBe(true);
   });
 
   it("stores only keyed hashes of codes and hashes of session tokens", async () => {
-    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s5", "u@example.com");
+    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s5", "u@example.com", "r1");
     const row = await env.DB.prepare("SELECT code_hash FROM login_codes WHERE scope = 's5'").first<{ code_hash: string }>();
     expect(row!.code_hash).not.toContain(code);
     const a = await createTestTenant(env, SELF);

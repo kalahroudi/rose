@@ -26,8 +26,8 @@ Properties (`control/otp.ts`):
 
 - Stored as `HMAC(key derived from the master key, scope ‖ email ‖ code)`: a database
   dump can not be brute-forced offline, and a code for one tenant is useless on another.
-- Valid 10 minutes, single use (consumed atomically), only the newest code counts.
-- 5 wrong guesses kill a code; at most 5 codes per address per scope per 15 minutes.
+- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A requester with no code of their own is checked against the newest code for the address.
+- 5 wrong guesses kill a code; at most 5 codes per address, scope and requester per 15 minutes, and 20 per address and scope across all requesters (anti mail-bomb).
 - An attempt is spent *before* comparison, so parallel guesses can not exceed the budget.
 
 In development and tests (`ENVIRONMENT=development`) the response also contains
@@ -119,8 +119,8 @@ JSON bodies require `Content-Type: application/json`.
 
 | Limit | Where | Scope |
 |---|---|---|
-| 20 requests / 60 s per key (`code:<scope>:<email>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
-| 5 codes / 15 min per address and scope | D1 | global |
+| 20 requests / 60 s per key (`code:<scope>:<email>:<ip>`, `code-ip:<ip>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
+| 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code | D1 | global |
 
 If `RL_AUTH` is missing in production, auth endpoints fail closed.
