@@ -63,7 +63,7 @@ See [`examples/upstream-service`](../examples/upstream-service/README.md).
 | `EADDRINUSE` on 8787, 5173 or 5174 | Another `pnpm dev` (or other tool) is running. Stop it. |
 | "Sessions require HTTPS" | `ENVIRONMENT=production` with an `http://` URL. Local `.dev.vars` must say `development`. |
 | Passkey prompt fails on `*.localhost` in Safari | Use Chrome/Firefox locally, or sign in with the email code. |
-| A workspace says "not found" right after renaming or deleting | The host cache lasts up to 30 seconds. |
+| A workspace says "not found" right after renaming or deleting | The host cache lasts up to 5 seconds. |
 | Tests fail with a storage error after changing a core migration | Core migrations are immutable once shipped; add a new numbered file. |
 
 ## How it differs from production

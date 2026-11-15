@@ -7,7 +7,7 @@ import { ensureUser, getUserByEmail, normalizeEmail, setUserName, touchLogin, ty
 import { sendEmail } from "../email";
 import { type CoreEnv, isDev } from "../env";
 import { unauthorized } from "../errors";
-import { clearSessionCookie, clientIp, rateLimit, readJson, readSessionCookie, setSessionCookie, type BaseVars } from "../http/base";
+import { clearSessionCookie, clientIp, rateLimit, requesterKey, readJson, readSessionCookie, setSessionCookie, type BaseVars } from "../http/base";
 import { beginLogin, beginRegistration, deletePasskey, finishLogin, finishRegistration, listPasskeys, type PasskeySite } from "./passkeys";
 
 /**
@@ -52,11 +52,13 @@ export async function startSession(c: Context, realm: AuthRealm, user: UserRow, 
  */
 export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean> }): Promise<{ ok: true; devCode?: string }> {
   const env = c.env as CoreEnv;
-  await rateLimit(c, `code:${opts.scope}:${opts.email}`);
-  await rateLimit(c, `code-ip:${clientIp(c) ?? "unknown"}`);
+  const requester = requesterKey(clientIp(c));
+  // Per-requester keys only: one client's flood must not spend the budget others need.
+  await rateLimit(c, `code-ip:${requester}`);
+  await rateLimit(c, `code:${opts.scope}:${opts.email}:${requester}`);
   const work = async (): Promise<string | undefined> => {
     if (!(await opts.eligible())) return undefined;
-    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, opts.scope, opts.email);
+    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, opts.scope, opts.email, requester);
     await sendEmail(env, {
       to: opts.email,
       subject: `${code} is your ${opts.label} sign-in code`,
@@ -72,7 +74,7 @@ export async function requestCode(c: Context, opts: { scope: string; label: stri
 export async function checkCode(c: Context, scope: string, email: string, code: string): Promise<void> {
   const env = c.env as CoreEnv;
   await rateLimit(c, `verify:${scope}:${email}`);
-  if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code))) throw unauthorized(BAD_CODE);
+  if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code, requesterKey(clientIp(c))))) throw unauthorized(BAD_CODE);
 }
 
 /** True when this realm refuses emailed codes for the address because the user has registered a passkey. */

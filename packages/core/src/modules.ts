@@ -97,6 +97,8 @@ export const CORE_PERMISSIONS: Record<string, Role[]> = {
   "members:manage": ["owner", "admin"],
   "apikeys:manage": ["owner", "admin"],
   "audit:read": ["owner", "admin"],
+  // Every role can start background work (a member can import contacts), so every role sees the job list.
+  "jobs:read": ["owner", "admin", "member"],
   "workspace:update": ["owner", "admin"],
   "workspace:delete": ["owner"],
   "service:use": ["owner", "admin", "member"],

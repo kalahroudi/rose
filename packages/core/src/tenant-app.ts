@@ -6,15 +6,15 @@ import { createAuthRoutes, checkCode, currentSession, requestCode, startSession,
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } from "./control/jobs";
-import { assertFreshSession, consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
-import { createTenant, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
+import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
+import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
   addMembership, changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
 } from "./control/users";
 import { now } from "./ids";
 import { sendEmail } from "./email";
-import { assertEnvironment, guardFetch, isDev, type TenantWorkerEnv } from "./env";
+import { assertEnvironment, guardFetch, isDev, maxWorkspacesPerUser, type TenantWorkerEnv } from "./env";
 import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
 import { forwardToUpstream } from "./gateway";
 import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";
@@ -178,7 +178,7 @@ export function createTenantApp(options: TenantAppOptions) {
       return !!member || !!(await getPendingInvitation(c.env.DB, tenant.id, email));
     },
     admit: async (user: UserRow) => {
-      // The host cache can be 30 s stale: never open a session unless the database says active.
+      // The host cache can be a few seconds stale: never open a session unless the database says active.
       if ((await getTenant(c.env.DB, tenant.id))?.status !== "active") return false;
       if (await getMembership(c.env.DB, tenant.id, user.id)) return true;
       const role = await redeemInvitation(c.env.DB, tenant.id, user);
@@ -253,12 +253,20 @@ export function createTenantApp(options: TenantAppOptions) {
     if (body.create && !(await slugAvailable(c.env.DB, validateSlug(body.create.slug)))) {
       throw conflict("That workspace address is taken.", { slug: "Already in use." });
     }
+    // Enforce the per-person workspace cap before spending the ticket: a refusal must not burn it.
+    if (body.create) {
+      const who = await peekHandoff(c.env.DB, body.ticket, "signup", ROOT_SCOPE);
+      if (who && (await countOwnedWorkspaces(c.env.DB, who)) >= maxWorkspacesPerUser(c.env)) {
+        throw forbidden("You have reached the limit of workspaces you can create. Delete one or enter an existing workspace.");
+      }
+    }
     const userId = await consumeHandoff(c.env.DB, body.ticket, "signup", ROOT_SCOPE);
     if (!userId) throw unauthorized("Your verification expired. Start again.");
     let tenant: TenantRow | null;
     if (body.create) {
-      tenant = await createTenant(c.env.DB, body.create);
-      await addMembership(c.env.DB, tenant.id, userId, "owner");
+      // The conditional insert re-checks the cap atomically; the pre-check above only keeps the ticket unspent.
+      tenant = await createTenantForOwner(c.env.DB, userId, body.create, maxWorkspacesPerUser(c.env));
+      if (!tenant) throw forbidden("You have reached the limit of workspaces you can create. Delete one or enter an existing workspace.");
       await writeTenantAudit(new TenantDb(c.env, bindTenant(tenant)), { actor: userId, action: "member.join", target: userId, meta: { role: "owner" }, ip: clientIp(c) });
       await writePlatformAudit(c.env.DB, { actor: userId, action: "tenant.signup", target: tenant.id, meta: { slug: tenant.slug }, ip: clientIp(c) });
     } else {
@@ -415,7 +423,10 @@ export function createTenantApp(options: TenantAppOptions) {
     need(c, "audit:read");
     return c.json(await listTenantAudit(c.get("db"), { ...listQ(c), action: c.req.query("action") }));
   });
-  app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, c.get("tenant").id, { ...listQ(c), status: c.req.query("status") })));
+  app.get("/api/jobs", async (c) => {
+    need(c, "jobs:read");
+    return c.json(await listJobs(c.env.DB, c.get("tenant").id, { ...listQ(c), status: c.req.query("status") }));
+  });
 
   // Workspace settings
   app.patch("/api/workspace", async (c) => {

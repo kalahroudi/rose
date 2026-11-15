@@ -8,7 +8,8 @@ export type HostResolution =
 
 // Host → tenant id rarely changes; cache it per isolate. Status is NOT trusted from this
 // cache for authenticated requests: the session query re-checks it against the database.
-const TTL = 30_000;
+// Kept short: another isolate only learns of a rename, suspension or domain change when its entry expires.
+export const HOST_CACHE_TTL_MS = 5_000;
 const MAX = 2000;
 const cache = new Map<string, { value: HostResolution; expires: number }>();
 
@@ -46,6 +47,6 @@ export async function resolveHost(db: D1Database, hostname: string, baseDomain: 
   }
   const value: HostResolution = tenant ? { kind: "tenant", tenant } : { kind: "unknown" };
   if (cache.size >= MAX) cache.delete(cache.keys().next().value!);
-  cache.set(hostname, { value, expires: Date.now() + TTL });
+  cache.set(hostname, { value, expires: Date.now() + HOST_CACHE_TTL_MS });
   return value;
 }

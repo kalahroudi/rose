@@ -26,8 +26,8 @@ Properties (`control/otp.ts`):
 
 - Stored as `HMAC(key derived from the master key, scope ‖ email ‖ code)`: a database
   dump can not be brute-forced offline, and a code for one tenant is useless on another.
-- Valid 10 minutes, single use (consumed atomically), only the newest code counts.
-- 5 wrong guesses kill a code; at most 5 codes per address per scope per 15 minutes.
+- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A code is also accepted if it is the newest live code for the address (for a user whose client address changed); each verify spends at most one guess on each of those two candidates. The requester is the client IPv4 address or the IPv6 /64 prefix (IPv4-mapped IPv6 counts as IPv4), so one host rotating addresses inside its prefix is one requester. Residual risk: an actor with 4 or more distinct /64 prefixes or IPv4 addresses can still exhaust the 20 per 15 minutes per-address cap and delay the user; accepted to stop mail-bombing.
+- 5 wrong guesses kill a code; at most 5 codes per address, scope and requester per 15 minutes, and 20 per address and scope across all requesters (anti mail-bomb).
 - An attempt is spent *before* comparison, so parallel guesses can not exceed the budget.
 
 In development and tests (`ENVIRONMENT=development`) the response also contains
@@ -57,7 +57,9 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
 - Cookie: `HttpOnly; Secure; SameSite=Lax; Path=/` with the `__Host-` prefix, so it is
   bound to the exact host and can not be set or read by a sibling subdomain. (Plain-HTTP
   localhost can not use the prefix; it is dropped in development only.)
-- Absolute lifetime 7 days. Every lookup also requires a live membership (or operator
+- Absolute lifetime 7 days, and an idle timeout of 12 hours: a session not used for 12 hours is
+  refused and swept (activity is recorded at most every 5 minutes, so active people are never
+  signed out by it). Every lookup also requires a live membership (or operator
   row) and an active tenant, so access ends immediately when either is removed.
 - People can see and revoke their sessions (`GET/DELETE /api/auth/sessions`).
   Signing out deletes the session server-side.
@@ -71,7 +73,10 @@ On `https://<base>`:
    workspaces that address already belongs to.
 3. `POST /api/root/enter` with the ticket and either `slug` (enter an existing
    workspace) or `create: {name, slug}` (new workspace; caller becomes `owner`).
-   Returns a URL on the tenant host.
+   Returns a URL on the tenant host. Creating is capped per person: once someone owns
+   `MAX_WORKSPACES_PER_USER` workspaces (default 5; workspaces already being deleted do
+   not count) `create` answers 403 without spending the ticket. Entering an existing
+   workspace by `slug` is never limited.
 4. `GET https://<slug>.<base>/auth/handoff?token=…` exchanges a **handoff** for a session
    cookie on that host and redirects to `/`.
 
@@ -117,8 +122,8 @@ JSON bodies require `Content-Type: application/json`.
 
 | Limit | Where | Scope |
 |---|---|---|
-| 20 requests / 60 s per key (`code:<scope>:<email>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
-| 5 codes / 15 min per address and scope | D1 | global |
+| 20 requests / 60 s per key (`code:<scope>:<email>:<ip>`, `code-ip:<ip>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
+| 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code | D1 | global |
 
 If `RL_AUTH` is missing in production, auth endpoints fail closed.

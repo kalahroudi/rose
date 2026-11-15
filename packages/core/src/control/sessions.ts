@@ -5,6 +5,9 @@ import { newId, now, randomToken } from "../ids";
 import type { OperatorRole, Role } from "./users";
 
 export const SESSION_TTL = 7 * 86_400_000; // absolute lifetime
+/** A session unused for this long is refused, even inside its absolute lifetime. */
+export const SESSION_IDLE_TIMEOUT = 12 * 3_600_000;
+// Must stay far below SESSION_IDLE_TIMEOUT so an active person is never signed out by the idle rule.
 const TOUCH_INTERVAL = 5 * 60_000;
 
 export interface SessionInfo {
@@ -58,9 +61,9 @@ export async function readSession(db: D1Database, token: string, scope: string):
           .prepare(
             `SELECT s.public_id, s.user_id, u.email, u.name, s.scope, o.role, s.method, s.expires_at, s.last_seen_at, s.created_at
              FROM sessions s JOIN users u ON u.id = s.user_id JOIN operators o ON o.user_id = s.user_id
-             WHERE s.id_hash = ? AND s.scope = 'platform' AND s.expires_at > ?`,
+             WHERE s.id_hash = ? AND s.scope = 'platform' AND s.expires_at > ? AND s.last_seen_at > ?`,
           )
-          .bind(hash, t)
+          .bind(hash, t, t - SESSION_IDLE_TIMEOUT)
           .first<Row>()
       : await db
           .prepare(
@@ -68,9 +71,9 @@ export async function readSession(db: D1Database, token: string, scope: string):
              FROM sessions s JOIN users u ON u.id = s.user_id
              JOIN memberships m ON m.user_id = s.user_id AND m.tenant_id = s.scope
              JOIN tenants t ON t.id = s.scope AND t.status = 'active'
-             WHERE s.id_hash = ? AND s.scope = ? AND s.expires_at > ?`,
+             WHERE s.id_hash = ? AND s.scope = ? AND s.expires_at > ? AND s.last_seen_at > ?`,
           )
-          .bind(hash, scope, t)
+          .bind(hash, scope, t, t - SESSION_IDLE_TIMEOUT)
           .first<Row>();
   if (!row || !row.role) return null;
   if (t - row.last_seen_at > TOUCH_INTERVAL) {
@@ -96,9 +99,9 @@ export async function listSessions(db: D1Database, userId: string, scope: string
   const r = await db
     .prepare(
       `SELECT public_id AS id, method, ip, user_agent, created_at, last_seen_at FROM sessions
-       WHERE user_id = ? AND scope = ? AND expires_at > ? ORDER BY last_seen_at DESC LIMIT 50`,
+       WHERE user_id = ? AND scope = ? AND expires_at > ? AND last_seen_at > ? ORDER BY last_seen_at DESC LIMIT 50`,
     )
-    .bind(userId, scope, now())
+    .bind(userId, scope, now(), now() - SESSION_IDLE_TIMEOUT)
     .all<SessionListItem>();
   return r.results;
 }
@@ -129,11 +132,21 @@ export async function consumeHandoff(db: D1Database, token: string, purpose: "se
   return row?.user_id ?? null;
 }
 
+/** Read (without spending) the user a live handoff belongs to, so a request can be refused before the ticket is consumed. */
+export async function peekHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string): Promise<string | null> {
+  if (!token || token.length > 100) return null;
+  const row = await db
+    .prepare("SELECT user_id FROM handoffs WHERE token_hash = ? AND purpose = ? AND scope = ? AND expires_at > ?")
+    .bind(await sha256Hex(token), purpose, scope, now())
+    .first<{ user_id: string }>();
+  return row?.user_id ?? null;
+}
+
 /** Housekeeping for expired auth artefacts. Safe to run at any time. */
 export async function sweepExpired(db: D1Database): Promise<void> {
   const t = now();
   await db.batch([
-    db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(t),
+    db.prepare("DELETE FROM sessions WHERE expires_at < ? OR last_seen_at <= ?").bind(t, t - SESSION_IDLE_TIMEOUT),
     db.prepare("DELETE FROM login_codes WHERE expires_at < ?").bind(t - 3_600_000),
     db.prepare("DELETE FROM handoffs WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").bind(t),
