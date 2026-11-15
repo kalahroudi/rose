@@ -194,10 +194,6 @@ export function SecurityPanel({ base = "/api/auth" }: { base?: string }) {
   const [adding, setAdding] = useState(false);
   const passkeys = useQuery({ queryKey: ["auth", "passkeys"], queryFn: () => api<{ items: PasskeyItem[] }>(`${base}/passkeys`) });
   const sessions = useQuery({ queryKey: ["auth", "sessions"], queryFn: () => api<{ items: SessionItem[] }>(`${base}/sessions`) });
-  const recovery = useQuery({
-    queryKey: ["auth", "recovery"],
-    queryFn: () => api<{ recovery: { status: "pending" | "ready"; effectiveAt: number; expiresAt: number } | null }>(`${base}/passkeys/recovery`),
-  });
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ["auth"] }), qc.invalidateQueries({ queryKey: ["bootstrap"] })]);
 
   const add = async () => {
@@ -216,42 +212,15 @@ export function SecurityPanel({ base = "/api/auth" }: { base?: string }) {
     if (!(await confirm({ title: "Remove this passkey?", body: `"${p.name}" will no longer sign you in. You can still use an email code.`, confirmLabel: "Remove passkey", tone: "danger" }))) return;
     await api(`${base}/passkeys/${encodeURIComponent(p.id)}`, { method: "DELETE" }).then(refresh, (e) => toast.error(errorMessage(e)));
   };
-  const requestRecovery = async () => {
-    if (!(await confirm({ title: "Request passkey recovery?", body: "Use this if your passkey no longer works on this device. After 48 hours you can use an email-code sign-in to replace it. You and the other owners are emailed now, and signing in with the passkey cancels it.", confirmLabel: "Request recovery" }))) return;
-    await api(`${base}/passkeys/recovery`, { body: {} }).then(refresh, (e) => toast.error(errorMessage(e)));
-  };
-  const cancelRecovery = async () => {
-    await api(`${base}/passkeys/recovery`, { method: "DELETE" }).then(refresh, (e) => toast.error(errorMessage(e)));
-  };
   const revoke = async (s: SessionItem) => {
     if (!(await confirm({ title: "Sign out this device?", body: `${describeAgent(s.user_agent)} will need to sign in again.`, confirmLabel: "Sign out device" }))) return;
     await api(`${base}/sessions/${s.id}`, { method: "DELETE" }).then(refresh, (e) => toast.error(errorMessage(e)));
   };
 
   return (
-    <Gate queries={[passkeys, sessions, recovery]} skeleton="detail">
+    <Gate queries={[passkeys, sessions]} skeleton="detail">
       {() => (
         <div className="grid-wide">
-          {passkeys.data!.items.length > 0 ? (
-            <section className="card card-pad stack" style={{ gridColumn: "1 / -1" }}>
-              <h2 className="card-title">Passkey recovery</h2>
-              {recovery.data!.recovery ? (
-                <>
-                  <Callout tone="warn">
-                    {recovery.data!.recovery.status === "pending"
-                      ? <>Recovery requested. It takes effect on <strong>{new Date(recovery.data!.recovery.effectiveAt).toLocaleString()}</strong>; until then nothing changes.</>
-                      : <>Recovery is ready until <strong>{new Date(recovery.data!.recovery.expiresAt).toLocaleString()}</strong>. A recent email-code sign-in can now add or remove passkeys and confirm deletions.</>}
-                  </Callout>
-                  <div><Button size="sm" onClick={() => void cancelRecovery()}>Cancel recovery</Button></div>
-                </>
-              ) : (
-                <>
-                  <p className="hint">Passkey lost or not working on this device? Recovery waits 48 hours, tells you and the other owners by email, then lets an email-code sign-in replace the passkey.</p>
-                  <div><Button size="sm" onClick={() => void requestRecovery()}>Request recovery</Button></div>
-                </>
-              )}
-            </section>
-          ) : null}
           <section className="card">
             <div className="card-head">
               <h2 className="card-title grow">Passkeys</h2>

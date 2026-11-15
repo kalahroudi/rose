@@ -22,7 +22,6 @@ const helps: Record<(typeof TABS)[number], HelpContent> = {
     terms: terms("passkey", "signInCode"),
     why: [
       { q: "Why passkeys instead of passwords?", a: "A passkey can not be guessed, reused on another site, or typed into a fake page: the browser only offers it to the site that created it." },
-      { q: "What if my passkey stops working?", a: "Request passkey recovery on this tab while you are still signed in. After a 48 hour wait (you are emailed, and using the passkey cancels it) an email-code sign-in may replace the passkey." },
       { q: "Why is my passkey not offered on another site?", a: "Each passkey belongs to one exact host name. That is the same property that stops a tenant's passkey from working on another tenant." },
     ],
     links: [{ label: "About passkeys (FIDO Alliance)", href: "https://fidoalliance.org/passkeys/" }],

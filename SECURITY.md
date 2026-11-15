@@ -30,7 +30,7 @@ secret or developer machine; denial of service by volume; the example upstream s
    database.
 5. Fields encrypted by a module can only be decrypted with that tenant's key, in the
    column they were written to.
-6. Deleting a tenant closes it at once, then destroys its data and encryption key after a 48 hour grace period. Deleting needs a fresh sign-in (a passkey session for platform owners and for tenant owners who have a passkey); a platform owner can cancel within the grace period. A person whose passkey is unusable can request a passkey recovery: after 48 hours (they and the other owners are emailed; a passkey sign-in cancels it; it lapses 7 days later) a fresh email-code session may stand in for the passkey once, for replacing it.
+6. Deleting a tenant closes it at once, then destroys its data and encryption key after a 48 hour grace period. Deleting needs a fresh sign-in (a passkey session for platform owners and for tenant owners who have a passkey); a platform owner can cancel within the grace period.
 7. The operator worker holds no binding to tenant storage and no tenant key.
 
 How each is enforced and tested: [docs/tenancy-and-isolation.md](docs/tenancy-and-isolation.md).

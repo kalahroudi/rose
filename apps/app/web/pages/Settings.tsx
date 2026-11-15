@@ -73,7 +73,6 @@ export function SettingsPage() {
       why: [
         { q: "Why is my passkey only valid for this workspace?", a: "A passkey is bound to the address it was created on. If you belong to several workspaces you add one in each; a passkey from one can not open another." },
         { q: "Why is there no password?", a: "Passwords get reused, guessed and phished. Passkeys and one-time codes remove that whole class of problem." },
-        { q: "What if my passkey stops working?", a: "Request passkey recovery on this tab. After a 48 hour wait (you and the other owners are emailed, and using the passkey cancels it) an email-code sign-in may replace the passkey. The wait is what stops someone who only has your mailbox." },
         { q: "What does signing out a device do?", a: "It ends that session on the server immediately. The device has to sign in again." },
       ],
       links: [

@@ -55,10 +55,6 @@ then runs threats 2, 3, 7 and 8 against it automatically. Adding a module to the
 is all it takes to be covered, and `pnpm guard` fails if the suite is removed, skipped
 or narrowed.
 
-### Passkey recovery
-
-Deleting a workspace, minting owners and changing passkeys need a fresh passkey session when the person has a passkey. If the passkey is unusable (lost device, other host) they request a recovery (`POST /api/auth/passkeys/recovery`, table `passkey_recoveries`). It matures after 48 hours, expires 7 days later, is announced by email to the person and the other owners, and is cancelled by any passkey sign-in or `DELETE` on the same path. Before maturity it grants nothing; enrolling or removing a passkey with it consumes it. Tested in `packages/core/test/isolation.test.ts` and `apps/admin/worker/test/admin.test.ts`.
-
 ## What is deliberately shared
 
 - **A person is global.** One `users` row per email; `memberships` link it to tenants.

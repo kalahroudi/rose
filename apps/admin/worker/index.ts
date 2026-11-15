@@ -7,7 +7,7 @@ import { Hono, type Context } from "hono";
 import { etag } from "hono/etag";
 import { z } from "zod";
 import {
-  addDomain, addOperator, assertPasskeyStep, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
+  addDomain, addOperator, assertFreshSession, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
   deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, isOperatorEmail, listDomains, listJobs,
   listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, operatorCount, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
@@ -128,9 +128,9 @@ const ownerOnly = (c: Ctx) => {
   if (c.get("operator").role !== "owner") throw forbidden("Only a platform owner can do that.");
 };
 /** Irreversible tenant actions need a platform owner who signed in with a passkey in the last 10 minutes. */
-const freshOwnerOnly = async (c: Ctx) => {
+const freshOwnerOnly = (c: Ctx) => {
   ownerOnly(c);
-  await assertPasskeyStep(c.env.DB, c.get("operator"), SCOPE, { always: true });
+  assertFreshSession(c.get("operator"), { passkey: true });
 };
 /** A tenant waiting for (or undergoing) deletion accepts no changes except cancelling the deletion. */
 const assertMutable = async (c: Ctx, tenantId: string) => {
@@ -194,7 +194,7 @@ app.post("/api/tenants/bulk", async (c) => {
 });
 
 app.post("/api/tenants/:id/delete", async (c) => {
-  await freshOwnerOnly(c);
+  freshOwnerOnly(c);
   const t = await tenantOr404(c, c.req.param("id"));
   const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
   if (confirm !== t.slug) throw invalid("Type the tenant address to confirm.", { confirm: "Does not match." });
@@ -209,7 +209,7 @@ app.post("/api/tenants/:id/delete", async (c) => {
 });
 
 app.post("/api/tenants/:id/delete/cancel", async (c) => {
-  await freshOwnerOnly(c);
+  freshOwnerOnly(c);
   const t = await tenantOr404(c, c.req.param("id"));
   const before = t.delete_after;
   const restored = t.prior_status === "suspended" ? "suspended" : "active";
@@ -258,14 +258,14 @@ app.delete("/api/domains/:hostname", async (c) => {
 // Operators
 app.get("/api/operators", async (c) => c.json(await listOperators(c.env.DB, listQ(c))));
 app.post("/api/operators", async (c) => {
-  await freshOwnerOnly(c);
+  freshOwnerOnly(c);
   const body = await readJson(c, z.object({ email: z.string().max(254), role: z.enum(["owner", "operator"]).default("operator") }));
   await addOperator(c.env.DB, body.email, body.role);
   await audit(c, "operator.add", normalizeEmail(body.email), { role: body.role });
   return c.json({ ok: true }, 201);
 });
 app.delete("/api/operators/:userId", async (c) => {
-  await freshOwnerOnly(c);
+  freshOwnerOnly(c);
   await removeOperator(c.env.DB, c.req.param("userId"));
   await audit(c, "operator.remove", c.req.param("userId"));
   return c.json({ ok: true });

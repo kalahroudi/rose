@@ -211,7 +211,6 @@ export async function deleteTenantRecords(db: D1Database, id: string): Promise<v
     db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM jobs WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM passkeys WHERE scope = ?").bind(id),
-    db.prepare("DELETE FROM passkey_recoveries WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM login_codes WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM handoffs WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM webauthn_challenges WHERE scope = ?").bind(id),

@@ -198,25 +198,6 @@ describe("pending deletion edge cases", () => {
   });
 });
 
-describe("operator passkey recovery", () => {
-  it("a matured recovery stands in for the passkey; an unmatured or expired one does not", async () => {
-    await root();
-    const me = (await env.DB.prepare("SELECT id FROM users WHERE email = 'root@example.com'").first<{ id: string }>())!.id;
-    await env.DB.prepare("INSERT OR IGNORE INTO passkeys (credential_id, user_id, scope, rp_id, public_key, created_at) VALUES ('op-lost', ?, 'platform', 'x', 'k', ?)").bind(me, Date.now()).run();
-    const code = await sessionFor("root@example.com", "code");
-    const add = () => call("/api/operators", { cookie: code, body: { email: "recov@rose.test" } });
-    expect((await add()).status).toBe(403);
-    expect((await call("/api/auth/passkeys/recovery", { cookie: code, body: {} })).status).toBe(201);
-    expect((await add()).status).toBe(403);
-    const t = Date.now();
-    await env.DB.prepare("UPDATE passkey_recoveries SET effective_at = ? WHERE user_id = ?").bind(t - 1000, me).run();
-    expect((await add()).status).toBe(201);
-    await env.DB.prepare("UPDATE passkey_recoveries SET effective_at = ? WHERE user_id = ?").bind(t - 8 * 86_400_000, me).run();
-    expect((await call("/api/operators", { cookie: code, body: { email: "recov2@rose.test" } })).status).toBe(403);
-    await env.DB.prepare("DELETE FROM passkeys WHERE credential_id = 'op-lost'").run();
-  });
-});
-
 describe("no operator tenant creation", () => {
   it("the console has no route to create a tenant or invite its owner; sign-up is the only path", async () => {
     const cookie = await root();
