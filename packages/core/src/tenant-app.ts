@@ -415,7 +415,10 @@ export function createTenantApp(options: TenantAppOptions) {
     need(c, "audit:read");
     return c.json(await listTenantAudit(c.get("db"), { ...listQ(c), action: c.req.query("action") }));
   });
-  app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, c.get("tenant").id, { ...listQ(c), status: c.req.query("status") })));
+  app.get("/api/jobs", async (c) => {
+    need(c, "jobs:read");
+    return c.json(await listJobs(c.env.DB, c.get("tenant").id, { ...listQ(c), status: c.req.query("status") }));
+  });
 
   // Workspace settings
   app.patch("/api/workspace", async (c) => {
