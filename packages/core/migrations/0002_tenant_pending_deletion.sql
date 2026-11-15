@@ -34,3 +34,14 @@ INSERT INTO invitations SELECT * FROM _bak_invitations;
 DROP TABLE _bak_tenant_domains;
 DROP TABLE _bak_memberships;
 DROP TABLE _bak_invitations;
+
+-- Delayed passkey recovery: a person whose passkey is unusable can, after a 48 hour wait that
+-- they (and other owners) are told about, use a fresh emailed-code session in place of a passkey.
+-- Expires 7 days after it matures. Signing in with a passkey cancels it.
+CREATE TABLE passkey_recoveries (
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  requested_at INTEGER NOT NULL,
+  effective_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, scope)
+);

@@ -138,6 +138,7 @@ export async function sweepExpired(db: D1Database): Promise<void> {
     db.prepare("DELETE FROM handoffs WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM invitations WHERE expires_at < ?").bind(t),
+    db.prepare("DELETE FROM passkey_recoveries WHERE effective_at < ?").bind(t - 7 * 86_400_000),
   ]);
 }
 

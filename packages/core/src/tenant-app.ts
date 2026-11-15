@@ -4,6 +4,7 @@ import { etag } from "hono/etag";
 import { z } from "zod";
 import { createAuthRoutes, checkCode, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
 import { listPasskeys } from "./auth/passkeys";
+import { assertPasskeyStep } from "./auth/recovery";
 import { writePlatformAudit } from "./control/audit";
 import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
@@ -169,6 +170,8 @@ export function createTenantApp(options: TenantAppOptions) {
     scope: tenant.id,
     displayName: tenant.name,
     cookie: SESSION_COOKIE,
+    recoveryObservers: async (user) =>
+      (await c.env.DB.prepare("SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role = 'owner' AND m.user_id != ? LIMIT 20").bind(tenant.id, user.id).all<{ email: string }>()).results.map((o) => o.email),
     eligible: async (email) => {
       const member = await c.env.DB.prepare("SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND u.email = ?").bind(tenant.id, email).first();
       return !!member || !!(await getPendingInvitation(c.env.DB, tenant.id, email));
@@ -340,7 +343,7 @@ export function createTenantApp(options: TenantAppOptions) {
     const t = c.get("tenant");
     const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
     if (!session) throw unauthorized();
-    assertFreshSession(session, { passkey: (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0 });
+    await assertPasskeyStep(c.env.DB, session, t.id);
   };
   app.patch("/api/members/:userId", async (c) => {
     const actor = need(c, "members:manage");
@@ -431,9 +434,8 @@ export function createTenantApp(options: TenantAppOptions) {
     if (confirm !== t.slug) throw invalid("Type the workspace address to confirm.", { confirm: "Does not match." });
     const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
     if (!session) throw unauthorized();
-    // A recent sign-in is required; people who registered a passkey must have used it.
-    const hasPasskey = (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0;
-    assertFreshSession(session, { passkey: hasPasskey });
+    // A recent sign-in is required; people who registered a passkey must have used it (or a matured recovery).
+    await assertPasskeyStep(c.env.DB, session, t.id);
     const already = (await getTenant(c.env.DB, t.id))?.status === "pending_deletion";
     const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
     invalidateHostCache();

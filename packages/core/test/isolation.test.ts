@@ -135,6 +135,65 @@ describe("workspace deletion safeguards", () => {
   });
 });
 
+describe("passkey recovery", () => {
+  it("unlocks a locked-out owner only after 48 hours, once, and can be cancelled", async () => {
+    const a = await createTestTenant(env, SELF);
+    const { createSession } = await import("../src/control/sessions");
+    const cookieFor = async (method: string, ageMs = 0) => {
+      const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method });
+      if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
+      return `__Host-rose_session=${token}`;
+    };
+    const rec = (cookie: string, method = "POST") => a.fetch("/api/auth/passkeys/recovery", { cookie, method, body: method === "POST" ? {} : undefined });
+    const code = await cookieFor("code");
+    // No passkey: nothing to recover.
+    expect((await rec(code)).status).toBe(409);
+    await env.DB.prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, created_at) VALUES ('cred-lost', ?, ?, 'other.host', 'k', ?)").bind(a.userId, a.id, Date.now()).run();
+    // Locked out.
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: code, body: {} })).status).toBe(403);
+    // Not from a stale session.
+    expect((await rec(await cookieFor("stale", 11 * 60_000))).status).toBe(403);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM passkey_recoveries").first()).toEqual({ n: 0 });
+    // Request: idempotent, audited.
+    const fresh = await cookieFor("code");
+    expect((await rec(fresh)).status).toBe(201);
+    expect((await rec(fresh)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM passkey_recoveries").first()).toEqual({ n: 1 });
+    // Before maturity: nothing.
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: fresh, body: {} })).status).toBe(403);
+    expect((await a.fetch("/api/workspace/delete", { cookie: fresh, body: { confirm: a.slug } })).status).toBe(403);
+    // Cancel, then request again.
+    expect((await rec(fresh, "DELETE")).status).toBe(200);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM passkey_recoveries").first()).toEqual({ n: 0 });
+    expect((await rec(fresh)).status).toBe(201);
+    // 48 hours later it matures.
+    await env.DB.prepare("UPDATE passkey_recoveries SET requested_at = requested_at - ?, effective_at = effective_at - ?").bind(48 * 3_600_000 + 1000, 48 * 3_600_000 + 1000).run();
+    expect((await a.fetch("/api/workspace/delete", { cookie: fresh, body: { confirm: "wrong" } })).status).toBe(422);
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: fresh, body: {} })).status).toBe(200);
+    // Removing the old passkey consumes it.
+    expect((await a.fetch("/api/auth/passkeys/cred-lost", { cookie: fresh, method: "DELETE" })).status).toBe(200);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM passkey_recoveries").first()).toEqual({ n: 0 });
+  });
+
+  it("the helper the passkey-login route calls cancels a pending recovery (WebAuthn itself is not driven here)", async () => {
+    const a = await createTestTenant(env, SELF);
+    const { requestRecovery, cancelRecovery, getRecovery } = await import("../src/auth/recovery");
+    await requestRecovery(env.DB, a.userId, a.id);
+    expect((await getRecovery(env.DB, a.userId, a.id))?.status).toBe("pending");
+    expect(await cancelRecovery(env.DB, a.userId, a.id)).toBe(true);
+    expect(await getRecovery(env.DB, a.userId, a.id)).toBeNull();
+    expect(await cancelRecovery(env.DB, a.userId, a.id)).toBe(false);
+  });
+
+  it("an expired recovery grants nothing", async () => {
+    const a = await createTestTenant(env, SELF);
+    await env.DB.prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, created_at) VALUES ('cred-exp', ?, ?, 'other.host', 'k', ?)").bind(a.userId, a.id, Date.now()).run();
+    const old = Date.now() - 8 * 86_400_000 - 48 * 3_600_000;
+    await env.DB.prepare("INSERT INTO passkey_recoveries (user_id, scope, requested_at, effective_at) VALUES (?, ?, ?, ?)").bind(a.userId, a.id, old, old + 48 * 3_600_000).run();
+    expect((await a.fetch("/api/auth/passkey/register/options", { body: {} })).status).toBe(403);
+  });
+});
+
 describe("roles and API keys", () => {
   it("enforces module permissions by role", async () => {
     const m = await createTestTenant(env, SELF, { role: "member" });

@@ -6,8 +6,9 @@ import { assertFreshSession, createSession, listSessions, readSession, revokeSes
 import { ensureUser, getUserByEmail, normalizeEmail, setUserName, touchLogin, type UserRow } from "../control/users";
 import { sendEmail } from "../email";
 import { type CoreEnv, isDev } from "../env";
-import { unauthorized } from "../errors";
+import { conflict, unauthorized } from "../errors";
 import { clearSessionCookie, clientIp, rateLimit, readJson, readSessionCookie, setSessionCookie, type BaseVars } from "../http/base";
+import { assertPasskeyStep, cancelRecovery, getRecovery, requestRecovery } from "./recovery";
 import { beginLogin, beginRegistration, deletePasskey, finishLogin, finishRegistration, listPasskeys, type PasskeySite } from "./passkeys";
 
 /**
@@ -25,6 +26,8 @@ export interface AuthRealm {
   audit(event: { actor: string; action: string; ip: string | null }): Promise<void>;
   /** Once a user has a passkey here, emailed codes stop working for them (mailbox control must not equal account control). */
   enforcePasskey?: boolean;
+  /** Other people to tell when this person asks for passkey recovery (e.g. the other owners of a workspace). */
+  recoveryObservers?(user: UserRow): Promise<string[]>;
 }
 
 type Env = { Bindings: CoreEnv; Variables: BaseVars };
@@ -79,7 +82,9 @@ export async function checkCode(c: Context, scope: string, email: string, code: 
 async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Promise<boolean> {
   if (!realm.enforcePasskey) return false;
   const user = await getUserByEmail(db, email);
-  return !!user && (await listPasskeys(db, user.id, realm.scope)).length > 0;
+  if (!user || (await listPasskeys(db, user.id, realm.scope)).length === 0) return false;
+  // A matured recovery lets the person back in by emailed code (it still grants no passkey-gated action until used).
+  return (await getRecovery(db, user.id, realm.scope))?.status !== "ready";
 }
 
 const emailBody = z.object({ email: z.string().max(254) });
@@ -129,23 +134,26 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     const user = await c.env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>();
     if (!user || !(await realm.admit(user))) throw unauthorized("That passkey could not be verified.");
     await startSession(c, realm, user, "passkey");
+    // Having the passkey in hand ends any recovery that was started for it.
+    if (await cancelRecovery(c.env.DB, user.id, realm.scope)) await realm.audit({ actor: user.email, action: "auth.passkey.recovery.cancelled", ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
   app.post("/passkey/register/options", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    await assertFreshForPasskeys(c, realm, s);
+    await assertPasskeyStep((c.env as CoreEnv).DB, s, realm.scope);
     return c.json(await beginRegistration(c.env.DB, site(c, realm), { id: s.userId, email: s.email, name: s.name }));
   });
 
   app.post("/passkey/register/verify", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    await assertFreshForPasskeys(c, realm, s);
+    const viaRecovery = await assertPasskeyStep(c.env.DB, s, realm.scope);
     const body = await readJson(c, z.object({ id: z.string().max(64), name: z.string().max(60).default("Passkey"), response: z.looseObject({ id: z.string().max(1024) }) }));
     await finishRegistration(c.env.DB, site(c, realm), s.userId, body.id, body.response as never, body.name);
     await realm.audit({ actor: s.email, action: "auth.passkey.add", ip: clientIp(c) });
+    if (viaRecovery) await cancelRecovery(c.env.DB, s.userId, realm.scope); // single use
     return c.json({ ok: true });
   });
 
@@ -155,11 +163,52 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     return c.json({ items: await listPasskeys(c.env.DB, s.userId, realm.scope) });
   });
 
+  // Delayed recovery for a passkey that can not be used here (lost device, other host).
+  app.get("/passkeys/recovery", async (c) => {
+    const realm = await getRealm(c);
+    const s = await requireSession(c, realm);
+    return c.json({ recovery: await getRecovery(c.env.DB, s.userId, realm.scope) });
+  });
+
+  app.post("/passkeys/recovery", async (c) => {
+    const realm = await getRealm(c);
+    const s = await requireSession(c, realm);
+    assertFreshSession(s, { passkey: false });
+    if ((await listPasskeys(c.env.DB, s.userId, realm.scope)).length === 0) throw conflict("You have no passkey to recover. Add one instead.");
+    const { state, created } = await requestRecovery(c.env.DB, s.userId, realm.scope);
+    if (created) {
+      await realm.audit({ actor: s.email, action: "auth.passkey.recovery.requested", ip: clientIp(c) });
+      const user = await getUserByEmail(c.env.DB, s.email);
+      const others = user && realm.recoveryObservers ? await realm.recoveryObservers(user) : [];
+      const when = new Date(state.effectiveAt).toUTCString();
+      c.executionCtx.waitUntil(
+        Promise.all(
+          [s.email, ...others].map((to) =>
+            sendEmail(c.env, {
+              to,
+              subject: `Passkey recovery requested for ${s.email} on ${realm.displayName}`,
+              text: `A passkey recovery was requested for ${s.email} on ${realm.displayName}.\n\nIt takes effect on ${when}. Until then nothing changes. If this was not expected, ${to === s.email ? "sign in with your passkey to cancel it" : "review the member list and audit log"}.`,
+            }).catch((err) => console.error(JSON.stringify({ level: "error", at: "recovery-email", error: String(err) }))),
+          ),
+        ),
+      );
+    }
+    return c.json({ recovery: state }, created ? 201 : 200);
+  });
+
+  app.delete("/passkeys/recovery", async (c) => {
+    const realm = await getRealm(c);
+    const s = await requireSession(c, realm);
+    if (await cancelRecovery(c.env.DB, s.userId, realm.scope)) await realm.audit({ actor: s.email, action: "auth.passkey.recovery.cancelled", ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
   app.delete("/passkeys/:id", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    await assertFreshForPasskeys(c, realm, s);
+    const viaRecovery = await assertPasskeyStep(c.env.DB, s, realm.scope);
     await deletePasskey(c.env.DB, s.userId, realm.scope, c.req.param("id"));
+    if (viaRecovery) await cancelRecovery(c.env.DB, s.userId, realm.scope); // single use
     await realm.audit({ actor: s.email, action: "auth.passkey.remove", ip: clientIp(c) });
     return c.json({ ok: true });
   });
@@ -195,12 +244,6 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   });
 
   return app;
-}
-
-/** Changing a person's passkeys needs a recent sign-in, and a passkey sign-in once they have one (first enrolment needs only the fresh sign-in). */
-async function assertFreshForPasskeys(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
-  const has = (await listPasskeys((c.env as CoreEnv).DB, s.userId, realm.scope)).length > 0;
-  assertFreshSession(s, { passkey: has });
 }
 
 export { getUserByEmail };
