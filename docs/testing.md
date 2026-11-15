@@ -19,6 +19,22 @@ Nothing security-relevant is mocked.
 | Guard and scripts | `scripts/*.test.mjs` (`pnpm test:scripts`) | Every guard rule fires and the repo passes; config editing |
 | Example upstream | `examples/upstream-service/worker.test.mjs` | Token verification |
 
+## Coverage
+
+```sh
+pnpm test:coverage   # the same worker suites, instrumented with istanbul
+```
+
+Each package writes its own report to `<package>/coverage/` (`index.html` to browse,
+`lcov.info` for editors and tools, `coverage-summary.json`) and prints a summary.
+CI runs the tests this way and keeps the reports as the `coverage` artifact.
+istanbul is the only provider that works in the Workers runtime (v8 coverage does not).
+
+- A package measures only its own source: `packages/core/src`, or `worker/` in each app.
+  Core code exercised by the app and admin tests is not counted towards core.
+- The SPAs (`web/`, `packages/ui`) and `scripts/` are not measured.
+- There are no thresholds. Coverage is a map of untested code, not a gate.
+
 ## Writing a module test
 
 ```ts

@@ -35,6 +35,7 @@ is sent in development.
 | `pnpm verify` | Guard + typecheck + all tests. The definition of "it works" |
 | `pnpm guard` | Static guardrails only (fast) |
 | `pnpm test` | All test suites, in the real Workers runtime |
+| `pnpm test:coverage` | The same suites with a coverage report per package ([testing.md](testing.md#coverage)) |
 | `pnpm typecheck` | TypeScript across the workspace |
 | `pnpm build` | Production build of both SPAs |
 | `pnpm setup` | (Re)create local secrets, git hooks, local database |

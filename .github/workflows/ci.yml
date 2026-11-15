@@ -40,7 +40,18 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)
-        run: pnpm test
+        # Same suites as `pnpm test`, instrumented. Report only: no coverage thresholds.
+        run: pnpm test:coverage
+      - name: Keep the coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            packages/core/coverage/
+            apps/app/coverage/
+            apps/admin/coverage/
+          if-no-files-found: ignore
       - name: Build
         run: pnpm build
 

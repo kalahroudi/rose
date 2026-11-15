@@ -9,5 +9,13 @@ export default defineConfig({
       miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations("./migrations") } },
     })),
   ],
-  test: { setupFiles: ["./test/setup.ts"] },
+  test: {
+    setupFiles: ["./test/setup.ts"],
+    // `pnpm test:coverage`. Workers-runtime tests support only the istanbul provider.
+    coverage: {
+      provider: "istanbul",
+      include: ["src/**/*.ts"],
+      reporter: ["text-summary", "html", "lcov", "json-summary"],
+    },
+  },
 });
