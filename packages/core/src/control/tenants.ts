@@ -176,6 +176,13 @@ export async function cancelTenantDeletion(db: D1Database, id: string): Promise<
     .bind(now(), id)
     .run();
   if (r.meta.changes === 0) return false;
+  // Nothing issued during the grace period may survive the cancel.
+  await db.batch([
+    db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
+    db.prepare("DELETE FROM login_codes WHERE scope = ?").bind(id),
+    db.prepare("DELETE FROM handoffs WHERE scope = ?").bind(id),
+    db.prepare("DELETE FROM webauthn_challenges WHERE scope = ?").bind(id),
+  ]);
   await db.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?").bind(id).run();
   return true;
 }
