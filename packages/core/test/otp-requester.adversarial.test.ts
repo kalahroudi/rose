@@ -134,25 +134,28 @@ describe("adversarial: fallback from a new address", () => {
     expect(await verify(a.origin, a.email, y.body.devCode!, "192.0.2.41")).toBe(200);
   });
 
-  it("guesses from a requester with no code hit the fallback code at most 5 times in total", async () => {
+  it("guesses from requesters with no code hit the fallback code at most 3 times and never spend the owner's 5", async () => {
     const s = `adv-fb-${uniq()}`;
     const y = await issueLoginCode(DB, KEY, s, "e@example.com", "Y");
-    for (let i = 0; i < 3; i++) await verifyLoginCode(DB, KEY, s, "e@example.com", wrongOf(y), `X${i}`);
-    for (let i = 0; i < 2; i++) await verifyLoginCode(DB, KEY, s, "e@example.com", wrongOf(y), "Y");
-    // Budget spent across requesters: the right code no longer works from anyone.
-    expect(await verifyLoginCode(DB, KEY, s, "e@example.com", y, "Y")).toBe(false);
+    for (let i = 0; i < 6; i++) await verifyLoginCode(DB, KEY, s, "e@example.com", wrongOf(y), `X${i}`);
+    // Strangers' budget is spent: even the right code no longer works from a stranger.
     expect(await verifyLoginCode(DB, KEY, s, "e@example.com", y, "Z")).toBe(false);
-    const row = await DB.prepare("SELECT attempts FROM login_codes WHERE scope = ?").bind(s).first<{ attempts: number }>();
-    expect(row!.attempts).toBeLessThanOrEqual(5);
+    for (let i = 0; i < 4; i++) await verifyLoginCode(DB, KEY, s, "e@example.com", wrongOf(y), "Y");
+    const row = await DB.prepare("SELECT attempts, foreign_attempts FROM login_codes WHERE scope = ?").bind(s).first<{ attempts: number; foreign_attempts: number }>();
+    expect(row!.foreign_attempts).toBe(3);
+    expect(row!.attempts).toBe(4);
+    // The owner still has its fifth guess.
+    expect(await verifyLoginCode(DB, KEY, s, "e@example.com", y, "Y")).toBe(true);
   });
 
-  it("parallel guesses from rotating requesters never exceed 5 attempts on one code", async () => {
+  it("parallel guesses from rotating requesters never exceed 3 attempts on one code and leave the owner able to sign in", async () => {
     const s = `adv-par-${uniq()}`;
     const y = await issueLoginCode(DB, KEY, s, "e@example.com", "Y");
     await Promise.all(Array.from({ length: 30 }, (_, i) => verifyLoginCode(DB, KEY, s, "e@example.com", wrongOf(y), `rot${i}`)));
-    const row = await DB.prepare("SELECT attempts FROM login_codes WHERE scope = ?").bind(s).first<{ attempts: number }>();
-    expect(row!.attempts).toBe(5);
-    expect(await verifyLoginCode(DB, KEY, s, "e@example.com", y, "Y")).toBe(false);
+    const row = await DB.prepare("SELECT attempts, foreign_attempts FROM login_codes WHERE scope = ?").bind(s).first<{ attempts: number; foreign_attempts: number }>();
+    expect(row!.foreign_attempts).toBe(3);
+    expect(row!.attempts).toBe(0);
+    expect(await verifyLoginCode(DB, KEY, s, "e@example.com", y, "Y")).toBe(true);
   });
 
   it("a correct code is consumed once even when verified in parallel from several requesters", async () => {

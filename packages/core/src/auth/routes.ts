@@ -73,8 +73,11 @@ export async function requestCode(c: Context, opts: { scope: string; label: stri
 
 export async function checkCode(c: Context, scope: string, email: string, code: string): Promise<void> {
   const env = c.env as CoreEnv;
-  await rateLimit(c, `verify:${scope}:${email}`);
-  if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code, requesterKey(clientIp(c))))) throw unauthorized(BAD_CODE);
+  const requester = requesterKey(clientIp(c));
+  // Keyed by requester: one client's wrong guesses can not lock the address's real user out.
+  await rateLimit(c, `verify-ip:${requester}`);
+  await rateLimit(c, `verify:${scope}:${email}:${requester}`);
+  if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code, requester))) throw unauthorized(BAD_CODE);
 }
 
 /** True when this realm refuses emailed codes for the address because the user has registered a passkey. */
