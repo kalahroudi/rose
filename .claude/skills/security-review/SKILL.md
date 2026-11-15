@@ -53,8 +53,9 @@ verify.
 15. `pnpm verify` is green. Paste the summary line.
 16. No test was deleted, skipped, focused or weakened. No guard rule or CSP directive was
     loosened. List every `guard-allow` you added and who agreed to it (expected: none).
-17. Protected files changed? List each with the reason and state clearly that a human
-    must review and run `pnpm guard:approve`.
+17. Security-core files changed (`packages/core/src/**`, `packages/core/migrations/**`,
+    `apps/*/worker/test/isolation.test.ts`)? List each with the reason so the user can
+    review it.
 18. New dependencies? Name them and why they are necessary (expected: none).
 
 ## F. Operator plane (only if `apps/admin` changed)
@@ -70,7 +71,7 @@ A. Isolation      ✓ / ✗  evidence
 B. Authorisation  ✓ / ✗  evidence
 C. Input/output   ✓ / ✗  evidence
 D. Secrets        ✓ / ✗  evidence
-E. Guardrails     ✓ / ✗  pnpm verify: <summary>; guard-allow: <n>; protected files: <list>
+E. Guardrails     ✓ / ✗  pnpm verify: <summary>; guard-allow: <n>; core files: <list>
 F. Operator plane ✓ / n/a
 Not verified: <anything you could not check, and why>
 ```

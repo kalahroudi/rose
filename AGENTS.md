@@ -40,7 +40,7 @@ Each has a reason. If a task seems to require breaking one, stop and ask the use
 ## Map
 
 ```
-packages/core/        SECURITY CORE (protected). Tenancy, auth, crypto, HTTP hardening, module system, jobs.
+packages/core/        SECURITY CORE. Tenancy, auth, crypto, HTTP hardening, module system, jobs.
   src/index.ts          public API for apps and modules          → import from "@rose/core"
   src/platform.ts       cross-tenant operator API (admin only)   → "@rose/core/platform"
   src/testing/          createTestTenant, describeTenantIsolation → "@rose/core/testing"
@@ -50,7 +50,7 @@ apps/app/             TENANT app: what customers use.
   worker/index.ts       wires the module manifest into the core. Rarely changes.
   worker/modules/       ← YOUR PRODUCT GOES HERE. One folder per module. `contacts` is the reference.
   worker/modules/index.ts   server module manifest
-  worker/test/isolation.test.ts   isolation contract for every module (protected)
+  worker/test/isolation.test.ts   isolation contract for every module
   web/                  SPA. web/modules/<id>/ holds each module's pages and help; web/modules/index.tsx is the manifest.
 apps/admin/           OPERATOR console: tenants, domains, operators, setup. No tenant data.
 examples/upstream-service/   How an existing service verifies Rose's tenant token.
