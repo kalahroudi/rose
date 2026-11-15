@@ -258,14 +258,14 @@ app.delete("/api/domains/:hostname", async (c) => {
 // Operators
 app.get("/api/operators", async (c) => c.json(await listOperators(c.env.DB, listQ(c))));
 app.post("/api/operators", async (c) => {
-  ownerOnly(c);
+  freshOwnerOnly(c);
   const body = await readJson(c, z.object({ email: z.string().max(254), role: z.enum(["owner", "operator"]).default("operator") }));
   await addOperator(c.env.DB, body.email, body.role);
   await audit(c, "operator.add", normalizeEmail(body.email), { role: body.role });
   return c.json({ ok: true }, 201);
 });
 app.delete("/api/operators/:userId", async (c) => {
-  ownerOnly(c);
+  freshOwnerOnly(c);
   await removeOperator(c.env.DB, c.req.param("userId"));
   await audit(c, "operator.remove", c.req.param("userId"));
   return c.json({ ok: true });

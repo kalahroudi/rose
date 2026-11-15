@@ -115,6 +115,15 @@ describe("workspace deletion safeguards", () => {
     expect(rm.status).toBe(403);
     expect(await code(rm)).toBe("reauth_required");
     expect((await a.fetch("/api/auth/passkey/register/options", { cookie: staleCode, body: {} })).status).toBe(403);
+    // A fresh email-code session can neither remove nor add a passkey once one exists, nor mint owners.
+    const freshCode = await sessionCookie("code");
+    expect((await a.fetch("/api/auth/passkeys/cred-del", { cookie: freshCode, method: "DELETE" })).status).toBe(403);
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: freshCode, body: {} })).status).toBe(403);
+    const inv = await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-owner@x.example", role: "owner" } });
+    expect(inv.status).toBe(403);
+    expect(await code(inv)).toBe("reauth_required");
+    expect((await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-admin@x.example", role: "admin" } })).status).toBe(201);
+    expect((await a.fetch("/api/invitations", { cookie: await sessionCookie("passkey"), body: { email: "new-owner@x.example", role: "owner" } })).status).toBe(201);
     // A session from the future is not fresh either.
     const { assertFreshSession } = await import("../src/control/sessions");
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();

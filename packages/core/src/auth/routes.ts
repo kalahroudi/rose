@@ -135,14 +135,14 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.post("/passkey/register/options", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    assertFreshSession(s, { passkey: false });
+    await assertFreshForPasskeys(c, realm, s);
     return c.json(await beginRegistration(c.env.DB, site(c, realm), { id: s.userId, email: s.email, name: s.name }));
   });
 
   app.post("/passkey/register/verify", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    assertFreshSession(s, { passkey: false });
+    await assertFreshForPasskeys(c, realm, s);
     const body = await readJson(c, z.object({ id: z.string().max(64), name: z.string().max(60).default("Passkey"), response: z.looseObject({ id: z.string().max(1024) }) }));
     await finishRegistration(c.env.DB, site(c, realm), s.userId, body.id, body.response as never, body.name);
     await realm.audit({ actor: s.email, action: "auth.passkey.add", ip: clientIp(c) });
@@ -158,7 +158,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.delete("/passkeys/:id", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    assertFreshSession(s, { passkey: false });
+    await assertFreshForPasskeys(c, realm, s);
     await deletePasskey(c.env.DB, s.userId, realm.scope, c.req.param("id"));
     await realm.audit({ actor: s.email, action: "auth.passkey.remove", ip: clientIp(c) });
     return c.json({ ok: true });
@@ -195,6 +195,12 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   });
 
   return app;
+}
+
+/** Changing a person's passkeys needs a recent sign-in, and a passkey sign-in once they have one (first enrolment needs only the fresh sign-in). */
+async function assertFreshForPasskeys(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
+  const has = (await listPasskeys((c.env as CoreEnv).DB, s.userId, realm.scope)).length > 0;
+  assertFreshSession(s, { passkey: has });
 }
 
 export { getUserByEmail };

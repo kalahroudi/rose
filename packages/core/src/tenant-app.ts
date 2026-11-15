@@ -334,15 +334,27 @@ export function createTenantApp(options: TenantAppOptions) {
     return c.json(await listMembers(c.env.DB, c.get("tenant").id, { ...listQ(c), role: c.req.query("role") }));
   });
   const roleSchema = z.enum(["owner", "admin", "member"]);
+  /** Granting, changing or removing owner access needs the same fresh (passkey-if-any) sign-in as deleting the workspace. */
+  const freshForOwnerChange = async (c: Ctx, actor: Actor) => {
+    if (actor.type !== "user") throw forbidden("Only a signed-in person can change owners.");
+    const t = c.get("tenant");
+    const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
+    if (!session) throw unauthorized();
+    assertFreshSession(session, { passkey: (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0 });
+  };
   app.patch("/api/members/:userId", async (c) => {
     const actor = need(c, "members:manage");
     const { role } = await readJson(c, z.object({ role: roleSchema }));
+    const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
+    if (role === "owner" || target?.role === "owner") await freshForOwnerChange(c, actor);
     await changeMemberRole(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), role);
     await audit(c, "member.role", c.req.param("userId"), { role });
     return c.json({ ok: true });
   });
   app.delete("/api/members/:userId", async (c) => {
     const actor = need(c, "members:manage");
+    const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
+    if (target?.role === "owner") await freshForOwnerChange(c, actor);
     await removeMember(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"));
     await audit(c, "member.remove", c.req.param("userId"));
     return c.json({ ok: true });
@@ -354,6 +366,7 @@ export function createTenantApp(options: TenantAppOptions) {
   app.post("/api/invitations", async (c) => {
     const actor = need(c, "members:manage");
     const body = await readJson(c, z.object({ email: z.string().max(254), role: roleSchema.default("member") }));
+    if (body.role === "owner") await freshForOwnerChange(c, actor);
     const t = c.get("tenant");
     const inv = await createInvitation(c.env.DB, t.id, { email: body.email, role: body.role, invitedBy: actor.label, actorRole: actor.role });
     await audit(c, "invitation.create", inv.email, { role: inv.role });

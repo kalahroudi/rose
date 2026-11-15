@@ -93,7 +93,12 @@ describe("operator console", () => {
     const t = await seed("initech", "Initech");
     const body = { confirm: "initech" };
     // Not an owner.
-    expect((await call("/api/operators", { cookie, body: { email: "ops2@rose.test" } })).status).toBe(201);
+    // Adding operators needs a fresh passkey session: an ordinary code session is refused.
+    const addOps2 = await call("/api/operators", { cookie, body: { email: "ops2@rose.test" } });
+    expect(addOps2.status).toBe(403);
+    expect((await json<{ error: { code: string } }>(addOps2)).error.code).toBe("reauth_required");
+    expect((await call("/api/operators", { cookie: await sessionFor("root@example.com", "passkey", 11 * 60_000), body: { email: "ops2@rose.test" } })).status).toBe(403);
+    expect((await call("/api/operators", { cookie: await sessionFor("root@example.com", "passkey"), body: { email: "ops2@rose.test" } })).status).toBe(201);
     const opCookie = await sessionFor("ops2@rose.test", "passkey");
     for (const path of [`/api/tenants/${t.id}/delete`, `/api/tenants/${t.id}/delete/cancel`]) {
       const r = await call(path, { cookie: opCookie, body });
@@ -139,12 +144,13 @@ describe("operator console", () => {
 
   it("only owners manage operators and connections; the last owner can not be removed", async () => {
     const cookie = await root();
-    expect((await call("/api/operators", { cookie, body: { email: "ops@rose.test" } })).status).toBe(201);
+    expect((await call("/api/operators", { cookie: await sessionFor("root@example.com", "passkey"), body: { email: "ops@rose.test" } })).status).toBe(201);
     const ops = (await signIn("ops@rose.test"))!;
     expect((await call("/api/operators", { cookie: ops, body: { email: "x@rose.test" } })).status).toBe(403);
     expect((await call("/api/setup/cloudflare", { cookie: ops, method: "PUT", body: { zoneId: "a".repeat(32), apiToken: "t".repeat(40) } })).status).toBe(403);
     const me = await json<{ session: { user: { id: string } } }>(call("/api/bootstrap", { cookie }));
-    expect((await call(`/api/operators/${me.session.user.id}`, { cookie, method: "DELETE" })).status).toBe(409);
+    expect((await call(`/api/operators/${me.session.user.id}`, { cookie, method: "DELETE" })).status).toBe(403);
+    expect((await call(`/api/operators/${me.session.user.id}`, { cookie: await sessionFor("root@example.com", "passkey"), method: "DELETE" })).status).toBe(409);
   });
 
   it("reports setup health and encrypts stored secrets", async () => {
