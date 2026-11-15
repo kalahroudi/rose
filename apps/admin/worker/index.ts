@@ -132,6 +132,11 @@ const freshOwnerOnly = (c: Ctx) => {
   ownerOnly(c);
   assertFreshSession(c.get("operator"), { passkey: true });
 };
+/** A tenant waiting for (or undergoing) deletion accepts no changes except cancelling the deletion. */
+const assertMutable = async (c: Ctx, tenantId: string) => {
+  const t = await getTenant(c.env.DB, tenantId);
+  if (t && (t.status === "pending_deletion" || t.status === "deleting")) throw conflict("This tenant is being deleted. Cancel the deletion first.");
+};
 const tenantOr404 = async (c: Ctx, id: string) => {
   const t = await getTenant(c.env.DB, id);
   if (!t) throw notFound();
@@ -166,6 +171,7 @@ app.get("/api/tenants/:id", async (c) => c.json(await tenantOr404(c, c.req.param
 
 app.patch("/api/tenants/:id", async (c) => {
   const body = await readJson(c, z.object({ name: z.string().max(80).optional(), plan: z.string().trim().min(1).max(30).optional() }));
+  await assertMutable(c, c.req.param("id"));
   const row = await updateTenant(c.env.DB, c.req.param("id"), body);
   await audit(c, "tenant.update", row.id, body);
   return c.json(row);
@@ -192,7 +198,10 @@ app.post("/api/tenants/:id/delete", async (c) => {
   const t = await tenantOr404(c, c.req.param("id"));
   const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
   if (confirm !== t.slug) throw invalid("Type the tenant address to confirm.", { confirm: "Does not match." });
+  const already = t.status === "pending_deletion";
   const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
+  // Already pending: report the existing state; no second job, no second audit row.
+  if (already) return c.json({ deleteAfter, alreadyPending: true }, 202);
   // The purge job is held back until the grace period ends; the handler re-checks the deadline.
   const job = await enqueueJob(c.env, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email, delayMs: Math.max(0, deleteAfter - Date.now()) });
   await audit(c, "tenant.delete.requested", t.id, { slug: t.slug, deleteAfter });
@@ -203,9 +212,10 @@ app.post("/api/tenants/:id/delete/cancel", async (c) => {
   freshOwnerOnly(c);
   const t = await tenantOr404(c, c.req.param("id"));
   const before = t.delete_after;
+  const restored = t.prior_status === "suspended" ? "suspended" : "active";
   if (!(await cancelTenantDeletion(c.env.DB, t.id))) throw conflict("This tenant is not waiting to be deleted.");
-  await audit(c, "tenant.delete.cancelled", t.id, { slug: t.slug, deleteAfter: before });
-  return c.json({ ok: true });
+  await audit(c, "tenant.delete.cancelled", t.id, { slug: t.slug, deleteAfter: before, restoredStatus: restored });
+  return c.json({ ok: true, status: restored });
 });
 
 app.get("/api/tenants/:id/members", async (c) => {
@@ -218,6 +228,7 @@ app.get("/api/domains", async (c) => c.json(await listDomains(c.env.DB, { ...lis
 
 app.post("/api/tenants/:id/domains", async (c) => {
   const t = await tenantOr404(c, c.req.param("id"));
+  await assertMutable(c, t.id);
   const body = await readJson(c, z.object({ hostname: z.string().max(253) }));
   const row = await addDomain(c.env.DB, t.id, validateHostname(body.hostname, c.env.APP_BASE_DOMAIN));
   const job = await enqueueJob(c.env, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
@@ -228,12 +239,15 @@ app.post("/api/tenants/:id/domains", async (c) => {
 app.post("/api/domains/:hostname/recheck", async (c) => {
   const row = await getDomain(c.env.DB, c.req.param("hostname"));
   if (!row) throw notFound();
+  await assertMutable(c, row.tenant_id);
   await setDomainState(c.env.DB, row.hostname, { status: "pending", detail: row.detail });
   const job = await enqueueJob(c.env, { type: "domain.verify", scope: SCOPE, title: `Verify domain ${row.hostname}`, payload: { hostname: row.hostname }, createdBy: c.get("operator").email });
   return c.json({ jobId: job.id }, 202);
 });
 
 app.delete("/api/domains/:hostname", async (c) => {
+  const existing = await getDomain(c.env.DB, c.req.param("hostname"));
+  if (existing) await assertMutable(c, existing.tenant_id);
   const row = await removeDomain(c.env.DB, c.req.param("hostname"));
   const conn = await cfConnection(c.env);
   if (conn && row.provider_id) c.executionCtx.waitUntil(cloudflare.deleteCustomHostname(conn, row.provider_id).catch(() => undefined));

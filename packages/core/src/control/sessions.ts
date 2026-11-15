@@ -149,7 +149,8 @@ export const FRESH_SIGN_IN_MS = 10 * 60_000;
  * when `passkey` is set, was created by a passkey. Used before irreversible actions.
  */
 export function assertFreshSession(s: Pick<SessionInfo, "method" | "createdAt">, opts: { passkey: boolean }): void {
-  if (now() - s.createdAt > FRESH_SIGN_IN_MS || (opts.passkey && s.method !== "passkey")) {
+  const age = now() - s.createdAt;
+  if (age < 0 || age >= FRESH_SIGN_IN_MS || (opts.passkey && s.method !== "passkey")) {
     throw reauthRequired(opts.passkey ? "Sign in again with your passkey to confirm this action." : "Sign in again to confirm this action.");
   }
 }

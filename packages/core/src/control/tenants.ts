@@ -16,6 +16,8 @@ export interface TenantRow {
   updated_at: number;
   /** Epoch ms after which the purge may run; set while pending_deletion/deleting. */
   delete_after: number | null;
+  /** Status before deletion was requested (restored on cancel). */
+  prior_status: "active" | "suspended" | null;
 }
 
 /** Slugs that would collide with platform hosts or look official. */
@@ -43,7 +45,7 @@ export async function createTenant(db: D1Database, input: { name: string; slug: 
   const name = input.name.trim();
   if (!name || name.length > 80) throw invalid("Check the workspace name.", { name: "Use 1–80 characters." });
   const t = now();
-  const row: TenantRow = { id: newId("tn"), slug, name, status: "active", plan: input.plan ?? "free", created_at: t, updated_at: t, delete_after: null };
+  const row: TenantRow = { id: newId("tn"), slug, name, status: "active", plan: input.plan ?? "free", created_at: t, updated_at: t, delete_after: null, prior_status: null };
   try {
     await db
       .prepare("INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)")
@@ -160,7 +162,7 @@ export async function requestTenantDeletion(db: D1Database, id: string): Promise
   const t = now();
   const deleteAfter = t + DELETE_GRACE_MS;
   await db.batch([
-    db.prepare("UPDATE tenants SET status = 'pending_deletion', delete_after = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'suspended')").bind(deleteAfter, t, id),
+    db.prepare("UPDATE tenants SET status = 'pending_deletion', prior_status = status, delete_after = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'suspended')").bind(deleteAfter, t, id),
     // Cut every live session immediately.
     db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
     // Work the tenant queued must not outlive it.
@@ -169,11 +171,14 @@ export async function requestTenantDeletion(db: D1Database, id: string): Promise
   return deleteAfter;
 }
 
-/** Undo a pending deletion. Returns false when the tenant is not pending (or the purge already began). */
+/** Undo a pending deletion, restoring the prior status (see `prior_status`). False when the tenant is not pending (or the purge already began). */
 export async function cancelTenantDeletion(db: D1Database, id: string): Promise<boolean> {
+  const cur = await getTenant(db, id);
+  if (!cur || cur.status !== "pending_deletion") return false;
+  const restored = cur.prior_status === "suspended" ? "suspended" : "active";
   const r = await db
-    .prepare("UPDATE tenants SET status = 'active', delete_after = NULL, updated_at = ? WHERE id = ? AND status = 'pending_deletion'")
-    .bind(now(), id)
+    .prepare("UPDATE tenants SET status = ?, delete_after = NULL, prior_status = NULL, updated_at = ? WHERE id = ? AND status = 'pending_deletion'")
+    .bind(restored, now(), id)
     .run();
   if (r.meta.changes === 0) return false;
   // Nothing issued during the grace period may survive the cancel.
@@ -182,8 +187,8 @@ export async function cancelTenantDeletion(db: D1Database, id: string): Promise<
     db.prepare("DELETE FROM login_codes WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM handoffs WHERE scope = ?").bind(id),
     db.prepare("DELETE FROM webauthn_challenges WHERE scope = ?").bind(id),
+    db.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?").bind(id),
   ]);
-  await db.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?").bind(id).run();
   return true;
 }
 

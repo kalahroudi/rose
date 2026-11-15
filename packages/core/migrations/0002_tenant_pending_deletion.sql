@@ -18,10 +18,11 @@ CREATE TABLE tenants_new (
   plan TEXT NOT NULL DEFAULT 'free',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  delete_after INTEGER
+  delete_after INTEGER,
+  prior_status TEXT
 );
-INSERT INTO tenants_new (id, slug, name, status, plan, created_at, updated_at, delete_after)
-  SELECT id, slug, name, status, plan, created_at, updated_at, NULL FROM tenants;
+INSERT INTO tenants_new (id, slug, name, status, plan, created_at, updated_at, delete_after, prior_status)
+  SELECT id, slug, name, status, plan, created_at, updated_at, NULL, NULL FROM tenants;
 
 DROP TABLE tenants;
 ALTER TABLE tenants_new RENAME TO tenants;

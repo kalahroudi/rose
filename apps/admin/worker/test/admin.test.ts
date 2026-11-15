@@ -161,6 +161,37 @@ describe("operator console", () => {
   });
 });
 
+describe("pending deletion edge cases", () => {
+  it("cancel restores a prior suspension, a repeat delete is idempotent, and a pending tenant takes no edits", async () => {
+    const cookie = await root();
+    const t = await seed("hooli", "Hooli");
+    await call("/api/tenants/bulk", { cookie, body: { action: "suspend", ids: [t.id] } });
+    const fresh = await sessionFor("root@example.com", "passkey");
+    const body = { confirm: "hooli" };
+    expect((await call(`/api/tenants/${t.id}/delete`, { cookie: fresh, body })).status).toBe(202);
+    const again = await json<{ alreadyPending?: boolean }>(call(`/api/tenants/${t.id}/delete`, { cookie: fresh, body }));
+    expect(again.alreadyPending).toBe(true);
+    const n = (sql: string) => env.DB.prepare(sql).bind(t.id).first<{ n: number }>().then((r) => r!.n);
+    expect(await n("SELECT COUNT(*) AS n FROM jobs WHERE type = 'tenant.purge' AND json_extract(payload, '$.tenantId') = ?")).toBe(1);
+    expect(await n("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.delete.requested' AND target = ?")).toBe(1);
+    expect((await call(`/api/tenants/${t.id}`, { cookie, method: "PATCH", body: { name: "X" } })).status).toBe(409);
+    expect((await call(`/api/tenants/${t.id}/domains`, { cookie, body: { hostname: "app.hooli.example.com" } })).status).toBe(409);
+    expect((await call(`/api/tenants/${t.id}/delete/cancel`, { cookie: fresh, body: {} })).status).toBe(200);
+    expect((await env.DB.prepare("SELECT status FROM tenants WHERE id = ?").bind(t.id).first<{ status: string }>())!.status).toBe("suspended");
+    const audit = await env.DB.prepare("SELECT meta FROM platform_audit WHERE action = 'tenant.delete.cancelled' AND target = ?").bind(t.id).first<{ meta: string }>();
+    expect(audit!.meta).toContain("suspended");
+  });
+
+  it("a stale session can not enrol or remove passkeys", async () => {
+    await root();
+    const stale = await sessionFor("root@example.com", "code", 11 * 60_000);
+    const r = await call("/api/auth/passkey/register/options", { cookie: stale, body: {} });
+    expect(r.status).toBe(403);
+    expect((await json<{ error: { code: string } }>(r)).error.code).toBe("reauth_required");
+    expect((await call("/api/auth/passkeys/x", { cookie: stale, method: "DELETE" })).status).toBe(403);
+  });
+});
+
 describe("no operator tenant creation", () => {
   it("the console has no route to create a tenant or invite its owner; sign-up is the only path", async () => {
     const cookie = await root();

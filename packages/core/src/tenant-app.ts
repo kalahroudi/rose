@@ -421,8 +421,10 @@ export function createTenantApp(options: TenantAppOptions) {
     // A recent sign-in is required; people who registered a passkey must have used it.
     const hasPasskey = (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0;
     assertFreshSession(session, { passkey: hasPasskey });
+    const already = (await getTenant(c.env.DB, t.id))?.status === "pending_deletion";
     const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
     invalidateHostCache();
+    if (already) return c.json({ ok: true, deleteAfter }, 202);
     await enqueueJob(c.env, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label, delayMs: Math.max(0, deleteAfter - now()) });
     await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner", deleteAfter }, ip: clientIp(c) });
     return c.json({ ok: true, deleteAfter }, 202);

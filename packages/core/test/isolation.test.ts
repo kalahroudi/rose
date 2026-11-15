@@ -109,6 +109,16 @@ describe("workspace deletion safeguards", () => {
     expect(r2.status).toBe(403);
     expect(await code(r2)).toBe("reauth_required");
     expect((await env.DB.prepare("SELECT status FROM tenants WHERE id = ?").bind(a.id).first<{ status: string }>())!.status).toBe("active");
+    // The chain: a stale session can neither remove the passkey nor enrol a new one.
+    const staleCode = await sessionCookie("code", 11 * 60_000);
+    const rm = await a.fetch("/api/auth/passkeys/cred-del", { cookie: staleCode, method: "DELETE" });
+    expect(rm.status).toBe(403);
+    expect(await code(rm)).toBe("reauth_required");
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: staleCode, body: {} })).status).toBe(403);
+    // A session from the future is not fresh either.
+    const { assertFreshSession } = await import("../src/control/sessions");
+    expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
+    expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() - 10 * 60_000 }, { passkey: true })).toThrow();
     // API keys never delete.
     const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
     expect((await a.fetch("/api/workspace/delete", { cookie: null, headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } })).status).toBe(403);
