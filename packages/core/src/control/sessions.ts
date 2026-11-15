@@ -132,6 +132,16 @@ export async function consumeHandoff(db: D1Database, token: string, purpose: "se
   return row?.user_id ?? null;
 }
 
+/** Read (without spending) the user a live handoff belongs to, so a request can be refused before the ticket is consumed. */
+export async function peekHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string): Promise<string | null> {
+  if (!token || token.length > 100) return null;
+  const row = await db
+    .prepare("SELECT user_id FROM handoffs WHERE token_hash = ? AND purpose = ? AND scope = ? AND expires_at > ?")
+    .bind(await sha256Hex(token), purpose, scope, now())
+    .first<{ user_id: string }>();
+  return row?.user_id ?? null;
+}
+
 /** Housekeeping for expired auth artefacts. Safe to run at any time. */
 export async function sweepExpired(db: D1Database): Promise<void> {
   const t = now();

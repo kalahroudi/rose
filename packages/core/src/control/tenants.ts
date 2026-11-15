@@ -58,11 +58,48 @@ export async function createTenant(db: D1Database, input: { name: string; slug: 
   return row;
 }
 
+/**
+ * Create a workspace and its owner membership in one atomic batch whose tenant INSERT only happens while the
+ * user owns fewer than `cap` workspaces, so parallel requests can not push a person over the cap.
+ * Returns null (nothing written) when the cap is reached.
+ */
+export async function createTenantForOwner(db: D1Database, userId: string, input: { name: string; slug: string }, cap: number): Promise<TenantRow | null> {
+  const slug = validateSlug(input.slug);
+  const name = input.name.trim();
+  if (!name || name.length > 80) throw invalid("Check the workspace name.", { name: "Use 1–80 characters." });
+  const t = now();
+  const row: TenantRow = { id: newId("tn"), slug, name, status: "active", plan: "free", created_at: t, updated_at: t, delete_after: null, prior_status: null };
+  try {
+    const [ins] = await db.batch([
+      db
+        .prepare(
+          "INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at) SELECT ?, ?, ?, 'active', ?, ?, ? WHERE (SELECT COUNT(*) FROM memberships m JOIN tenants t ON t.id = m.tenant_id WHERE m.user_id = ? AND m.role = 'owner' AND t.status != 'deleting') < ?",
+        )
+        .bind(row.id, row.slug, row.name, row.plan, t, t, userId, cap),
+      db.prepare("INSERT INTO memberships (tenant_id, user_id, role, created_at) SELECT ?, ?, 'owner', ? WHERE EXISTS (SELECT 1 FROM tenants WHERE id = ?)").bind(row.id, userId, t, row.id),
+    ]);
+    if (!ins || ins.meta.changes === 0) return null;
+  } catch (err) {
+    if (String(err).includes("UNIQUE")) throw conflict("That workspace address is taken.", { slug: "Already in use." });
+    throw err;
+  }
+  return row;
+}
+
 export const getTenant = (db: D1Database, id: string) =>
   db.prepare("SELECT * FROM tenants WHERE id = ?").bind(id).first<TenantRow>();
 
 export const getTenantBySlug = (db: D1Database, slug: string) =>
   db.prepare("SELECT * FROM tenants WHERE slug = ?").bind(slug).first<TenantRow>();
+
+/** Workspaces the user owns, not counting ones already being deleted. Pending-deletion and suspended ones still count. */
+export async function countOwnedWorkspaces(db: D1Database, userId: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM memberships m JOIN tenants t ON t.id = m.tenant_id WHERE m.user_id = ? AND m.role = 'owner' AND t.status != 'deleting'")
+    .bind(userId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
 
 export async function slugAvailable(db: D1Database, slug: string): Promise<boolean> {
   try {

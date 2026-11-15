@@ -73,7 +73,10 @@ On `https://<base>`:
    workspaces that address already belongs to.
 3. `POST /api/root/enter` with the ticket and either `slug` (enter an existing
    workspace) or `create: {name, slug}` (new workspace; caller becomes `owner`).
-   Returns a URL on the tenant host.
+   Returns a URL on the tenant host. Creating is capped per person: once someone owns
+   `MAX_WORKSPACES_PER_USER` workspaces (default 5; workspaces already being deleted do
+   not count) `create` answers 403 without spending the ticket. Entering an existing
+   workspace by `slug` is never limited.
 4. `GET https://<slug>.<base>/auth/handoff?token=…` exchanges a **handoff** for a session
    cookie on that host and redirects to `/`.
 

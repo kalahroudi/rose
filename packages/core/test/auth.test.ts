@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 import { requesterKey } from "../src/http/base";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
 import { consumeHandoff, createHandoff, createSession, readSession } from "../src/control/sessions";
+import { createTenant } from "../src/control/tenants";
+import { addMembership, ensureUser } from "../src/control/users";
+import { maxWorkspacesPerUser } from "../src/env";
 import { createTestTenant } from "../src/testing";
 
 const post = (origin: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -252,6 +255,77 @@ describe("self-service signup on the root host", () => {
       const r = (await (await SELF.fetch(`${root}/api/root/slug?slug=${encodeURIComponent(slug)}`)).json()) as { available: boolean };
       expect(r.available, slug).toBe(false);
     }
+  });
+
+  describe("workspace cap per verified email", () => {
+    const verify = async (email: string) => {
+      const { devCode } = (await (await post(root, "/api/root/code/request", { email })).json()) as { devCode: string };
+      return ((await (await post(root, "/api/root/code/verify", { email, code: devCode })).json()) as { ticket: string }).ticket;
+    };
+    const own = async (email: string, n: number, status?: string) => {
+      const user = await ensureUser(env.DB, email);
+      const slugs: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const slug = `cap-${Math.random().toString(36).slice(2, 10)}`;
+        const t = await createTenant(env.DB, { name: slug, slug });
+        await addMembership(env.DB, t.id, user.id, "owner");
+        if (status) await env.DB.prepare("UPDATE tenants SET status = ? WHERE id = ?").bind(status, t.id).run();
+        slugs.push(slug);
+      }
+      return slugs;
+    };
+    const tenantCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())!.n;
+
+    it("refuses create at the cap with 403, keeps the ticket usable, and writes nothing", async () => {
+      const email = "capped@example.com";
+      const [first] = await own(email, 5);
+      const ticket = await verify(email);
+      const before = await tenantCount();
+      const res = await post(root, "/api/root/enter", { ticket, create: { name: "One Too Many", slug: "one-too-many" } });
+      expect(res.status).toBe(403);
+      expect(await tenantCount()).toBe(before);
+      expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE slug = 'one-too-many'").first()).toBeNull();
+      // The rejection did not burn the ticket, and entering an existing workspace is not capped.
+      expect((await post(root, "/api/root/enter", { ticket, slug: first })).status).toBe(200);
+    });
+
+    it("allows create below the cap", async () => {
+      const email = "below@example.com";
+      await own(email, 4);
+      const res = await post(root, "/api/root/enter", { ticket: await verify(email), create: { name: "Fifth", slug: "fifth-ws" } });
+      expect(res.status).toBe(200);
+    });
+
+    it("does not count workspaces being deleted, but counts pending-deletion and suspended ones", async () => {
+      const email = "deleting@example.com";
+      await own(email, 3);
+      await own(email, 1, "deleting");
+      await own(email, 1, "deleting");
+      expect((await post(root, "/api/root/enter", { ticket: await verify(email), create: { name: "Ok Ws", slug: "ok-ws" } })).status).toBe(200);
+      const other = "pending@example.com";
+      await own(other, 3);
+      await own(other, 1, "pending_deletion");
+      await own(other, 1, "suspended");
+      expect((await post(root, "/api/root/enter", { ticket: await verify(other), create: { name: "No Ws", slug: "no-ws" } })).status).toBe(403);
+    });
+
+    it("counts only owned workspaces", async () => {
+      const email = "member-only@example.com";
+      const user = await ensureUser(env.DB, email);
+      for (let i = 0; i < 6; i++) {
+        const slug = `mem-${Math.random().toString(36).slice(2, 10)}`;
+        await addMembership(env.DB, (await createTenant(env.DB, { name: slug, slug })).id, user.id, "member");
+      }
+      expect((await post(root, "/api/root/enter", { ticket: await verify(email), create: { name: "Mine", slug: "mine-ws" } })).status).toBe(200);
+    });
+
+    it("parses MAX_WORKSPACES_PER_USER: any positive integer, otherwise 5", () => {
+      const p = (v: string | undefined) => maxWorkspacesPerUser({ MAX_WORKSPACES_PER_USER: v });
+      expect(p("1")).toBe(1);
+      expect(p("1000000")).toBe(1_000_000);
+      expect(p("12345678901")).toBe(12_345_678_901);
+      for (const bad of [undefined, "", " ", "0", "-3", "2.5", "abc", "1e3", "0x10"]) expect(p(bad), String(bad)).toBe(5);
+    });
   });
 
   it("root routes do not exist on tenant hosts", async () => {

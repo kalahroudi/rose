@@ -35,6 +35,18 @@ export interface TenantWorkerEnv extends CoreEnv {
   UPSTREAM_ORIGIN?: string;
   UPSTREAM_SIGNING_SECRET?: string;
   DISPATCHER?: { get(name: string): Fetcher };
+  /** Most workspaces one person may own via self-service signup. Any positive integer string; anything else means 5. */
+  MAX_WORKSPACES_PER_USER?: string;
+}
+
+export const DEFAULT_MAX_WORKSPACES_PER_USER = 5;
+
+/** Parse `MAX_WORKSPACES_PER_USER`: digits only, value >= 1 (large values are fine); everything else falls back to the default. */
+export function maxWorkspacesPerUser(env: Pick<TenantWorkerEnv, "MAX_WORKSPACES_PER_USER">): number {
+  const v: unknown = env.MAX_WORKSPACES_PER_USER;
+  if (typeof v !== "string" || !/^\d+$/.test(v.trim())) return DEFAULT_MAX_WORKSPACES_PER_USER;
+  const n = Number(v.trim());
+  return Number.isSafeInteger(n) && n >= 1 ? n : DEFAULT_MAX_WORKSPACES_PER_USER;
 }
 
 /** Bindings of the operator (admin) worker. It has no path to tenant data or tenant keys. */
