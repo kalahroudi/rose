@@ -9,7 +9,7 @@ export * from "./control/domains";
 export * from "./control/jobs";
 export * from "./control/audit";
 export * from "./control/settings";
-export { sweepExpired } from "./control/sessions";
+export { assertFreshSession, FRESH_SIGN_IN_MS, sweepExpired } from "./control/sessions";
 export { createAuthRoutes, currentSession, type AuthRealm } from "./auth/routes";
 export { listPasskeys } from "./auth/passkeys";
 export { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";

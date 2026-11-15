@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { sha256Hex } from "../crypto";
-import { notFound } from "../errors";
+import { notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
 import type { OperatorRole, Role } from "./users";
 
@@ -16,6 +16,8 @@ export interface SessionInfo {
   role: Role | OperatorRole;
   method: string;
   expiresAt: number;
+  /** When this session was created (sign-in time), epoch ms. */
+  createdAt: number;
 }
 
 /**
@@ -49,12 +51,12 @@ export async function readSession(db: D1Database, token: string, scope: string):
   if (!token || token.length > 100) return null;
   const hash = await sha256Hex(token);
   const t = now();
-  type Row = { public_id: string; user_id: string; email: string; name: string; scope: string; role: Role | OperatorRole | null; method: string; expires_at: number; last_seen_at: number };
+  type Row = { public_id: string; user_id: string; email: string; name: string; scope: string; role: Role | OperatorRole | null; method: string; expires_at: number; last_seen_at: number; created_at: number };
   const row =
     scope === "platform"
       ? await db
           .prepare(
-            `SELECT s.public_id, s.user_id, u.email, u.name, s.scope, o.role, s.method, s.expires_at, s.last_seen_at
+            `SELECT s.public_id, s.user_id, u.email, u.name, s.scope, o.role, s.method, s.expires_at, s.last_seen_at, s.created_at
              FROM sessions s JOIN users u ON u.id = s.user_id JOIN operators o ON o.user_id = s.user_id
              WHERE s.id_hash = ? AND s.scope = 'platform' AND s.expires_at > ?`,
           )
@@ -62,7 +64,7 @@ export async function readSession(db: D1Database, token: string, scope: string):
           .first<Row>()
       : await db
           .prepare(
-            `SELECT s.public_id, s.user_id, u.email, u.name, s.scope, m.role, s.method, s.expires_at, s.last_seen_at
+            `SELECT s.public_id, s.user_id, u.email, u.name, s.scope, m.role, s.method, s.expires_at, s.last_seen_at, s.created_at
              FROM sessions s JOIN users u ON u.id = s.user_id
              JOIN memberships m ON m.user_id = s.user_id AND m.tenant_id = s.scope
              JOIN tenants t ON t.id = s.scope AND t.status = 'active'
@@ -74,7 +76,7 @@ export async function readSession(db: D1Database, token: string, scope: string):
   if (t - row.last_seen_at > TOUCH_INTERVAL) {
     await db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?").bind(t, hash).run();
   }
-  return { publicId: row.public_id, userId: row.user_id, email: row.email, name: row.name, scope: row.scope, role: row.role, method: row.method, expiresAt: row.expires_at };
+  return { publicId: row.public_id, userId: row.user_id, email: row.email, name: row.name, scope: row.scope, role: row.role, method: row.method, expiresAt: row.expires_at, createdAt: row.created_at };
 }
 
 export async function revokeSessionToken(db: D1Database, token: string): Promise<void> {
@@ -137,4 +139,17 @@ export async function sweepExpired(db: D1Database): Promise<void> {
     db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM invitations WHERE expires_at < ?").bind(t),
   ]);
+}
+
+/** A deletion needs a sign-in this recent. */
+export const FRESH_SIGN_IN_MS = 10 * 60_000;
+
+/**
+ * Throws `reauth_required` unless the session was created within the last 10 minutes and,
+ * when `passkey` is set, was created by a passkey. Used before irreversible actions.
+ */
+export function assertFreshSession(s: Pick<SessionInfo, "method" | "createdAt">, opts: { passkey: boolean }): void {
+  if (now() - s.createdAt > FRESH_SIGN_IN_MS || (opts.passkey && s.method !== "passkey")) {
+    throw reauthRequired(opts.passkey ? "Sign in again with your passkey to confirm this action." : "Sign in again to confirm this action.");
+  }
 }

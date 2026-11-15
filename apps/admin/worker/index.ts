@@ -7,14 +7,14 @@ import { Hono, type Context } from "hono";
 import { etag } from "hono/etag";
 import { z } from "zod";
 import {
-  addDomain, addOperator, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
+  addDomain, addOperator, assertFreshSession, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
   deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, isOperatorEmail, listDomains, listJobs,
-  listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, markTenantDeleting, normalizeEmail, operatorCount, parse, putSetting,
+  listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, operatorCount, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
-  tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
+  requestTenantDeletion, tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
 } from "@rose/core/platform";
-import { forbidden, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
+import { conflict, forbidden, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
 import { setupStatus } from "./setup";
 
 const COOKIE = "rose_admin";
@@ -25,6 +25,8 @@ interface Operator {
   email: string;
   name: string;
   role: OperatorRole;
+  method: string;
+  createdAt: number;
 }
 type Env = { Bindings: PlatformWorkerEnv; Variables: BaseVars & { operator: Operator } };
 type Ctx = Context<Env>;
@@ -115,7 +117,7 @@ app.route("/api/auth", createAuthRoutes(async (c) => realm(c as unknown as Ctx))
 app.use("/api/*", async (c, next) => {
   const s = await currentSession(c, { scope: SCOPE, cookie: COOKIE });
   if (!s) throw unauthorized();
-  c.set("operator", { userId: s.userId, email: s.email, name: s.name, role: s.role as OperatorRole });
+  c.set("operator", { userId: s.userId, email: s.email, name: s.name, role: s.role as OperatorRole, method: s.method, createdAt: s.createdAt });
   await next();
 });
 
@@ -124,6 +126,11 @@ const audit = (c: Ctx, action: string, target?: string | null, meta?: unknown) =
   writePlatformAudit(c.env.DB, { actor: c.get("operator").email, action, target, meta, ip: clientIp(c) });
 const ownerOnly = (c: Ctx) => {
   if (c.get("operator").role !== "owner") throw forbidden("Only a platform owner can do that.");
+};
+/** Irreversible tenant actions need a platform owner who signed in with a passkey in the last 10 minutes. */
+const freshOwnerOnly = (c: Ctx) => {
+  ownerOnly(c);
+  assertFreshSession(c.get("operator"), { passkey: true });
 };
 const tenantOr404 = async (c: Ctx, id: string) => {
   const t = await getTenant(c.env.DB, id);
@@ -151,7 +158,7 @@ app.get("/api/overview", async (c) => {
 // Tenants
 const statusFilter = (c: Ctx) => {
   const s = c.req.query("status");
-  return s === "active" || s === "suspended" || s === "deleting" ? s : "";
+  return s === "active" || s === "suspended" || s === "pending_deletion" || s === "deleting" ? s : "";
 };
 app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), status: statusFilter(c) })));
 
@@ -170,7 +177,7 @@ app.post("/api/tenants/bulk", async (c) => {
     z.object({
       action: z.enum(["suspend", "resume"]),
       ids: z.array(z.string().max(40)).max(100).optional(),
-      filter: z.object({ q: searchTermSchema, status: z.enum(["", "active", "suspended", "deleting"]).default("") }).optional(),
+      filter: z.object({ q: searchTermSchema, status: z.enum(["", "active", "suspended", "pending_deletion", "deleting"]).default("") }).optional(),
     }),
   );
   const target = body.ids?.length ? { ids: body.ids } : body.filter ? { filter: body.filter } : null;
@@ -181,13 +188,24 @@ app.post("/api/tenants/bulk", async (c) => {
 });
 
 app.post("/api/tenants/:id/delete", async (c) => {
+  freshOwnerOnly(c);
   const t = await tenantOr404(c, c.req.param("id"));
   const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
   if (confirm !== t.slug) throw invalid("Type the tenant address to confirm.", { confirm: "Does not match." });
-  await markTenantDeleting(c.env.DB, t.id);
-  const job = await enqueueJob(c.env, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email });
-  await audit(c, "tenant.delete.requested", t.id, { slug: t.slug });
-  return c.json({ jobId: job.id }, 202);
+  const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
+  // The purge job is held back until the grace period ends; the handler re-checks the deadline.
+  const job = await enqueueJob(c.env, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email, delayMs: Math.max(0, deleteAfter - Date.now()) });
+  await audit(c, "tenant.delete.requested", t.id, { slug: t.slug, deleteAfter });
+  return c.json({ jobId: job.id, deleteAfter }, 202);
+});
+
+app.post("/api/tenants/:id/delete/cancel", async (c) => {
+  freshOwnerOnly(c);
+  const t = await tenantOr404(c, c.req.param("id"));
+  const before = t.delete_after;
+  if (!(await cancelTenantDeletion(c.env.DB, t.id))) throw conflict("This tenant is not waiting to be deleted.");
+  await audit(c, "tenant.delete.cancelled", t.id, { slug: t.slug, deleteAfter: before });
+  return c.json({ ok: true });
 });
 
 app.get("/api/tenants/:id/members", async (c) => {

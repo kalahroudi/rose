@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
-  api, Badge, Button, Callout, CopyChip, DataTable, Drawer, errorMessage, ExternalLink, Field, Flow, FormDrawer, Gate, Input, Page, Select, Time,
+  api, ApiError, Badge, Button, Callout, CopyChip, DataTable, Drawer, errorMessage, ExternalLink, Field, Flow, FormDrawer, Gate, Input, Page, Select, Time,
   useConfirm, useListState, useToast, type Column, type HelpContent, type PageData, type Selection, type Tone,
 } from "@rose/ui";
 import { useState } from "react";
@@ -11,8 +11,8 @@ import { useInvalidate } from "../invalidation";
 import type { Domain, Member, Tenant, TenantStatus } from "../types";
 import { AddDomainDrawer, domainTone } from "./Domains";
 
-export const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", deleting: "bad" };
-export const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", deleting: "Deleting" };
+export const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", pending_deletion: "warn", deleting: "bad" };
+export const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", pending_deletion: "Pending deletion", deleting: "Deleting" };
 
 function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
   const boot = useSession();
@@ -47,7 +47,7 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
     if (!t) return;
     const ok = await confirm.danger({
       title: "Delete this tenant?",
-      body: <>This permanently destroys <strong>{t.name}</strong>: its private database, its encryption key, members and domains. It can not be undone.</>,
+      body: <><strong>{t.name}</strong> is closed immediately: nobody can sign in. Its data is retained for 48 hours for safety, then automatically and permanently destroyed: private database, encryption key, members and domains. A platform owner can cancel during those 48 hours.</>,
       name: t.slug,
       confirmLabel: "Delete tenant",
     });
@@ -55,11 +55,41 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
     try {
       await api(`/api/tenants/${t.id}/delete`, { body: { confirm: t.slug } });
       await invalidate("tenant.delete");
-      toast.success(`Deleting ${t.name}. You will be notified when it is done.`);
+      toast.success(`${t.name} is closed and will be destroyed in 48 hours unless you cancel.`);
       onClose();
     } catch (err) {
-      toast.error(errorMessage(err));
+      await reauthPrompt(err);
     }
+  };
+
+  const cancelDelete = async () => {
+    if (!t) return;
+    const ok = await confirm({ title: `Cancel the deletion of ${t.name}?`, body: "The tenant becomes active again and its people can sign in. Nothing was destroyed.", confirmLabel: "Cancel deletion" });
+    if (!ok) return;
+    try {
+      await api(`/api/tenants/${t.id}/delete/cancel`, { method: "POST", body: {} });
+      await invalidate("tenant.status");
+      toast.success(`Deletion of ${t.name} cancelled`);
+    } catch (err) {
+      await reauthPrompt(err);
+    }
+  };
+
+  /** Deleting or cancelling needs a passkey sign-in from the last 10 minutes. */
+  const reauthPrompt = async (err: unknown) => {
+    if (err instanceof ApiError && err.code === "reauth_required") {
+      const again = await confirm({
+        title: "Sign in again with your passkey",
+        body: "Deleting a tenant, or cancelling a deletion, needs a passkey sign-in from the last 10 minutes. Sign out, sign in with your passkey, then try again.",
+        confirmLabel: "Sign out",
+      });
+      if (again) {
+        await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+        window.location.reload();
+      }
+      return;
+    }
+    toast.error(errorMessage(err));
   };
 
   return (
@@ -71,9 +101,11 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
         title={t?.name ?? "Tenant"}
         subtitle={t ? <Badge tone={statusTone[t.status]}>{statusLabel[t.status]}</Badge> : null}
         footer={
-          t && t.status !== "deleting" ? (
+          t && t.status === "pending_deletion" ? (
+            boot.session.role === "owner" ? <Button icon="play" onClick={() => void cancelDelete()}>Cancel deletion</Button> : undefined
+          ) : t && t.status !== "deleting" ? (
             <>
-              <Button variant="ghost" icon="trash" onClick={() => void remove()}>Delete</Button>
+              <Button variant="ghost" icon="trash" onClick={() => void remove()} disabled={boot.session.role !== "owner"} title={boot.session.role !== "owner" ? "Only a platform owner can delete a tenant." : undefined}>Delete</Button>
               <span className="grow" />
               {t.status === "active" ? <Button icon="pause" onClick={() => void setStatus("suspend")}>Suspend</Button> : <Button icon="play" onClick={() => void setStatus("resume")}>Resume</Button>}
               <Button icon="edit" onClick={() => setEditing(true)}>Edit</Button>
@@ -86,6 +118,7 @@ function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
             const url = tenantUrl(boot, t!.slug);
             return (
               <>
+                {t!.status === "pending_deletion" ? <Callout tone="warn">Deletion is pending. Sessions are cut and nobody can sign in. The data is kept until <strong>{t!.delete_after ? new Date(t!.delete_after).toLocaleString() : "the end of the 48-hour period"}</strong>, then destroyed automatically. A platform owner can cancel before then.</Callout> : null}
                 {t!.status === "deleting" ? <Callout tone="warn">This tenant is being deleted. Its sessions are already cut; the remaining data is destroyed by a background task.</Callout> : null}
                 <dl className="dl">
                   <dt>Address</dt>
@@ -184,14 +217,15 @@ export function TenantsPage() {
   const help: HelpContent = {
     what: "Everyone you serve. Customers create their own workspace by signing up at your app's main address. Open a tenant to see its members and domains, or suspend and delete tenants.",
     diagram: {
-      node: <Flow title="Tenant lifecycle" steps={[{ label: "Active", sub: "people can sign in", tone: "ok" }, { label: "Suspended", sub: "access paused", via: "suspend" }, { label: "Deleting", sub: "sessions cut", via: "delete", tone: "bad" }, { label: "Gone", sub: "data and key destroyed", via: "task" }]} />,
-      caption: "Suspending is reversible. Deleting is not: the private database and its encryption key are destroyed.",
+      node: <Flow title="Tenant lifecycle" steps={[{ label: "Active", sub: "people can sign in", tone: "ok" }, { label: "Suspended", sub: "access paused", via: "suspend" }, { label: "Pending deletion", sub: "closed, kept 48 hours", via: "delete", tone: "bad" }, { label: "Gone", sub: "data and key destroyed", via: "automatic" }]} />,
+      caption: "Suspending is reversible. A deletion can be cancelled by a platform owner for 48 hours; after that the private database and its encryption key are destroyed.",
     },
-    terms: terms("tenant", "address", "owner", "suspended", "deleting", "privateDatabase"),
+    terms: terms("tenant", "address", "owner", "suspended", "pendingDeletion", "deleting", "privateDatabase"),
     why: [
       { q: "Why can I not create a tenant for a customer?", a: "Tenants are created only by self-serve sign-up. The person who signs up proves they control their mailbox and becomes the owner, so no operator ever chooses who owns a workspace." },
       { q: "Why can the address not be changed?", a: "Browsers scope sign-in cookies and passkeys to the exact host name. Keeping the address fixed is what stops one tenant's session from ever being valid on another tenant's site." },
-      { q: "Why must I type the name to delete?", a: "Deletion destroys the tenant's database and encryption key, so there is no undo and no backup to restore from. Typing the name makes an accidental click impossible." },
+      { q: "Why must I type the name to delete?", a: "Deletion ends in the destruction of the tenant's database and encryption key, with no backup to restore from. Typing the name makes an accidental click impossible." },
+      { q: "Why 48 hours, and why a fresh passkey sign-in?", a: "The delay gives a platform owner time to cancel a mistaken or malicious request. Only platform owners can delete or cancel, and only within 10 minutes of signing in with a passkey, so a stolen or forgotten session can not do it." },
     ],
     tasks: [
       { label: "Suspend several tenants at once", detail: "Tick rows, or tick the header and choose “Select all matching”, then Suspend." },
@@ -246,6 +280,7 @@ export function TenantsPage() {
                 <option value="">All statuses</option>
                 <option value="active">Active</option>
                 <option value="suspended">Suspended</option>
+                <option value="pending_deletion">Pending deletion</option>
                 <option value="deleting">Deleting</option>
               </Select>
             }

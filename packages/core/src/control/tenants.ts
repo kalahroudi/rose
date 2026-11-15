@@ -3,7 +3,9 @@ import { conflict, invalid, notFound } from "../errors";
 import { likePattern, offsetOf, orderBy, type ListQuery, type Page } from "../http/pagination";
 import { newId, now } from "../ids";
 
-export type TenantStatus = "active" | "suspended" | "deleting";
+export type TenantStatus = "active" | "suspended" | "pending_deletion" | "deleting";
+/** How long a deleted tenant is kept (unreachable, restorable) before its data is destroyed. */
+export const DELETE_GRACE_MS = 48 * 3_600_000;
 export interface TenantRow {
   id: string;
   slug: string;
@@ -12,6 +14,8 @@ export interface TenantRow {
   plan: string;
   created_at: number;
   updated_at: number;
+  /** Epoch ms after which the purge may run; set while pending_deletion/deleting. */
+  delete_after: number | null;
 }
 
 /** Slugs that would collide with platform hosts or look official. */
@@ -39,7 +43,7 @@ export async function createTenant(db: D1Database, input: { name: string; slug: 
   const name = input.name.trim();
   if (!name || name.length > 80) throw invalid("Check the workspace name.", { name: "Use 1–80 characters." });
   const t = now();
-  const row: TenantRow = { id: newId("tn"), slug, name, status: "active", plan: input.plan ?? "free", created_at: t, updated_at: t };
+  const row: TenantRow = { id: newId("tn"), slug, name, status: "active", plan: input.plan ?? "free", created_at: t, updated_at: t, delete_after: null };
   try {
     await db
       .prepare("INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)")
@@ -124,12 +128,12 @@ export async function setTenantStatus(
   target: { ids: string[] } | { filter: Pick<TenantListFilter, "q" | "status"> },
   status: "active" | "suspended",
 ): Promise<number> {
-  // A tenant being deleted can never be revived by a bulk action.
+  // A tenant being deleted (pending or in progress) can never be revived by a bulk action.
   if ("ids" in target) {
     if (target.ids.length === 0) return 0;
     const marks = target.ids.map(() => "?").join(",");
     const r = await db
-      .prepare(`UPDATE tenants SET status = ?, updated_at = ? WHERE status != 'deleting' AND id IN (${marks})`)
+      .prepare(`UPDATE tenants SET status = ?, updated_at = ? WHERE status NOT IN ('pending_deletion', 'deleting') AND id IN (${marks})`)
       .bind(status, now(), ...target.ids)
       .run();
     return r.meta.changes;
@@ -137,21 +141,56 @@ export async function setTenantStatus(
   const w = tenantWhere(target.filter);
   const r = await db
     .prepare(
-      `UPDATE tenants SET status = ?, updated_at = ? WHERE status != 'deleting' AND id IN (SELECT t.id FROM tenants t ${w.sql})`,
+      `UPDATE tenants SET status = ?, updated_at = ? WHERE status NOT IN ('pending_deletion', 'deleting') AND id IN (SELECT t.id FROM tenants t ${w.sql})`,
     )
     .bind(status, now(), ...w.args)
     .run();
   return r.meta.changes;
 }
 
-export async function markTenantDeleting(db: D1Database, id: string): Promise<void> {
+/**
+ * Start the deletion grace period: the tenant stops serving, every session is cut, and its
+ * data is kept until `delete_after` so a mistake can be undone. Returns the purge time.
+ * Asking again while pending changes nothing (the original deadline stands).
+ */
+export async function requestTenantDeletion(db: D1Database, id: string): Promise<number> {
+  const cur = await getTenant(db, id);
+  if (!cur || cur.status === "deleting") throw notFound();
+  if (cur.status === "pending_deletion" && cur.delete_after) return cur.delete_after;
+  const t = now();
+  const deleteAfter = t + DELETE_GRACE_MS;
   await db.batch([
-    db.prepare("UPDATE tenants SET status = 'deleting', updated_at = ? WHERE id = ?").bind(now(), id),
-    // Cut every live session immediately; the data purge follows as a background job.
+    db.prepare("UPDATE tenants SET status = 'pending_deletion', delete_after = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'suspended')").bind(deleteAfter, t, id),
+    // Cut every live session immediately.
     db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
     // Work the tenant queued must not outlive it.
     db.prepare("DELETE FROM jobs WHERE scope = ?").bind(id),
   ]);
+  return deleteAfter;
+}
+
+/** Undo a pending deletion. Returns false when the tenant is not pending (or the purge already began). */
+export async function cancelTenantDeletion(db: D1Database, id: string): Promise<boolean> {
+  const r = await db
+    .prepare("UPDATE tenants SET status = 'active', delete_after = NULL, updated_at = ? WHERE id = ? AND status = 'pending_deletion'")
+    .bind(now(), id)
+    .run();
+  if (r.meta.changes === 0) return false;
+  await db.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?").bind(id).run();
+  return true;
+}
+
+/**
+ * Move a tenant whose grace period has ended to 'deleting'. The only way into that state:
+ * it refuses (false) unless the tenant is pending and `delete_after` has passed.
+ */
+export async function beginTenantPurge(db: D1Database, id: string): Promise<boolean> {
+  const t = now();
+  const r = await db
+    .prepare("UPDATE tenants SET status = 'deleting', updated_at = ? WHERE id = ? AND status = 'pending_deletion' AND delete_after IS NOT NULL AND delete_after <= ?")
+    .bind(t, id, t)
+    .run();
+  return r.meta.changes > 0;
 }
 
 /** Remove every control-plane row of a tenant. Called by the purge job after tenant storage is destroyed. */
@@ -172,7 +211,7 @@ export async function deleteTenantRecords(db: D1Database, id: string): Promise<v
 
 export async function tenantCounts(db: D1Database): Promise<Record<TenantStatus | "total", number>> {
   const rows = await db.prepare("SELECT status, COUNT(*) AS n FROM tenants GROUP BY status").all<{ status: TenantStatus; n: number }>();
-  const out = { active: 0, suspended: 0, deleting: 0, total: 0 };
+  const out = { active: 0, suspended: 0, pending_deletion: 0, deleting: 0, total: 0 };
   for (const r of rows.results) {
     out[r.status] = r.n;
     out.total += r.n;

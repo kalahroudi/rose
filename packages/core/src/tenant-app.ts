@@ -6,12 +6,13 @@ import { createAuthRoutes, checkCode, currentSession, requestCode, startSession,
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } from "./control/jobs";
-import { consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
-import { createTenant, deleteTenantRecords, getTenant, markTenantDeleting, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
+import { assertFreshSession, consumeHandoff, createHandoff, sweepExpired } from "./control/sessions";
+import { createTenant, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
   addMembership, changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
 } from "./control/users";
+import { now } from "./ids";
 import { sendEmail } from "./email";
 import { isDev, type TenantWorkerEnv } from "./env";
 import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
@@ -56,7 +57,14 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
     "tenant.purge": async (env, _job, payload) => {
       const tenantId = String(payload.tenantId ?? "");
       const row = await getTenant(env.DB, tenantId);
-      if (row && row.status !== "deleting") throw new Error("Tenant is not marked for deletion");
+      if (row) {
+        // Never purge early: the job and the hourly sweep both come through here, so this
+        // is the single place that enforces the grace period.
+        if (row.status !== "pending_deletion" && row.status !== "deleting") return { done: true, result: { skipped: "workspace is not scheduled for deletion" } };
+        const t = now();
+        if (row.delete_after !== null && row.delete_after > t) return { done: false, retryInMs: Math.min(row.delete_after - t, 3_600_000), note: "Waiting for the deletion grace period to end" };
+        if (row.status === "pending_deletion" && !(await beginTenantPurge(env.DB, tenantId))) return { done: false, retryInMs: 60_000, note: "Deletion is not due yet" };
+      }
       await purgeTenantStorage(env, tenantId);
       await deleteTenantRecords(env.DB, tenantId);
       invalidateHostCache();
@@ -179,6 +187,7 @@ export function createTenantApp(options: TenantAppOptions) {
   const activeTenant = (c: Ctx): TenantRow => {
     const host = c.get("host");
     if (host.kind !== "tenant" || host.tenant.status === "deleting") throw notFound();
+    if (host.tenant.status === "pending_deletion") throw forbidden("This workspace is scheduled for deletion.");
     if (host.tenant.status !== "active") throw forbidden("This workspace is suspended. Contact support.");
     return host.tenant;
   };
@@ -190,7 +199,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (host.kind === "root") return c.json({ ...base, host: "root" });
     if (host.kind === "unknown" || host.tenant.status === "deleting") return c.json({ ...base, host: "unknown" });
     const t = host.tenant;
-    const tenant = { name: t.name, slug: t.slug, status: t.status };
+    const tenant = { name: t.name, slug: t.slug, status: t.status, ...(t.status === "pending_deletion" ? { deleteAfter: t.delete_after } : {}) };
     if (t.status !== "active") return c.json({ ...base, host: "tenant", tenant, session: null });
     const s = await currentSession(c, realmFor(c, t));
     if (!s) return c.json({ ...base, host: "tenant", tenant, session: null });
@@ -278,7 +287,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (authz !== undefined) {
       // API keys bypass the session query, so re-check tenant status against the database here.
       const fresh = await getTenant(c.env.DB, row.id);
-      if (fresh?.status !== "active") throw forbidden("This workspace is suspended.");
+      if (fresh?.status !== "active") throw forbidden(fresh?.status === "pending_deletion" ? "This workspace is scheduled for deletion." : "This workspace is suspended.");
       const key = /^Bearer\s+\S/.test(authz) ? await verifyApiKey(db, authz.replace(/^Bearer\s+/, "").trim()) : null;
       if (key) actor = { type: "api_key", id: key.id, label: `key:${key.name}`, role: key.role };
       // Only failed attempts spend rate-limit budget, so legitimate API traffic is never throttled by it.
@@ -400,15 +409,21 @@ export function createTenantApp(options: TenantAppOptions) {
   });
   app.post("/api/workspace/delete", async (c) => {
     const actor = need(c, "workspace:delete");
+    // API keys never delete a workspace: the person must be signed in, recently.
     if (actor.type !== "user") throw forbidden("Only a signed-in owner can delete a workspace.");
     const t = c.get("tenant");
     const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
     if (confirm !== t.slug) throw invalid("Type the workspace address to confirm.", { confirm: "Does not match." });
-    await markTenantDeleting(c.env.DB, t.id);
+    const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
+    if (!session) throw unauthorized();
+    // A recent sign-in is required; people who registered a passkey must have used it.
+    const hasPasskey = (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0;
+    assertFreshSession(session, { passkey: hasPasskey });
+    const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
     invalidateHostCache();
-    await enqueueJob(c.env, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label });
-    await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner" }, ip: clientIp(c) });
-    return c.json({ ok: true }, 202);
+    await enqueueJob(c.env, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label, delayMs: Math.max(0, deleteAfter - now()) });
+    await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner", deleteAfter }, ip: clientIp(c) });
+    return c.json({ ok: true, deleteAfter }, 202);
   });
 
   // ── Modules ───────────────────────────────────────────────────────────────────

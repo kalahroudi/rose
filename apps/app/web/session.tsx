@@ -9,7 +9,7 @@ export interface Workspace {
   /** UI hint only: the server enforces every permission again. */
   can(permission: string): boolean;
   /** Called after the workspace has been scheduled for deletion. */
-  markDeleted(): void;
+  markDeleted(deleteAfter: number | null): void;
 }
 
 export const WorkspaceContext = createContext<Workspace | null>(null);
