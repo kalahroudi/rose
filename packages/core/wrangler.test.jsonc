@@ -8,7 +8,7 @@
   "durable_objects": { "bindings": [{ "name": "TENANT_DO", "class_name": "TenantDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO"] }],
   "vars": {
-    "ENVIRONMENT": "test",
+    "ENVIRONMENT": "development",
     "APP_NAME": "Rose",
     "APP_BASE_DOMAIN": "rose.test",
     "ROSE_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",

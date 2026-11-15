@@ -94,7 +94,7 @@ migrations the next time it starts after a deploy.
 |---|---|---|---|
 | `ROSE_MASTER_KEY` | both (different values) | secret | base64 of 32 random bytes; root of key derivation |
 | `ROSE_MASTER_KEY_PREVIOUS` | both | secret, optional | Old key during rotation ([encryption.md](encryption.md)) |
-| `ENVIRONMENT` | both | var | `production` in deployed workers. Anything else enables on-screen sign-in codes |
+| `ENVIRONMENT` | both | var | Exactly `production` in deployed workers (`development` locally). Any other value, including missing or `staging`, makes the worker refuse to serve (HTTP 500; jobs and cron fail) instead of enabling on-screen sign-in codes |
 | `APP_BASE_DOMAIN` | both | var | Tenants live at `<slug>.<this>` |
 | `APP_NAME` | both | var | Product name in UI, emails, passkey prompts |
 | `EMAIL_PROVIDER`, `EMAIL_FROM`, `RESEND_API_KEY` | both | var, var, secret | Mail delivery |

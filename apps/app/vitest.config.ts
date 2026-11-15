@@ -13,7 +13,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("../../packages/core/migrations"),
-          ENVIRONMENT: "test",
+          ENVIRONMENT: "development",
           EMAIL_PROVIDER: "console",
           APP_BASE_DOMAIN: "rose.test",
           ROSE_MASTER_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",

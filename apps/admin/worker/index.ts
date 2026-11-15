@@ -14,7 +14,7 @@ import {
   tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
 } from "@rose/core/platform";
-import { forbidden, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
+import { assertEnvironment, forbidden, guardFetch, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
 import { setupStatus } from "./setup";
 
 const COOKIE = "rose_admin";
@@ -72,6 +72,10 @@ async function tick(env: PlatformWorkerEnv): Promise<void> {
 
 const app = new Hono<Env>();
 app.onError(errorHandler);
+app.use("*", async (c, next) => {
+  try { assertEnvironment(c.env); } catch { return new Response("Server misconfigured", { status: 500, headers: { "Cache-Control": "no-store" } }); }
+  await next();
+});
 app.use("*", requestContext as never);
 app.use("/api/*", csrfGuard);
 app.use("/api/*", async (c, next) => {
@@ -306,9 +310,9 @@ app.all("/api/*", () => {
 });
 
 export default {
-  fetch: (request: Request, env: PlatformWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  fetch: guardFetch((request: Request, env: PlatformWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx)),
   /** Jobs start as soon as they are queued. */
-  queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: PlatformWorkerEnv) => runJobMessages(env, jobHandlers, batch),
+  queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: PlatformWorkerEnv) => { assertEnvironment(env); return runJobMessages(env, jobHandlers, batch); },
   /** Hourly: expiry sweep, plus a safety net for jobs whose queue message was lost. */
-  scheduled: async (_event: unknown, env: PlatformWorkerEnv) => tick(env),
+  scheduled: async (_event: unknown, env: PlatformWorkerEnv) => { assertEnvironment(env); return tick(env); },
 };

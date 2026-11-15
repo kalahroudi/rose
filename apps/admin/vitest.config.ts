@@ -13,7 +13,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("../../packages/core/migrations"),
-          ENVIRONMENT: "test",
+          ENVIRONMENT: "development",
           EMAIL_PROVIDER: "console",
           APP_BASE_DOMAIN: "rose.test",
           BOOTSTRAP_OPERATOR_EMAIL: "root@example.com",
