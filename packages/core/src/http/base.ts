@@ -105,10 +105,11 @@ export const clientIp = (c: Context): string | null => c.req.header("CF-Connecti
 export function requesterKey(ip: string | null): string {
   if (!ip) return "unknown";
   const raw = ip.trim().split("%")[0]!.toLowerCase();
+  if (!raw) return "unknown";
   if (!raw.includes(":")) return raw;
   let tail: number[] = [];
   let text = raw;
-  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
+  const v4 = /(?<=:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
   if (v4) {
     const o = v4.slice(1).map(Number);
     if (o.some((n) => n > 255)) return raw;

@@ -55,21 +55,16 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
 export async function verifyLoginCode(db: D1Database, masterKey: string, scope: string, email: string, code: string, requester: string): Promise<boolean> {
   const t = now();
   const who = await requesterHash(masterKey, requester);
-  const live = "email = ? AND scope = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < ?";
   type Row = { id: string; code_hash: string };
-  const own = await db
-    .prepare(`SELECT id, code_hash FROM login_codes WHERE ${live} AND requester = ? ORDER BY created_at DESC LIMIT 1`)
-    .bind(email, scope, t, MAX_ATTEMPTS, who)
-    .first<Row>();
-  // The newest code overall, only if still live: once it is dead, older codes of other requesters stay invalid
-  // (so one requester's exhausted guesses can not spill onto another requester's code).
-  const newest = await db
-    .prepare(
-      `SELECT id, code_hash FROM (SELECT id, code_hash, consumed_at, expires_at, attempts FROM login_codes WHERE email = ? AND scope = ? ORDER BY created_at DESC LIMIT 1)
-       WHERE consumed_at IS NULL AND expires_at > ? AND attempts < ?`,
-    )
-    .bind(email, scope, t, MAX_ATTEMPTS)
-    .first<Row>();
+  // Take the newest row first and only then require it to be live: once the newest code is consumed or
+  // exhausted, older codes stay invalid (no resurrection, and one requester's guesses can not spill onto
+  // another requester's older code). rowid breaks ties between codes issued in the same millisecond.
+  const newestLive = (filter: string) =>
+    `SELECT id, code_hash FROM (SELECT id, code_hash, consumed_at, expires_at, attempts FROM login_codes
+       WHERE email = ? AND scope = ?${filter} ORDER BY created_at DESC, rowid DESC LIMIT 1)
+     WHERE consumed_at IS NULL AND expires_at > ? AND attempts < ?`;
+  const own = await db.prepare(newestLive(" AND requester = ?")).bind(email, scope, who, t, MAX_ATTEMPTS).first<Row>();
+  const newest = await db.prepare(newestLive("")).bind(email, scope, t, MAX_ATTEMPTS).first<Row>();
   const candidates = [own, newest].filter((r, i, all): r is Row => !!r && all.findIndex((x) => x?.id === r.id) === i);
   const given = await codeHash(masterKey, scope, email, code);
   let matched: Row | null = null;

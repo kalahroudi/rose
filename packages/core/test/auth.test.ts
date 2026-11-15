@@ -106,6 +106,28 @@ describe("email sign-in codes", () => {
     expect(await verifyLoginCode(env.DB, k, "r2", "x@example.com", b2, "A")).toBe(true);
   });
 
+  it("an older own code never becomes valid again once the newer one is used up", async () => {
+    const k = env.ROSE_MASTER_KEY;
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    const old1 = await issueLoginCode(env.DB, k, "r4", "z@example.com", "A");
+    await tick();
+    const new1 = await issueLoginCode(env.DB, k, "r4", "z@example.com", "A");
+    expect(await verifyLoginCode(env.DB, k, "r4", "z@example.com", new1, "A")).toBe(true);
+    if (old1 !== new1) expect(await verifyLoginCode(env.DB, k, "r4", "z@example.com", old1, "A")).toBe(false);
+    const old2 = await issueLoginCode(env.DB, k, "r5", "z@example.com", "A");
+    await tick();
+    const new2 = await issueLoginCode(env.DB, k, "r5", "z@example.com", "A");
+    const wrong = new2 === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 5; i++) await verifyLoginCode(env.DB, k, "r5", "z@example.com", wrong === old2 ? "222222" : wrong, "A");
+    expect(await verifyLoginCode(env.DB, k, "r5", "z@example.com", old2, "A")).toBe(false);
+  });
+
+  it("rejects malformed addresses instead of normalising them to another key", () => {
+    expect(requesterKey("::ffff:1234.2.3.4")).toBe("::ffff:1234.2.3.4");
+    expect(requesterKey("2001:db8:1:2::abc1.2.3.4")).toBe("2001:db8:1:2::abc1.2.3.4");
+    expect(requesterKey("   ")).toBe("unknown");
+  });
+
   it("buckets IPv6 to /64 and maps IPv4-mapped to IPv4", () => {
     expect(requesterKey("203.0.113.9")).toBe("203.0.113.9");
     expect(requesterKey(null)).toBe("unknown");
