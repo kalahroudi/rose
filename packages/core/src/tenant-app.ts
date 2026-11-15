@@ -14,7 +14,7 @@ import {
 } from "./control/users";
 import { now } from "./ids";
 import { sendEmail } from "./email";
-import { isDev, type TenantWorkerEnv } from "./env";
+import { assertEnvironment, guardFetch, isDev, type TenantWorkerEnv } from "./env";
 import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
 import { forwardToUpstream } from "./gateway";
 import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";
@@ -112,11 +112,11 @@ export function createTenantWorker(options: TenantAppOptions) {
   const app = createTenantApp(options);
   return {
     app,
-    fetch: (request: Request, env: TenantWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+    fetch: guardFetch((request: Request, env: TenantWorkerEnv, ctx: ExecutionContext) => app.fetch(request, env, ctx)),
     /** Jobs start as soon as they are queued. */
-    queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: TenantWorkerEnv) => runJobMessages(env, tenantJobHandlers(options.modules), batch),
+    queue: async (batch: { messages: readonly { body: unknown; ack(): void }[] }, env: TenantWorkerEnv) => { assertEnvironment(env); return runJobMessages(env, tenantJobHandlers(options.modules), batch); },
     /** Hourly: expiry sweep, plus a safety net for jobs whose queue message was lost. */
-    scheduled: async (_event: unknown, env: TenantWorkerEnv, _ctx: unknown) => tenantTick(env, options.modules),
+    scheduled: async (_event: unknown, env: TenantWorkerEnv, _ctx: unknown) => { assertEnvironment(env); return tenantTick(env, options.modules); },
   };
 }
 
@@ -127,6 +127,10 @@ export function createTenantApp(options: TenantAppOptions) {
 
   const app = new Hono<Env>();
   app.onError(errorHandler);
+  app.use("*", async (c, next) => {
+    try { assertEnvironment(c.env); } catch { return new Response("Server misconfigured", { status: 500, headers: { "Cache-Control": "no-store" } }); }
+    await next();
+  });
   app.use("*", requestContext as never);
   app.use("/api/*", csrfGuard);
   app.use("/svc/*", csrfGuard);

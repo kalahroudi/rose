@@ -30,7 +30,7 @@ Properties (`control/otp.ts`):
 - 5 wrong guesses kill a code; at most 5 codes per address per scope per 15 minutes.
 - An attempt is spent *before* comparison, so parallel guesses can not exceed the budget.
 
-In development and tests (`ENVIRONMENT` ≠ `production`) the response also contains
+In development and tests (`ENVIRONMENT=development`) the response also contains
 `devCode` and the mail is printed to the terminal. In production, the `console` email
 provider refuses to run.
 

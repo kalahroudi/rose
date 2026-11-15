@@ -14,5 +14,5 @@ export { AppError, badRequest, conflict, forbidden, invalid, misconfigured, notF
 export { listQuerySchema, likePattern, likePrefix, offsetOf, orderBy, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH, searchTermSchema, type ListQuery, type Page } from "./http/pagination";
 export { newId, now, randomToken } from "./ids";
 export type { CoreEnv, PlatformWorkerEnv, TenantWorkerEnv, RateLimiter } from "./env";
-export { isDev } from "./env";
+export { isDev, assertEnvironment, guardFetch } from "./env";
 export { verifyJwtHs256, signJwtHs256 } from "./crypto";

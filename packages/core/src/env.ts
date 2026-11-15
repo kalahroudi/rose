@@ -10,7 +10,7 @@ export interface RateLimiter {
 export interface CoreEnv {
   /** Control-plane database: tenants, identities, sessions. Never holds tenant business data. */
   DB: D1Database;
-  ENVIRONMENT: "development" | "test" | "production";
+  ENVIRONMENT: "development" | "production";
   /** base64 of 32 random bytes. Root of all key derivation for this worker. */
   ROSE_MASTER_KEY: string;
   /** Set during rotation so data wrapped under the old key can still be opened. */
@@ -44,4 +44,28 @@ export interface PlatformWorkerEnv extends CoreEnv {
   APP_URL_TEMPLATE?: string;
 }
 
-export const isDev = (env: Pick<CoreEnv, "ENVIRONMENT">): boolean => env.ENVIRONMENT !== "production";
+/** Development behaviour (on-screen sign-in codes, optional rate limiter, HTTP sessions) only for the exact value. */
+export const isDev = (env: Pick<CoreEnv, "ENVIRONMENT">): boolean => env.ENVIRONMENT === "development";
+
+/**
+ * Fail closed: the only accepted values are exactly "development" and "production".
+ * Call at every worker entry point (fetch, queue, scheduled). The message never echoes the value.
+ */
+export function assertEnvironment(env: Pick<CoreEnv, "ENVIRONMENT">): void {
+  const v: unknown = env?.ENVIRONMENT;
+  if (v !== "development" && v !== "production") throw new EnvironmentMisconfigured();
+}
+
+export class EnvironmentMisconfigured extends Error {
+  constructor() {
+    super("Server misconfigured: ENVIRONMENT must be exactly 'development' or 'production'.");
+  }
+}
+
+/** Wraps a worker's fetch so a bad ENVIRONMENT returns a generic 500 and does nothing else. */
+export const guardFetch = <E extends Pick<CoreEnv, "ENVIRONMENT">, A extends unknown[], R>(
+  fn: (request: Request, env: E, ...rest: A) => R | Promise<R>,
+) => async (request: Request, env: E, ...rest: A): Promise<R | Response> => {
+  try { assertEnvironment(env); } catch { return new Response("Server misconfigured", { status: 500, headers: { "Cache-Control": "no-store" } }); }
+  return fn(request, env, ...rest);
+};
