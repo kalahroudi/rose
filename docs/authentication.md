@@ -26,7 +26,7 @@ Properties (`control/otp.ts`):
 
 - Stored as `HMAC(key derived from the master key, scope ‖ email ‖ code)`: a database
   dump can not be brute-forced offline, and a code for one tenant is useless on another.
-- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A requester with no code of their own is checked against the newest code for the address.
+- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A code is also accepted if it is the newest live code for the address (for a user whose client address changed); each verify spends at most one guess on each of those two candidates. The requester is the client IPv4 address or the IPv6 /64 prefix (IPv4-mapped IPv6 counts as IPv4), so one host rotating addresses inside its prefix is one requester. Residual risk: an actor with 4 or more distinct /64 prefixes or IPv4 addresses can still exhaust the 20 per 15 minutes per-address cap and delay the user; accepted to stop mail-bombing.
 - 5 wrong guesses kill a code; at most 5 codes per address, scope and requester per 15 minutes, and 20 per address and scope across all requesters (anti mail-bomb).
 - An attempt is spent *before* comparison, so parallel guesses can not exceed the budget.
 

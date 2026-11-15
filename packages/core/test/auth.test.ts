@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { requesterKey } from "../src/http/base";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
 import { consumeHandoff, createHandoff, createSession, readSession } from "../src/control/sessions";
 import { createTestTenant } from "../src/testing";
@@ -89,6 +90,38 @@ describe("email sign-in codes", () => {
     // Verifying from an address that never requested falls back to the latest code.
     const c = await issueLoginCode(env.DB, k, "s9", "w@example.com", "A");
     expect(await verifyLoginCode(env.DB, k, "s9", "w@example.com", c, "elsewhere")).toBe(true);
+  });
+
+  it("accepts the newest emailed code from a changed address (R1, R2)", async () => {
+    const k = env.ROSE_MASTER_KEY;
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    await issueLoginCode(env.DB, k, "r1", "x@example.com", "A");
+    await tick();
+    const b = await issueLoginCode(env.DB, k, "r1", "x@example.com", "B");
+    expect(await verifyLoginCode(env.DB, k, "r1", "x@example.com", b, "A")).toBe(true);
+    const a2 = await issueLoginCode(env.DB, k, "r2", "x@example.com", "A");
+    expect(await verifyLoginCode(env.DB, k, "r2", "x@example.com", a2, "A")).toBe(true);
+    await tick();
+    const b2 = await issueLoginCode(env.DB, k, "r2", "x@example.com", "B");
+    expect(await verifyLoginCode(env.DB, k, "r2", "x@example.com", b2, "A")).toBe(true);
+  });
+
+  it("buckets IPv6 to /64 and maps IPv4-mapped to IPv4", () => {
+    expect(requesterKey("203.0.113.9")).toBe("203.0.113.9");
+    expect(requesterKey(null)).toBe("unknown");
+    const k = requesterKey("2001:db8:1:2::1");
+    expect(k).toBe("2001:db8:1:2::/64");
+    for (const ip of ["2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:0DB8:1:2::ffff", "2001:db8:1:2:0:0:0:7"]) expect(requesterKey(ip)).toBe(k);
+    expect(requesterKey("2001:db8:1:3::1")).not.toBe(k);
+    expect(requesterKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(requesterKey("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    expect(requesterKey("::1")).toBe("0:0:0:0::/64");
+  });
+
+  it("four addresses in one /64 count as one requester", async () => {
+    const k = env.ROSE_MASTER_KEY;
+    for (let i = 1; i <= 4; i++) await issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey(`2001:db8:9:9::${i}`));
+    await expect(issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey("2001:db8:9:9::5"))).resolves.toMatch(/^\d{6}$/);
   });
 
   it("stores only keyed hashes of codes and hashes of session tokens", async () => {

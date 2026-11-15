@@ -97,6 +97,41 @@ export function parse<T>(schema: ZodType<T>, raw: unknown): T {
 
 export const clientIp = (c: Context): string | null => c.req.header("CF-Connecting-IP") ?? null;
 
+/**
+ * Requester identity for sign-in code limits: IPv4 unchanged, IPv6 bucketed to its /64 (one host
+ * can rotate addresses inside its prefix), IPv4-mapped IPv6 treated as IPv4. Unparseable input is
+ * returned as-is.
+ */
+export function requesterKey(ip: string | null): string {
+  if (!ip) return "unknown";
+  const raw = ip.trim().split("%")[0]!.toLowerCase();
+  if (!raw.includes(":")) return raw;
+  let tail: number[] = [];
+  let text = raw;
+  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
+  if (v4) {
+    const o = v4.slice(1).map(Number);
+    if (o.some((n) => n > 255)) return raw;
+    tail = [(o[0]! << 8) | o[1]!, (o[2]! << 8) | o[3]!];
+    text = raw.slice(0, v4.index) + "0:0";
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return raw;
+  const parse = (part: string) => (part === "" ? [] : part.split(":").map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN)));
+  const head = parse(halves[0]!);
+  const rest = halves.length === 2 ? parse(halves[1]!) : [];
+  const fill = 8 - head.length - rest.length;
+  if (halves.length === 1 ? head.length !== 8 : fill < 1) return raw;
+  const groups = halves.length === 1 ? head : [...head, ...Array<number>(fill).fill(0), ...rest];
+  if (groups.some(Number.isNaN)) return raw;
+  if (v4) {
+    groups[6] = tail[0]!;
+    groups[7] = tail[1]!;
+  }
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) return `${groups[6]! >> 8}.${groups[6]! & 255}.${groups[7]! >> 8}.${groups[7]! & 255}`;
+  return groups.slice(0, 4).map((g) => g.toString(16)).join(":") + "::/64";
+}
+
 /** Fails closed in production if the limiter binding is missing. */
 export async function rateLimit(c: AnyCtx | Context, key: string): Promise<void> {
   const env = c.env as CoreEnv;

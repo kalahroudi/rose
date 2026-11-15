@@ -46,31 +46,43 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
 }
 
 /**
- * Check a code. Only the most recent code issued to the same requester is valid (another
- * requester's request never supersedes it); a requester with no code of their own falls back
- * to the most recent code for the address, each code allows five guesses, and a
- * correct code is consumed atomically so it can not be used twice.
+ * Check a code. Two candidates: the requester's newest live code (another requester's request
+ * never supersedes it) and the newest code for the address overall (if still live) (so a requester whose
+ * address changed can use the code that was emailed last). Live = unconsumed, unexpired, under the
+ * guess budget. Each verify spends at most one attempt on each distinct candidate, before comparing,
+ * and a correct code is consumed atomically so it can not be used twice.
  */
 export async function verifyLoginCode(db: D1Database, masterKey: string, scope: string, email: string, code: string, requester: string): Promise<boolean> {
   const t = now();
   const who = await requesterHash(masterKey, requester);
-  const row =
-    (await db
-      .prepare("SELECT id, code_hash FROM login_codes WHERE email = ? AND scope = ? AND requester = ? ORDER BY created_at DESC LIMIT 1")
-      .bind(email, scope, who)
-      .first<{ id: string; code_hash: string }>()) ??
-    (await db
-      .prepare("SELECT id, code_hash FROM login_codes WHERE email = ? AND scope = ? ORDER BY created_at DESC LIMIT 1")
-      .bind(email, scope)
-      .first<{ id: string; code_hash: string }>());
-  if (!row) return false;
-  // Spend an attempt before comparing, so parallel guesses can not exceed the budget.
-  const spent = await db
-    .prepare("UPDATE login_codes SET attempts = attempts + 1 WHERE id = ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?")
-    .bind(row.id, MAX_ATTEMPTS, t)
-    .run();
-  if (spent.meta.changes === 0) return false;
-  if (!(await timingSafeEqual(row.code_hash, await codeHash(masterKey, scope, email, code)))) return false;
-  const consumed = await db.prepare("UPDATE login_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(t, row.id).run();
+  const live = "email = ? AND scope = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < ?";
+  type Row = { id: string; code_hash: string };
+  const own = await db
+    .prepare(`SELECT id, code_hash FROM login_codes WHERE ${live} AND requester = ? ORDER BY created_at DESC LIMIT 1`)
+    .bind(email, scope, t, MAX_ATTEMPTS, who)
+    .first<Row>();
+  // The newest code overall, only if still live: once it is dead, older codes of other requesters stay invalid
+  // (so one requester's exhausted guesses can not spill onto another requester's code).
+  const newest = await db
+    .prepare(
+      `SELECT id, code_hash FROM (SELECT id, code_hash, consumed_at, expires_at, attempts FROM login_codes WHERE email = ? AND scope = ? ORDER BY created_at DESC LIMIT 1)
+       WHERE consumed_at IS NULL AND expires_at > ? AND attempts < ?`,
+    )
+    .bind(email, scope, t, MAX_ATTEMPTS)
+    .first<Row>();
+  const candidates = [own, newest].filter((r, i, all): r is Row => !!r && all.findIndex((x) => x?.id === r.id) === i);
+  const given = await codeHash(masterKey, scope, email, code);
+  let matched: Row | null = null;
+  for (const row of candidates) {
+    // Spend an attempt before comparing, so parallel guesses can not exceed the budget.
+    const spent = await db
+      .prepare("UPDATE login_codes SET attempts = attempts + 1 WHERE id = ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?")
+      .bind(row.id, MAX_ATTEMPTS, t)
+      .run();
+    if (spent.meta.changes === 0) continue;
+    if (!matched && (await timingSafeEqual(row.code_hash, given))) matched = row;
+  }
+  if (!matched) return false;
+  const consumed = await db.prepare("UPDATE login_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(t, matched.id).run();
   return consumed.meta.changes === 1;
 }
