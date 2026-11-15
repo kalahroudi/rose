@@ -30,7 +30,7 @@ secret or developer machine; denial of service by volume; the example upstream s
    database.
 5. Fields encrypted by a module can only be decrypted with that tenant's key, in the
    column they were written to.
-6. Deleting a tenant destroys its data and its encryption key.
+6. Deleting a tenant closes it at once, then destroys its data and encryption key after a 48 hour grace period. Deleting needs a fresh sign-in (a passkey session for platform owners and for tenant owners who have a passkey); a platform owner can cancel within the grace period.
 7. The operator worker holds no binding to tenant storage and no tenant key.
 
 How each is enforced and tested: [docs/tenancy-and-isolation.md](docs/tenancy-and-isolation.md).

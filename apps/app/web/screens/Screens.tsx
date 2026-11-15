@@ -51,13 +51,14 @@ export function SuspendedScreen({ boot, tenant }: { boot: Bootstrap; tenant: Ten
   );
 }
 
-export function DeletedScreen({ boot, slug }: { boot: Bootstrap; slug: string }) {
+export function DeletedScreen({ boot, slug, deleteAfter }: { boot: Bootstrap; slug: string; deleteAfter: number | null }) {
   return (
     <AuthLayout appName={boot.app.name}>
       <div>
         <h1>Workspace scheduled for deletion</h1>
         <p className="page-desc">
-          <span className="mono">{slug}</span> is closed. Everyone has been signed out, and its database and encryption key are being destroyed in the background. This can not be undone.
+          <span className="mono">{slug}</span> is closed and everyone has been signed out. For safety its data is kept for 48 hours, then automatically and permanently destroyed
+          {deleteAfter ? <> (on <strong>{new Date(deleteAfter).toLocaleString()}</strong>)</> : null}. If this was a mistake, contact support before then.
         </p>
       </div>
       <a className="btn btn-lg btn-block" href={rootUrl(boot.app.baseDomain)}>Back to {boot.app.name}</a>

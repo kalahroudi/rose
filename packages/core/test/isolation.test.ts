@@ -63,19 +63,75 @@ describe("tenant lifecycle", () => {
     expect((await a.fetch("/api/m/notes")).status).toBe(401);
   });
 
-  it("deleting a workspace needs the typed name, then destroys its data", async () => {
+  it("deleting a workspace needs the typed name, then keeps its data for 48 hours before destroying it", async () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/m/notes", { body: { title: "doomed", secret: "s3cret" } });
     expect((await a.fetch("/api/workspace/delete", { body: { confirm: "wrong" } })).status).toBe(422);
     expect((await a.fetch("/api/workspace/delete", { body: { confirm: a.slug } })).status).toBe(202);
-    expect((await a.fetch("/api/m/notes")).status).toBe(404);
+    expect((await a.fetch("/api/m/notes")).status).toBeGreaterThanOrEqual(401);
     const { tenantTick } = await import("../src");
+    // The job and the hourly sweep refuse to purge early.
+    await tenantTick(env, modules);
+    const pending = await env.DB.prepare("SELECT status, delete_after FROM tenants WHERE id = ?").bind(a.id).first<{ status: string; delete_after: number }>();
+    expect(pending!.status).toBe("pending_deletion");
+    expect(pending!.delete_after).toBeGreaterThan(Date.now() + 47 * 3_600_000);
+    expect(await env.DB.prepare("SELECT status FROM jobs WHERE type = 'tenant.purge'").first()).toEqual({ status: "queued" });
+    // Once the grace period has passed, the same sweep purges.
+    await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
+    await env.DB.prepare("UPDATE jobs SET run_after = ? WHERE type = 'tenant.purge'").bind(Date.now() - 1).run();
     await tenantTick(env, modules);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).toBeNull();
     expect(await env.DB.prepare("SELECT 1 FROM memberships WHERE tenant_id = ?").bind(a.id).first()).toBeNull();
     const stub = env.TENANT_DO.get(env.TENANT_DO.idFromName(a.id));
     const left = await stub.exec(a.id, { sql: "SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('notes', 'audit_log', 'api_keys')" });
     expect(left.rows[0]!.n).toBe(0);
+  });
+});
+
+describe("workspace deletion safeguards", () => {
+  it("needs a fresh sign-in, a passkey session when the owner has a passkey, and refuses API keys", async () => {
+    const a = await createTestTenant(env, SELF);
+    const { createSession } = await import("../src/control/sessions");
+    const sessionCookie = async (method: string, ageMs = 0) => {
+      const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method });
+      if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
+      return `__Host-rose_session=${token}`;
+    };
+    const code = async (r: Response) => ((await r.json()) as { error: { code: string } }).error.code;
+    // Stale session.
+    const stale = await sessionCookie("code", 11 * 60_000);
+    const r1 = await a.fetch("/api/workspace/delete", { cookie: stale, body: { confirm: a.slug } });
+    expect(r1.status).toBe(403);
+    expect(await code(r1)).toBe("reauth_required");
+    // A passkey on file means only a passkey session may delete.
+    await env.DB.prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, created_at) VALUES ('cred-del', ?, ?, ?, 'k', ?)").bind(a.userId, a.id, a.host, Date.now()).run();
+    const r2 = await a.fetch("/api/workspace/delete", { cookie: await sessionCookie("code"), body: { confirm: a.slug } });
+    expect(r2.status).toBe(403);
+    expect(await code(r2)).toBe("reauth_required");
+    expect((await env.DB.prepare("SELECT status FROM tenants WHERE id = ?").bind(a.id).first<{ status: string }>())!.status).toBe("active");
+    // The chain: a stale session can neither remove the passkey nor enrol a new one.
+    const staleCode = await sessionCookie("code", 11 * 60_000);
+    const rm = await a.fetch("/api/auth/passkeys/cred-del", { cookie: staleCode, method: "DELETE" });
+    expect(rm.status).toBe(403);
+    expect(await code(rm)).toBe("reauth_required");
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: staleCode, body: {} })).status).toBe(403);
+    // A fresh email-code session can neither remove nor add a passkey once one exists, nor mint owners.
+    const freshCode = await sessionCookie("code");
+    expect((await a.fetch("/api/auth/passkeys/cred-del", { cookie: freshCode, method: "DELETE" })).status).toBe(403);
+    expect((await a.fetch("/api/auth/passkey/register/options", { cookie: freshCode, body: {} })).status).toBe(403);
+    const inv = await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-owner@x.example", role: "owner" } });
+    expect(inv.status).toBe(403);
+    expect(await code(inv)).toBe("reauth_required");
+    expect((await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-admin@x.example", role: "admin" } })).status).toBe(201);
+    expect((await a.fetch("/api/invitations", { cookie: await sessionCookie("passkey"), body: { email: "new-owner@x.example", role: "owner" } })).status).toBe(201);
+    // A session from the future is not fresh either.
+    const { assertFreshSession } = await import("../src/control/sessions");
+    expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
+    expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() - 10 * 60_000 }, { passkey: true })).toThrow();
+    // API keys never delete.
+    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    expect((await a.fetch("/api/workspace/delete", { cookie: null, headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } })).status).toBe(403);
+    expect((await a.fetch("/api/workspace/delete", { cookie: await sessionCookie("passkey"), body: { confirm: a.slug } })).status).toBe(202);
   });
 });
 

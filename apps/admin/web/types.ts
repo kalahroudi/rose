@@ -7,7 +7,7 @@ export interface Bootstrap {
   session: { user: { id: string; email: string; name: string }; role: "owner" | "operator"; hasPasskey: boolean; method: string } | null;
 }
 
-export type TenantStatus = "active" | "suspended" | "deleting";
+export type TenantStatus = "active" | "suspended" | "pending_deletion" | "deleting";
 export interface Tenant {
   id: string;
   slug: string;
@@ -16,6 +16,7 @@ export interface Tenant {
   plan: string;
   created_at: number;
   updated_at: number;
+  delete_after: number | null;
   members: number;
   domains: number;
 }
@@ -68,7 +69,7 @@ export interface AuditEntry {
 }
 
 export interface Overview {
-  tenants: { active: number; suspended: number; deleting: number; total: number };
+  tenants: { active: number; suspended: number; pending_deletion: number; deleting: number; total: number };
   users: number;
   domains: { pending: number; active: number; failed: number };
   failedJobs: number;
