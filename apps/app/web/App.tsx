@@ -31,7 +31,7 @@ export function App() {
 
 function Root() {
   const boot = useQuery({ queryKey: ["bootstrap"], queryFn: () => api<Bootstrap>("/api/bootstrap"), staleTime: 60_000 });
-  const [deleted, setDeleted] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState<{ slug: string; deleteAfter: number | null } | null>(null);
   if (boot.isPending) return <Splash />;
   if (!boot.data) {
     return (
@@ -43,12 +43,13 @@ function Root() {
     );
   }
   const b = boot.data;
-  if (deleted) return <DeletedScreen boot={b} slug={deleted} />;
+  if (deleted) return <DeletedScreen boot={b} slug={deleted.slug} deleteAfter={deleted.deleteAfter} />;
   if (b.host === "root") return <Onboarding boot={b} />;
   if (b.host === "unknown" || !b.tenant) return <UnknownScreen boot={b} />;
+  if (b.tenant.status === "pending_deletion") return <DeletedScreen boot={b} slug={b.tenant.slug} deleteAfter={b.tenant.deleteAfter ?? null} />;
   if (b.tenant.status !== "active") return <SuspendedScreen boot={b} tenant={b.tenant} />;
   if (!b.session) return <SignInScreen boot={b} tenant={b.tenant} />;
-  return <SignedIn boot={b} tenant={b.tenant} session={b.session} onDeleted={() => setDeleted(b.tenant!.slug)} />;
+  return <SignedIn boot={b} tenant={b.tenant} session={b.session} onDeleted={(deleteAfter) => setDeleted({ slug: b.tenant!.slug, deleteAfter })} />;
 }
 
 interface CorePage {
@@ -60,7 +61,7 @@ interface CorePage {
   show?: boolean;
 }
 
-function SignedIn({ boot, tenant, session, onDeleted }: { boot: Bootstrap; tenant: TenantView; session: SessionView; onDeleted(): void }) {
+function SignedIn({ boot, tenant, session, onDeleted }: { boot: Bootstrap; tenant: TenantView; session: SessionView; onDeleted(deleteAfter: number | null): void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const workspace = useMemo<Workspace>(

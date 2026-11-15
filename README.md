@@ -47,7 +47,7 @@ Sign-in codes are shown on screen in development.
 **Encryption**
 - Per-tenant data keys wrapped by a master key (envelope encryption, AES-256-GCM).
 - One-line field encryption bound to tenant and column; blind indexes for exact search.
-- Deleting a tenant destroys its key: crypto-shredding.
+- Deleting a tenant destroys its key (crypto-shredding) after a 48 hour grace period.
 
 **Two finished apps, one UI kit**
 - **Operator console**: tenants, custom domains (Cloudflare for SaaS), operators, audit,

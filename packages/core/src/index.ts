@@ -10,7 +10,7 @@ export { TenantDb, type TenantContext } from "./tenancy/context";
 export { TenantCrypto } from "./crypto";
 
 // HTTP helpers
-export { AppError, badRequest, conflict, forbidden, invalid, misconfigured, notFound, tooMany, unauthorized } from "./errors";
+export { AppError, badRequest, conflict, forbidden, invalid, misconfigured, notFound, reauthRequired, tooMany, unauthorized } from "./errors";
 export { listQuerySchema, likePattern, likePrefix, offsetOf, orderBy, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH, searchTermSchema, type ListQuery, type Page } from "./http/pagination";
 export { newId, now, randomToken } from "./ids";
 export type { CoreEnv, PlatformWorkerEnv, TenantWorkerEnv, RateLimiter } from "./env";

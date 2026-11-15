@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { api, Button, Callout, CopyChip, errorMessage, Field, Flow, FormDrawer, Input, Page, SecurityPanel, ThemeToggle, useConfirm, useTab, useToast, type HelpContent } from "@rose/ui";
+import { api, ApiError, Button, Callout, CopyChip, errorMessage, Field, Flow, FormDrawer, Input, Page, SecurityPanel, ThemeToggle, useConfirm, useTab, useToast, type HelpContent } from "@rose/ui";
 import { useState } from "react";
 import { terms } from "../help/glossary";
 import { useInvalidate } from "../invalidation";
@@ -23,17 +23,29 @@ export function SettingsPage() {
   const deleteWorkspace = async () => {
     const ok = await confirm.danger({
       title: "Delete this workspace?",
-      body: "All data, members, API keys, the audit log and the workspace's encryption key are destroyed for everyone. This can not be undone or recovered from backup.",
+      body: "Everyone is signed out immediately. Your data is kept for 48 hours for safety, then automatically and permanently destroyed: all records, members, API keys, the audit log and the workspace's encryption key. After that it can not be recovered.",
       name: tenant.slug,
       confirmLabel: "Delete workspace",
     });
     if (!ok) return;
     setDeleting(true);
     try {
-      await api("/api/workspace/delete", { body: { confirm: tenant.slug } });
-      markDeleted();
+      const r = await api<{ deleteAfter?: number }>("/api/workspace/delete", { body: { confirm: tenant.slug } });
+      markDeleted(r.deleteAfter ?? null);
     } catch (err) {
-      toast.error(errorMessage(err));
+      if (err instanceof ApiError && err.code === "reauth_required") {
+        const again = await confirm({
+          title: "Sign in again to continue",
+          body: `${err.message} Deleting a workspace needs a sign-in from the last 10 minutes${session.hasPasskey ? ", using your passkey" : ""}. Sign out, sign in again, then retry.`,
+          confirmLabel: "Sign out",
+        });
+        if (again) {
+          await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+          window.location.reload();
+        }
+      } else {
+        toast.error(errorMessage(err));
+      }
       setDeleting(false);
     }
   };
@@ -69,15 +81,17 @@ export function SettingsPage() {
       ],
     },
     danger: {
-      what: "Permanently delete this workspace and everything in it. Only owners can do this.",
+      what: "Delete this workspace and everything in it. Access ends at once; the data is kept for 48 hours, then destroyed automatically. Only owners can do this, and only right after a fresh sign-in.",
       diagram: {
-        node: <Flow title="What deletion does" steps={[{ label: "Confirm", sub: "type the address" }, { label: "Closed", sub: "everyone signed out", tone: "bad" }, { label: "Data destroyed", sub: "database + key", via: "background" }, { label: "Gone", sub: "address released" }]} />,
-        caption: "Access ends at once. The private database and its encryption key are then destroyed in the background, usually within a minute.",
+        node: <Flow title="What deletion does" steps={[{ label: "Confirm", sub: "type the address" }, { label: "Closed", sub: "everyone signed out", tone: "bad" }, { label: "Kept 48 hours", sub: "safety period", via: "grace" }, { label: "Data destroyed", sub: "database + key", via: "automatic" }]} />,
+        caption: "Access ends at once. After 48 hours the private database and its encryption key are destroyed automatically and the address is released.",
       },
       terms: terms("workspace", "dataKey", "owner"),
       why: [
         { q: "Why do I have to type the address?", a: "Deletion can not be undone. Typing the exact address makes sure you are deleting the workspace you think you are." },
-        { q: "Can deleted data be recovered?", a: "No. The workspace's data key is destroyed with its database, so even a stray copy of encrypted values could never be read again." },
+        { q: "Why is the data kept for 48 hours?", a: "A safety net against mistakes and stolen sessions. During that time nobody can sign in, and a platform owner can still cancel the deletion if you contact support." },
+        { q: "Why am I asked to sign in again?", a: "Deleting is irreversible, so a sign-in from the last 10 minutes is required (with your passkey, if you have one). A session left open on a shared computer can not delete the workspace." },
+        { q: "Can deleted data be recovered after 48 hours?", a: "No. The workspace's data key is destroyed with its database, so even a stray copy of encrypted values could never be read again." },
       ],
       tasks: [{ label: "Delete this workspace", run: canDelete ? () => void deleteWorkspace() : undefined }],
     },
@@ -132,10 +146,10 @@ export function SettingsPage() {
           <div>
             <h2 className="card-title">Delete this workspace</h2>
             <p className="dim">
-              Destroys every record, the member list, all API keys, the audit log and the workspace's encryption key. Everyone is signed out immediately and the address <span className="mono">{tenant.slug}</span> stops working.
+              Everyone is signed out immediately and the address <span className="mono">{tenant.slug}</span> stops working. Your data is retained for 48 hours for safety, then automatically and permanently destroyed: every record, the member list, all API keys, the audit log and the workspace's encryption key.
             </p>
           </div>
-          <Callout tone="bad">This can not be undone. There is no backup to restore from once the encryption key is destroyed.</Callout>
+          <Callout tone="bad">After the 48 hours the deletion can not be undone: there is no backup to restore from once the encryption key is destroyed. You will be asked to sign in again first.</Callout>
           <div><Button variant="danger" icon="trash" busy={deleting} onClick={() => void deleteWorkspace()}>Delete workspace</Button></div>
         </section>
       )}

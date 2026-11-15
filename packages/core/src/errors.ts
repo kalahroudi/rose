@@ -28,4 +28,6 @@ export const conflict = (message: string, fields?: Record<string, string>) =>
   new AppError(409, "conflict", message, fields);
 export const tooMany = (message = "Too many attempts. Wait a moment and try again.") =>
   new AppError(429, "rate_limited", message);
+/** The action needs a recent sign-in (and, where noted, a passkey). Clients ask the person to sign in again. */
+export const reauthRequired = (message = "Sign in again to confirm this action.") => new AppError(403, "reauth_required", message);
 export const misconfigured = (message: string) => new AppError(503, "misconfigured", message);

@@ -40,7 +40,7 @@ flowchart LR
 | Can read tenant business data | Only for the tenant the request host resolves to | **No.** There is no binding and no key that would allow it |
 
 The operator worker manages tenants purely through control-plane rows. Deleting a
-tenant, for example, marks the row `deleting` and queues a job; the *tenant* worker
+tenant, for example, marks the row `pending_deletion` (with `delete_after` = now + 48 h) and queues a job that is held until then; the *tenant* worker
 runs the job and destroys the storage. The planes share only D1 and the queue that
 carries job ids (never data).
 
@@ -116,7 +116,7 @@ can send to the tenant worker's queue, but a message only ever names a job id.
 
 | Job | Runs in | Does |
 |---|---|---|
-| `tenant.purge` | tenant worker | Destroys the tenant database, then its control-plane rows |
+| `tenant.purge` | tenant worker | After the 48 h grace period only (it refuses earlier): marks `deleting`, destroys the tenant database, then its control-plane rows |
 | `m.<module>.<name>` | tenant worker | A module job, bound to the tenant that queued it |
 | `domain.verify` | operator worker | Registers a custom hostname with Cloudflare and polls until active |
 

@@ -14,7 +14,9 @@ export interface SessionView {
 export interface TenantView {
   name: string;
   slug: string;
-  status: "active" | "suspended" | "deleting";
+  status: "active" | "suspended" | "pending_deletion" | "deleting";
+  /** Set while pending_deletion: when the data will be destroyed (epoch ms). */
+  deleteAfter?: number | null;
 }
 
 export interface Bootstrap {

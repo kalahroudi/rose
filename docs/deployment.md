@@ -127,8 +127,11 @@ migrations the next time it starts after a deploy.
 - **Logs**: Workers observability is enabled. Errors are JSON lines with a `requestId`,
   which is also returned to the client in `X-Request-Id` and in error bodies.
 - **Suspending a tenant** (console) blocks its sessions and API keys on the next request.
-- **Deleting a tenant** is asynchronous and irreversible: the tenant database and its
-  encryption key are destroyed by a background job that starts within seconds.
+- **Deleting a tenant** closes it at once (sessions cut, nothing served) and keeps its data
+  for 48 hours; a platform owner can cancel in the console until then. After that a background
+  job destroys the tenant database and its encryption key, irreversibly. Deleting (and
+  cancelling) needs a platform owner who signed in with a passkey in the last 10 minutes; a
+  tenant owner needs a sign-in from the last 10 minutes (with a passkey, if they have one).
 - **Backups**: D1 has point-in-time recovery (Time Travel). Durable Object storage has
   its own point-in-time recovery API; Rose does not wrap it yet.
 - **Rotating secrets**: [encryption.md](encryption.md#rotating-the-master-key). Rotating
