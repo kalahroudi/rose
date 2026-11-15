@@ -21,5 +21,15 @@ export default defineConfig({
       },
     })),
   ],
-  test: { include: ["worker/**/*.test.ts"], setupFiles: ["./worker/test/setup.ts"] },
+  test: {
+    include: ["worker/**/*.test.ts"],
+    setupFiles: ["./worker/test/setup.ts"],
+    // `pnpm test:coverage`. Workers-runtime tests support only the istanbul provider.
+    coverage: {
+      provider: "istanbul",
+      include: ["worker/**/*.ts"],
+      exclude: ["worker/**/*.test.ts", "worker/test/**"],
+      reporter: ["text-summary", "html", "lcov", "json-summary"],
+    },
+  },
 });

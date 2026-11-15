@@ -6,7 +6,7 @@
   "author": "kalahroudi",
   "type": "module",
   "exports": { ".": "./src/index.ts", "./platform": "./src/platform.ts", "./testing": "./src/testing/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run", "test:coverage": "vitest run --coverage" },
   "dependencies": {
     "hono": "^4.13.0",
     "zod": "^4.6.0",
@@ -15,6 +15,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.6.0",
     "@cloudflare/workers-types": "^5.20261001.0",
+    "@vitest/coverage-istanbul": "^5.1.0",
     "vitest": "^5.1.0",
     "wrangler": "^4.150.0",
     "typescript": "^7.0.2"

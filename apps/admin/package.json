@@ -10,6 +10,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
+    "@vitest/coverage-istanbul": "^5.1.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.0",
     "vitest": "^5.1.0",

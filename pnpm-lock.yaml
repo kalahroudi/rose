@@ -202,7 +202,7 @@ importers:
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.6.0
-        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0(vite@8.3.7(esbuild@0.28.2)))
+        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0)
       '@cloudflare/workers-types':
         specifier: ^5.20261001.0
         version: 5.20261109.1
@@ -215,6 +215,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.0
         version: 6.3.0(vite@8.3.7(esbuild@0.28.2))
+      '@vitest/coverage-istanbul':
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -223,7 +226,7 @@ importers:
         version: 8.3.7(esbuild@0.28.2)
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(vite@8.3.7(esbuild@0.28.2))
+        version: 5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2))
       wrangler:
         specifier: ^4.150.0
         version: 4.158.0(@cloudflare/workers-types@5.20261109.1)
@@ -260,7 +263,7 @@ importers:
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.6.0
-        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0(vite@8.3.7(esbuild@0.28.2)))
+        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0)
       '@cloudflare/workers-types':
         specifier: ^5.20261001.0
         version: 5.20261109.1
@@ -273,6 +276,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.0
         version: 6.3.0(vite@8.3.7(esbuild@0.28.2))
+      '@vitest/coverage-istanbul':
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -281,7 +287,7 @@ importers:
         version: 8.3.7(esbuild@0.28.2)
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(vite@8.3.7(esbuild@0.28.2))
+        version: 5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2))
       wrangler:
         specifier: ^4.150.0
         version: 4.158.0(@cloudflare/workers-types@5.20261109.1)
@@ -300,16 +306,19 @@ importers:
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.6.0
-        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0(vite@8.3.7(esbuild@0.28.2)))
+        version: 1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0)
       '@cloudflare/workers-types':
         specifier: ^5.20261001.0
         version: 5.20261109.1
+      '@vitest/coverage-istanbul':
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(vite@8.3.7(esbuild@0.28.2))
+        version: 5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2))
       wrangler:
         specifier: ^4.150.0
         version: 4.158.0(@cloudflare/workers-types@5.20261109.1)
@@ -342,6 +351,23 @@ importers:
         version: 3.13.0(react@19.3.1)
 
 packages:
+
+  '@babel/helper-string-parser@7.29.14':
+    resolution: {integrity: sha512-CXvKMFvM80ihI7Vox9jb+kQjnyjESQNPM+vB7U0Zz6TWuZA+Z/FL0QPMH300h33qJtIx+REeBhXqWOPW48TcAQ==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/helper-validator-identifier@7.29.7':
+    resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/parser@7.29.14':
+    resolution: {integrity: sha512-VL220vXuyO2z3rNIQwY7ftj9UwpqOt+33sH+sBWkOekbsSR2g7EEMnOx24ZlCH0xOA3DM/33SifVFGbnJD8r/w==}
+    engines: {node: '>=6.0.0'}
+    hasBin: true
+
+  '@babel/types@7.29.14':
+    resolution: {integrity: sha512-UjI/dKmwJwT9pOszJitq2G6EObZPnsZUfdCr92z2TlF3EZK9J3EdfOKUrCzHl6wFthbzwhzl1Soc/UIwxRiq6w==}
+    engines: {node: '>=6.9.0'}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -722,6 +748,16 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@istanbuljs/schema@0.1.6':
+    resolution: {integrity: sha512-+Sg6GCR/wy1oSmQDFq4LQDAhm3ETKnorxN+y5nbLULOR3P0c14f2Wurzj3/xqPXtasLFfHd5iRFQ7AJt4KH2cw==}
+    engines: {node: '>=8'}
+
+  '@jridgewell/gen-mapping@0.3.13':
+    resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
+
+  '@jridgewell/remapping@2.3.5':
+    resolution: {integrity: sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==}
+
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
     engines: {node: '>=6.0.0'}
@@ -1087,6 +1123,27 @@ packages:
       oxc-transform-react:
         optional: true
 
+  '@vitest/coverage-istanbul@5.1.0':
+    resolution: {integrity: sha512-XRAUYsfdho+Az4K2eEWOVPedtIzUZbCl2eO9pOjNH5L1/niuy8cYwlK2W9RUtfwYZumoqic+4pRGqAvch/JSzg==}
+    peerDependencies:
+      vitest: 5.1.0
+
+  '@vitest/istanbul-lib-coverage@2.1.0':
+    resolution: {integrity: sha512-WOjuS+xcjSIy7ruYBQ+9BUcV7XZQ0FyVcbWbWxW9TRx/kLGx5SQaeFRIFDJxjNplb6YsT7SpKo2zuXXUo91OIQ==}
+    engines: {node: '>=22'}
+
+  '@vitest/istanbul-lib-instrument@2.1.0':
+    resolution: {integrity: sha512-lMhFnfKPkueJQealWtkRWv0E95gO14OQg/ZzVT4tqDRXLxn6teAZKBe1uXg9jNB2AI5WPk4vF52R+59LAUgQUA==}
+    engines: {node: '>=22'}
+
+  '@vitest/istanbul-lib-report@2.1.0':
+    resolution: {integrity: sha512-+ZFta25nWtGCOBG9/IET8w1RO5Oawsd6H8Uf6AJ9EA/StFuKVtKAEJEJ6uRt84OH+T4YkI0ASmIHAhRA+0KVxw==}
+    engines: {node: '>=22'}
+
+  '@vitest/istanbul-lib-source-maps@2.1.0':
+    resolution: {integrity: sha512-X+fmmI1SEiJZc/nmMUllliP8qaLgi4xMcDd0HwTBMdaanbRcCu/+IKo+iq7wbjJXtAEBWQrGyI18wfSWIqyDpw==}
+    engines: {node: '>=22'}
+
   '@vitest/mocker@5.1.0':
     resolution: {integrity: sha512-5umB9/jlWcqVS6fsrFmv5Gdnpu6wAUio/lEOwAmvB7v+lFo/IW2B9FhAD0p19GCULTgMzLCdUmuCDCnAzWgppQ==}
     peerDependencies:
@@ -1247,6 +1304,9 @@ packages:
   magic-string@1.4.5:
     resolution: {integrity: sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w==}
 
+  magicast@0.5.5:
+    resolution: {integrity: sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==}
+
   miniflare@5.20261104.0-beta:
     resolution: {integrity: sha512-pYZ2n85+FYUb7s0oIVcQxO63/+wgaknm+A/kQjctJqshvHPJs3UtnzaIZ7xrrHMOk8atD7yAfauf6G9VAv7Upg==}
     engines: {node: '>=22.0.0'}
@@ -1344,6 +1404,10 @@ packages:
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
+
+  tinyrainbow@3.2.0:
+    resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
+    engines: {node: '>=14.0.0'}
 
   tslib@1.14.1:
     resolution: {integrity: sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg==}
@@ -1507,6 +1571,19 @@ packages:
 
 snapshots:
 
+  '@babel/helper-string-parser@7.29.14': {}
+
+  '@babel/helper-validator-identifier@7.29.7': {}
+
+  '@babel/parser@7.29.14':
+    dependencies:
+      '@babel/types': 7.29.14
+
+  '@babel/types@7.29.14':
+    dependencies:
+      '@babel/helper-string-parser': 7.29.14
+      '@babel/helper-validator-identifier': 7.29.7
+
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
   '@cloudflare/unenv-preset@2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261104.1)':
@@ -1515,12 +1592,12 @@ snapshots:
     optionalDependencies:
       workerd: 1.20261104.1
 
-  '@cloudflare/vitest-plugin@1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0(vite@8.3.7(esbuild@0.28.2)))':
+  '@cloudflare/vitest-plugin@1.6.0(@cloudflare/workers-types@5.20261109.1)(vitest@5.1.0)':
     dependencies:
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.2
       miniflare: 5.20261104.0-beta
-      vitest: 5.1.0(vite@8.3.7(esbuild@0.28.2))
+      vitest: 5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2))
       wrangler: 4.158.0(@cloudflare/workers-types@5.20261109.1)
       zod: 4.6.6
     transitivePeerDependencies:
@@ -1740,6 +1817,18 @@ snapshots:
 
   '@img/sharp-win32-x64@0.35.5':
     optional: true
+
+  '@istanbuljs/schema@0.1.6': {}
+
+  '@jridgewell/gen-mapping@0.3.13':
+    dependencies:
+      '@jridgewell/sourcemap-codec': 1.6.0
+      '@jridgewell/trace-mapping': 0.3.31
+
+  '@jridgewell/remapping@2.3.5':
+    dependencies:
+      '@jridgewell/gen-mapping': 0.3.13
+      '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -2044,6 +2133,38 @@ snapshots:
       '@rolldown/pluginutils': 1.1.0
       vite: 8.3.7(esbuild@0.28.2)
 
+  '@vitest/coverage-istanbul@5.1.0(vitest@5.1.0)':
+    dependencies:
+      '@vitest/istanbul-lib-coverage': 2.1.0
+      '@vitest/istanbul-lib-instrument': 2.1.0
+      '@vitest/istanbul-lib-report': 2.1.0
+      '@vitest/istanbul-lib-source-maps': 2.1.0
+      magicast: 0.5.5
+      obug: 3.0.0
+      tinyrainbow: 3.2.0
+      vitest: 5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2))
+
+  '@vitest/istanbul-lib-coverage@2.1.0': {}
+
+  '@vitest/istanbul-lib-instrument@2.1.0':
+    dependencies:
+      '@istanbuljs/schema': 0.1.6
+      '@jridgewell/remapping': 2.3.5
+      '@jridgewell/trace-mapping': 0.3.31
+      '@vitest/istanbul-lib-coverage': 2.1.0
+      magic-string: 1.4.5
+      rolldown: 1.2.18
+
+  '@vitest/istanbul-lib-report@2.1.0':
+    dependencies:
+      '@vitest/istanbul-lib-coverage': 2.1.0
+
+  '@vitest/istanbul-lib-source-maps@2.1.0':
+    dependencies:
+      '@jridgewell/trace-mapping': 0.3.31
+      '@vitest/istanbul-lib-coverage': 2.1.0
+      obug: 3.0.0
+
   '@vitest/mocker@5.1.0(vite@8.3.7(esbuild@0.28.2))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
@@ -2178,6 +2299,12 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  magicast@0.5.5:
+    dependencies:
+      '@babel/parser': 7.29.14
+      '@babel/types': 7.29.14
+      source-map-js: 1.2.2
+
   miniflare@5.20261104.0-beta:
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
@@ -2298,6 +2425,8 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
+  tinyrainbow@3.2.0: {}
+
   tslib@1.14.1: {}
 
   tslib@2.9.1: {}
@@ -2350,7 +2479,7 @@ snapshots:
       esbuild: 0.28.2
       fsevents: 2.3.3
 
-  vitest@5.1.0(vite@8.3.7(esbuild@0.28.2)):
+  vitest@5.1.0(@vitest/coverage-istanbul@5.1.0)(vite@8.3.7(esbuild@0.28.2)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@8.3.7(esbuild@0.28.2))
@@ -2366,6 +2495,8 @@ snapshots:
       tinyglobby: 0.2.17
       vite: 8.3.7(esbuild@0.28.2)
       why-is-node-running: 3.2.1
+    optionalDependencies:
+      '@vitest/coverage-istanbul': 5.1.0(vitest@5.1.0)
     transitivePeerDependencies:
       - msw
 

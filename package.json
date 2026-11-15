@@ -15,6 +15,7 @@
     "build": "pnpm -r --filter './apps/*' build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:coverage": "pnpm -r --if-present test:coverage",
     "guard": "node scripts/guard.mjs",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
