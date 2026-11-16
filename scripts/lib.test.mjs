@@ -33,3 +33,12 @@ for (const app of ["app", "admin"]) {
 test("parseArgs", () => {
   assert.deepEqual(parseArgs(["--a", "1", "--b=2", "--c", "x", "--d"]), { _: [], a: "1", b: "2", c: "x", d: true });
 });
+
+test("diagnoseOperatorSignIn names the cause of a refused operator code", async () => {
+  const { diagnoseOperatorSignIn } = await import("./lib.mjs");
+  const e = "op@example.com";
+  assert.match(diagnoseOperatorSignIn(e, { userExists: false, isOperator: false, passkeys: 0 }), /not an operator.*--operator-email/);
+  assert.match(diagnoseOperatorSignIn(e, { userExists: true, isOperator: false, passkeys: 0 }), /not an operator/);
+  assert.match(diagnoseOperatorSignIn(e, { userExists: true, isOperator: true, passkeys: 2 }), /console passkey/);
+  assert.equal(diagnoseOperatorSignIn(e, { userExists: true, isOperator: true, passkeys: 0 }), null);
+});
