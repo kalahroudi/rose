@@ -6,7 +6,9 @@ import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
 import { CORE_EXEMPTIONS, scan, tokenize } from "./route-authz-scan.mjs";
 
-const AUTH = 'app.use("/api/*", authenticate);\n';
+const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
+const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
+const AUTH = AUTH_LINE + NEED;
 const wrap = (body) => `function f() {\nconst app = new Hono();\n${AUTH}${body}\nreturn app;\n}`;
 const ungated = (body, ex = {}) => scan(wrap(body), ex).ungated.map((u) => u.key);
 const GOOD = 'app.get("/api/ok", async (c) => { need(c, "x:read"); return c.json({}); });\n';
@@ -162,7 +164,7 @@ test("bypass: a chained registration after a gated one is checked", () => {
   assert.deepEqual(ungated(`app.get("/api/a", ${g}).post("/api/b", ${g}).put("/api/c", async (c) => 1);`), ["PUT /api/c"]);
   assert.deepEqual(ungated(`app.get("/api/a", ${g}).post("/api/b", ${g});`), []);
   assert.equal(scan(wrap(`app.get("/api/a", ${g}).json(1);`), {}).unparsed.length, 1);
-  assert.deepEqual(scan(wrap("").replace(AUTH, 'app.use("/api/*", authenticate).get("/api/x", async (c) => 1);\n'), {}).ungated.map((u) => u.key), ["GET /api/x"]);
+  assert.deepEqual(scan(wrap("").replace(AUTH, 'app.use("/api/*", authenticate).get("/api/x", async (c) => 1);\n' + NEED), {}).ungated.map((u) => u.key), ["GET /api/x"]);
 });
 
 test("bypass: an identifier with a unicode escape is reported as unparsed", () => {
@@ -182,7 +184,7 @@ test("bypass: an alias created before the authentication line is reported", () =
 test("bypass: an empty permission is not a gate", () => {
   assert.deepEqual(ungated("app.get(\"/api/x\", async (c) => { need(c, ``); });"), ["GET /api/x"]);
   assert.deepEqual(ungated("app.get(\"/api/x\", async (c) => { need(c, ''); });"), ["GET /api/x"]);
-  assert.deepEqual(ungated("app.get(\"/api/x\", async (c) => { need(c, `a:${p}`); });"), []);
+  assert.deepEqual(ungated("app.get(\"/api/x\", async (c) => { need(c, `a:${p}`); });"), ["GET /api/x"]); // interpolated: not a known permission
 });
 
 test("bypass: the catch-all exemption needs plain parameters and an exact throw notFound() body", () => {
@@ -269,7 +271,7 @@ test("regression: a redeclared need or context parameter is not a gate", () => {
 test("regression: a registration nested before the auth line is unparsed", () => {
   const pre = (b) => `function f() {\nconst app = new Hono();\n${b}\n${AUTH}return app;\n}`;
   assert.equal(scan(pre(`function reg() { app.get("/api/x", ${H}); }`), {}).unparsed.length, 1);
-  assert.equal(scan(pre(`const later = () => app.get("/api/x", ${H});`), {}).unparsed.length, 1);
+  assert.ok(scan(pre(`const later = () => app.get("/api/x", ${H});`), {}).unparsed.length >= 1);
   assert.equal(scan(pre(`if (x) { app.get("/api/x", ${H}); }`), {}).unparsed.length, 1);
   assert.equal(scan(pre(`if (x) app.get("/api/x", ${H});`), {}).unparsed.length, 1);
   assert.deepEqual(scan(pre(`app.get("/api/pre", ${H});`), {}).unparsed, []);
@@ -281,4 +283,76 @@ test("regression: the catch-all exemption needs zero params and an exact throw n
   assert.ok(bad(HONO('app.all("/api/*", (c) => { throw notFound(); });'), ex));
   assert.ok(bad(HONO('app.all("/api/*", (c, notFound) => { throw notFound(); });'), ex));
   assert.ok(bad(HONO('app.all("/api/*", () => { log(); throw notFound(); });'), ex));
+});
+
+// Regression tests for the third adversarial round.
+const unparsedOf = (src) => scan(src, {}).unparsed.length;
+const GATE = 'async (c) => { need(c, "a:b"); return c.json(1); }';
+
+test("regression: the value of a registration is not tracked, so any use of it is unparsed", () => {
+  for (const code of [
+    `const r = app.get("/api/a", ${GATE}); r.get("/api/b", ${H});`,
+    `app.get("/api/a", ${GATE})!.get("/api/b", ${H});`,
+    `app.get("/api/a", ${GATE})["get"]("/api/b", ${H});`,
+    `(app.get("/api/a", ${GATE})).get("/api/b", ${H});`,
+    `(app.get("/api/a", ${GATE}) as any).get("/api/b", ${H});`,
+    `register(app.get("/api/a", ${GATE}));`,
+    `app.get("/api/a", ${GATE}) as any;`,
+    `x = app.get("/api/a", ${GATE});`,
+    `app.get("/api/a", ${GATE}), other();`,
+    `app.get("/api/a", ${GATE})\n(other)();`,
+  ]) assert.ok(unparsedOf(HONO(code)) >= 1, code);
+  // before the authentication line too: an alias made there can register routes after it
+  assert.ok(unparsedOf(`function f() {\nconst app = new Hono();\nconst r = app.get("/x", ${H});\n${AUTH}r.get("/api/b", ${H});\nreturn app;\n}`) >= 1);
+  // the shapes that stay valid
+  for (const code of [`app.get("/api/a", ${GATE});`, `app.get("/api/a", ${GATE})\napp.get("/api/b", ${GATE});`, `if (x) app.get("/api/a", ${GATE});`, `app\n.get("/api/a", ${GATE})\n.post("/api/b", ${GATE});`]) {
+    assert.deepEqual(scan(HONO(code), {}).unparsed, [], code);
+  }
+});
+
+test("regression: a regex right after the ) closing an if/while/for/with condition is a regex", () => {
+  const regexes = (src) => tokenize(src).filter((t) => t.type === "regex").map((t) => t.value);
+  assert.deepEqual(regexes("if (p) /a\\/*b/.test(p);"), ["/a\\/*b/"]);
+  assert.deepEqual(regexes("while (p) /x/.test(p); for (;;) /y/.test(p); for await (const a of b) /z/.test(a); with (o) /w/.test(1);"), ["/x/", "/y/", "/z/", "/w/"]);
+  assert.deepEqual(regexes("const q = (a + b) / 2 / 3; f(x) / 2; o.if(x) / 2;"), []);
+  const r = scan(HONO(`if (p) /a\\/*b/.test(p);\napp.get("/api/hidden", ${H});\n/* note */\napp.get("/api/ok", ${GATE});`), {});
+  assert.deepEqual(r.ungated.map((u) => u.key), ["GET /api/hidden"]);
+});
+
+test("regression: need must be declared exactly once, at factory level, and must still check", () => {
+  const src = (decl, body = `app.get("/api/x", ${GATE});`) => `function f() {\nconst app = new Hono();\n${AUTH_LINE}${decl}\n${body}\nreturn app;\n}`;
+  assert.deepEqual(scan(src(NEED), {}).unparsed, []);
+  assert.equal(unparsedOf(src("")), 1, "no declaration");
+  assert.equal(unparsedOf(src(NEED + NEED)) >= 1, true, "two declarations");
+  assert.ok(unparsedOf(src(NEED, `for (const r of rs) { const need = (c, p) => c.get("actor"); app.get("/api/x", ${GATE}); }`)) >= 1, "shadowed in an enclosing block");
+  assert.ok(unparsedOf(src(NEED, `function g(need) { app.get("/api/x", ${GATE}); }`)) >= 1, "parameter");
+  assert.ok(unparsedOf(src(NEED, `const { need } = o; app.get("/api/x", ${GATE});`)) >= 1, "destructured");
+  assert.ok(unparsedOf(src(NEED, `const g = need;`)) >= 1, "need used as a value");
+  assert.ok(unparsedOf(src(NEED.replace("if (!can(a.role, permission)) throw forbidden();", ""))) >= 1, "body no longer checks");
+  assert.ok(unparsedOf(src(NEED.replace("throw forbidden()", "log()"))) >= 1, "no throw");
+  assert.ok(unparsedOf(src("const need = (c, p) => c.get('actor');")) >= 1, "expression body");
+  assert.ok(unparsedOf(src(`if (x) { ${NEED} }`)) >= 1, "not at factory level");
+  assert.deepEqual(scan(src(NEED, `app.get("/api/x", async (c) => { o.need(c, "a:b"); });`), {}).unparsed, []); // member access is not a binding
+  // the real file with its check removed
+  const real = readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+  const r = scan(real.replace("if (!can(actor.role, permission)) throw forbidden();", ""), CORE_EXEMPTIONS);
+  assert.ok(r.unparsed.length >= 1);
+});
+
+test("regression: the permission argument must be a known-shaped literal or a dotted identifier path", () => {
+  const ok = (arg) => !bad(HONO(`app.get("/api/x", async (c) => { need(c, ${arg}); });`));
+  for (const arg of ['"a:b"', "`a:b`", "'members:read'", "route.permission", "perm", "a.b.c", '"a-b:c-d"']) assert.ok(ok(arg), arg);
+  for (const arg of ["undefined", "null as never", '("")', "...[]", "``", '""', '"nocolon"', '"A:b"', '"a:b:c"', "`a:${p}`", "null", "this", "a?.b", "a[0]", "f()", "a.b()", 'x ? "a:b" : "c:d"', '"a:b" as string', "route.permission!"]) assert.ok(!ok(arg), arg);
+});
+
+test("regression: a gate that relies on ASI (no semicolon) counts", () => {
+  const ok = (b) => !bad(HONO(`app.get("/api/x", async (c) => {\n${b}\n});`));
+  assert.ok(ok('need(c, "a:b")\nreturn c.json(1)'));
+  assert.ok(ok('const actor = need(c, "a:b")\nreturn c.json(actor)'));
+  assert.ok(ok("need(c, `a:b`)\nreturn 1"));
+  assert.ok(ok('need(c, "a:b")'));
+  assert.ok(!ok('need(c, "a:b")\n(evil)()'));
+  assert.ok(!ok('need(c, "a:b")\n[0]'));
+  assert.ok(!ok('need(c, "a:b") + 1; return 1'));
+  assert.ok(!ok('need(c, "a:b") || x; return 1'));
 });

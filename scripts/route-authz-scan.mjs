@@ -20,8 +20,9 @@ export const CORE_EXEMPTIONS = {
  *
  * Regex vs division is decided from the previous significant token: a `/` starts a regex when there is none, when
  * it is punctuation other than `)`, `]`, `}`, or when it is a keyword such as `return`/`typeof`. After an
- * identifier, number, string, template, regex, `)`, `]` or `}` it is division. Known blind spot: a regex right after
- * `)` or `}` (e.g. `if (x) /re/.test(y)`) reads as division.
+ * identifier, number, string, template, regex, `)`, `]` or `}` it is division, except after the `)` that closes the
+ * condition of `if`/`while`/`for`/`with`, where a regex follows. Known blind spot: a regex right after a `}` that
+ * closes a block reads as division.
  */
 export function tokenize(src) {
   const nl = [];
@@ -32,6 +33,7 @@ export function tokenize(src) {
     return lo + 1;
   };
   let pos = 0;
+  const parens = []; // for each open `(`: did an if/while/for/with keyword open it?
   const fail = (msg, at) => { throw new Error(`${msg} (line ${lineOf(at)})`); };
 
   const regexAllowed = (out) => {
@@ -43,6 +45,7 @@ export function tokenize(src) {
         const p3 = out[out.length - 3];
         if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) return false; // postfix ++/--: division follows
       }
+      if (prev.value === ")" && prev.ctl) return true;
       return !CLOSE.has(prev.value);
     }
     if (prev.type === "id") {
@@ -85,11 +88,15 @@ export function tokenize(src) {
       if (c === "`") {
         pos++;
         push("template", "`");
+        const tk = out[out.length - 1];
+        tk.text = "";
+        tk.interp = false;
         for (;;) {
           if (pos >= src.length) fail("Unterminated template literal", start);
-          if (src[pos] === "\\") { pos += 2; continue; }
+          if (src[pos] === "\\") { tk.text += src.slice(pos, pos + 2); pos += 2; continue; }
           if (src[pos] === "`") { pos++; break; }
-          if (src[pos] === "$" && src[pos + 1] === "{") { pos += 2; lex(out, true); continue; }
+          if (src[pos] === "$" && src[pos + 1] === "{") { tk.interp = true; pos += 2; lex(out, true); continue; }
+          tk.text += src[pos];
           pos++;
         }
         out.push({ type: "templateEnd", value: "`", pos, line: lineOf(pos - 1) });
@@ -139,6 +146,11 @@ export function tokenize(src) {
       }
       pos++;
       push("punct", c);
+      if (c === "(") {
+        const k = out.length >= 2 ? out[out.length - 2] : undefined, k2 = out.length >= 3 ? out[out.length - 3] : undefined;
+        const afterDot = k2 && k2.type === "punct" && (k2.value === "." || k2.value === "?.");
+        parens.push(!!k && k.type === "id" && !afterDot && (["if", "while", "for", "with"].includes(k.value) || (k.value === "await" && k2 && k2.type === "id" && k2.value === "for")));
+      } else if (c === ")") out[out.length - 1].ctl = parens.pop() === true;
     }
   }
 
@@ -147,8 +159,41 @@ export function tokenize(src) {
   return out;
 }
 
+const PERMISSION = /^[a-z][a-z-]*:[a-z][a-z-]*$/;
+const NOT_A_PATH = new Set(["undefined", "null", "this", "true", "false", "void", "typeof", "new", "function", "class", "NaN", "Infinity", "super", "async", "await", "yield", "delete", "in", "of", "instanceof"]);
+const CONTINUES = new Set(["(", "[", ".", "?.", "+", "-", "*", "/", "%", "<", ">", "=", "&", "|", "^", "?", ":", ",", "!", "=>"]);
+
+/**
+ * Permission argument of need(): a string literal or interpolation-free template that looks like `area:action`, or a
+ * dotted identifier path such as `route.permission` (not undefined, null, this, ...). Returns its text, or null.
+ */
+function permissionText(rest) {
+  if (rest.length && isP(rest[rest.length - 1], ",")) rest = rest.slice(0, -1);
+  if (rest.length === 1 && rest[0].type === "str") return PERMISSION.test(rest[0].value) ? rest[0].value : null;
+  if (rest.length === 2 && rest[0].type === "template" && rest[1].type === "templateEnd") return !rest[0].interp && PERMISSION.test(rest[0].text) ? rest[0].text : null;
+  if (rest.length % 2 === 1) {
+    for (let k = 0; k < rest.length; k++) {
+      const t = rest[k];
+      if (k % 2 === 0 ? !(t.type === "id" && !t.value.includes("\\") && !(k === 0 && NOT_A_PATH.has(t.value))) : !isP(t, ".")) return null;
+    }
+    return rest.map((t) => t.value).join("");
+  }
+  return null;
+}
+
 const isP = (t, v) => t?.type === "punct" && t.value === v;
 const isId = (t, v) => t?.type === "id" && (v === undefined || t.value === v);
+/** True when the statement whose last token is toks[last] ends there: `;`, `}`, the end, or a newline (ASI) not followed by a continuation. */
+function endsStatement(toks, last, hi = toks.length) {
+  const next = toks[last + 1];
+  if (last + 1 >= hi || !next) return true;
+  if (isP(next, ";") || isP(next, "}")) return true;
+  if (next.line <= toks[last].line) return false;
+  if (next.type === "punct") return !CONTINUES.has(next.value);
+  if (next.type === "template") return false; // tagged template
+  if (next.type === "id") return !["as", "satisfies", "in", "instanceof"].includes(next.value);
+  return true;
+}
 const brief = (toks) => toks.map((t) => (t.type === "str" ? JSON.stringify(t.value) : t.value)).join(" ");
 
 /** Index of the token closing the group opened at `open` (any of ( [ { count), or -1. */
@@ -303,11 +348,8 @@ function gateOf(toks, fn) {
   if (!isId(toks[k], "need") || !isP(toks[k + 1], "(")) return null;
   const nc = matching(toks, k + 1);
   if (nc < 0 || nc >= end || !isId(toks[k + 2], pname) || !isP(toks[k + 3], ",")) return null;
-  if (!(nc + 1 === end || isP(toks[nc + 1], ";"))) return null;
-  const rest = toks.slice(k + 4, nc);
-  if (!rest.length || (rest.length === 1 && rest[0].type === "str" && rest[0].value === "")) return null;
-  if (rest.length === 2 && rest[0].type === "template" && rest[1].type === "templateEnd") return null;
-  return rest.length === 1 && rest[0].type === "str" ? rest[0].value : brief(rest);
+  if (!endsStatement(toks, nc, end)) return null;
+  return permissionText(toks.slice(k + 4, nc));
 }
 
 /**
@@ -387,22 +429,31 @@ export function scan(src, exemptions = {}) {
     return { tok: m, line, method, argFrom: j + 1, argTo: close };
   };
   // Every `.method(` chained after a registration call's closing paren is itself a registration.
-  const chain = (after) => {
+  // Returns the index just past the chain, or -1 when it was reported as unparsed. With collect=false (registrations
+  // before the authentication line) the chain is only walked.
+  const chain = (after, collect = true) => {
     let p = after;
     while (isP(toks[p], ".") || isP(toks[p], "?.")) {
       const line = toks[p].line;
       if (isP(toks[p], "?.") || !isId(toks[p + 1]) || (!REGISTRARS.has(toks[p + 1].value) && toks[p + 1].value !== "onError")) {
         result.unparsed.push({ line, reason: `Chained call after a route registration that is not a recognised registration: ${brief(toks.slice(p, p + 3))}` });
-        return;
+        return -1;
       }
       const reg = parseCall(p + 1, line, "chained .");
-      if (!reg) return;
+      if (!reg) return -1;
       reg.tok = p;
-      if (toks[p + 1].value !== "onError") regs.push(reg);
+      if (collect && toks[p + 1].value !== "onError") regs.push(reg);
       p = reg.argTo + 1;
     }
+    return p;
   };
-  if (isP(toks[from], ".") || isP(toks[from], "?.")) chain(from); // app.use("/api/*", authenticate).get(...)
+  // A registration (with its chain) must be a whole expression statement that starts with `app`: its value is never
+  // kept, chained on, cast, passed or wrapped, so no registration can hide behind an alias of the returned object.
+  const wholeStatement = (i, end, line) => {
+    const pv = toks[i - 1];
+    const startsOk = !pv || isP(pv, ";") || isP(pv, "{") || isP(pv, "}") || isP(pv, ")") || isId(pv, "else") || isId(pv, "do");
+    if (!startsOk || !endsStatement(toks, end - 1)) result.unparsed.push({ line, reason: `Route registration is not a whole expression statement starting with app (its value is used, chained or wrapped): ${brief(toks.slice(Math.max(0, i - 2), i + 4))} ... ${brief(toks.slice(end - 1, end + 2))}` });
+  };
   // Scope: the function that contains the authentication line. Exactly one `const app = new Hono()` must be
   // declared in it; a decoy declaration in another function does not move the scope.
   const isDecl = (i) => ["const", "let", "var"].includes(toks[i - 1]?.value) && isP(toks[i + 1], "=") && isId(toks[i + 2], "new") && isId(toks[i + 3], "Hono");
@@ -451,12 +502,46 @@ export function scan(src, exemptions = {}) {
     reg.tok = i;
     if (i < from) {
       // Before the authentication line: out of scope, but only as a top-level statement of the factory, because a
-      // registration inside a function or block there can run after authentication.
+      // registration inside a function or block there can run after authentication. The authentication line itself
+      // may chain registrations (app.use("/api/*", authenticate).get(...)).
       if (!topLevel(i)) result.unparsed.push({ line: t.line, reason: `Registration before the authentication line is not a top-level statement of the factory: ${brief(toks.slice(i, i + 4))}` });
+      const e = chain(reg.argTo + 1, i === authAt);
+      if (e >= 0) wholeStatement(i, e, t.line);
       continue;
     }
     if (!isOnError) regs.push(reg);
-    chain(reg.argTo + 1);
+    const e = chain(reg.argTo + 1);
+    if (e >= 0) wholeStatement(i, e, t.line);
+  }
+
+  // `need`: exactly one declaration in the whole source, `const need = (...) => { ... }` directly in the factory,
+  // whose body checks `can(` and `throw forbidden()`. Any other binding of the name, anywhere, is reported.
+  {
+    const needAt = [];
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
+      if (!isId(t, "need")) continue;
+      if (isP(toks[i - 1], ".") || isP(toks[i - 1], "?.")) continue; // property access
+      if (isP(toks[i + 1], "(") && !isId(toks[i - 1], "function") && !isId(toks[i - 1], "class")) continue; // a call (or method name)
+      if (isId(toks[i - 1], "const") && isP(toks[i + 1], "=") && !isP(toks[i + 2], "=") && topLevel(i - 1) && i - 1 >= lo && i <= hi) { needAt.push(i); continue; }
+      result.unparsed.push({ line: t.line, reason: `\`need\` is declared or bound other than by the single factory-level \`const need = (...) => {...}\` (shadowing could turn a check into a no-op): ${brief(toks.slice(Math.max(0, i - 2), i + 3))}` });
+    }
+    if (needAt.length !== 1) result.unparsed.push({ line: needAt.length ? toks[needAt[1]].line : toks[authAt].line, reason: `Expected exactly one factory-level \`const need = (...) => {...}\`, found ${needAt.length}` });
+    else {
+      const eq = needAt[0] + 1;
+      let m = isP(toks[eq + 1], "(") ? matching(toks, eq + 1) : -1, b = -1;
+      if (m >= 0 && arrowAfter(toks, m, toks.length)) { b = m + 1; while (b < toks.length && !isP(toks[b], "=>")) b++; b++; }
+      const e = b > 0 && isP(toks[b], "{") ? matching(toks, b) : -1;
+      const fn = e >= 0 ? parseFn(toks, eq + 1, e + 1) : null;
+      let can = false, thr = false;
+      if (fn && fn.block) {
+        for (let k = fn.bodyFrom; k < fn.bodyTo; k++) {
+          if (isId(toks[k], "can") && isP(toks[k + 1], "(") && !isP(toks[k - 1], ".")) can = true;
+          if (isId(toks[k], "throw") && isId(toks[k + 1], "forbidden") && isP(toks[k + 2], "(") && isP(toks[k + 3], ")")) thr = true;
+        }
+      }
+      if (!(can && thr)) result.unparsed.push({ line: toks[needAt[0]].line, reason: "The factory-level `need` is not `(...) => { ... }` whose body calls can( and does throw forbidden()" });
+    }
   }
 
   const seenExempt = new Set();
