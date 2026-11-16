@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { ROOT } from "./lib.mjs";
-import { CORE_EXEMPTIONS, scan } from "./route-authz-scan.mjs";
+import { CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, scan } from "./route-authz-scan.mjs";
 
 const AUTH = 'app.use("/api/*", authenticate);\n';
 const wrap = (body) => `function f() {\n${AUTH}${body}\n}`;
@@ -17,9 +17,9 @@ const fails = (body, ex = {}) => {
   return r.ungated.length + r.unparsed.length > 0;
 };
 
-test("real tenant-app.ts yields no findings with CORE_EXEMPTIONS", () => {
-  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS);
-  assert.deepEqual([r.unparsed, r.ungated, r.stale], [[], [], []]);
+test("real tenant-app.ts yields no findings with CORE_EXEMPTIONS and PUBLIC_CORE_ROUTES", () => {
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+  assert.deepEqual([r.unparsed, r.ungated, r.stale, r.stalePublic], [[], [], [], []]);
   assert.ok(r.routes.some((x) => x.path === "/api/overview" && x.exempt));
 });
 

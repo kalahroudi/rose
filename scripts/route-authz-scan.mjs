@@ -16,6 +16,23 @@ export const CORE_EXEMPTIONS = {
 };
 
 /**
+ * Routes registered before app.use("/api/*", authenticate) in the real tenant-app.ts: they run without a session
+ * and without need(), so each must be listed here with the reason it is public. "METHOD path" -> reason (same key
+ * format as CORE_EXEMPTIONS: ALL for app.all, ROUTE for app.route mounts). `app.use(...)` middleware before the
+ * authentication line is NOT covered by this list (it never answers a request on its own by convention; the scanner
+ * leaves it out of scope).
+ */
+export const PUBLIC_CORE_ROUTES = {
+  "GET /api/bootstrap": "The signed-out SPA needs the host kind, brand and sign-in options before anyone can authenticate; it returns only what the request host already reveals and no tenant data.",
+  "POST /api/root/code/request": "Sign-in on the root (apex) host starts signed out; protected by the per-address rate limit and a response that is identical whether or not the address is known.",
+  "POST /api/root/code/verify": "Completes the root-host sign-in, so it cannot require a session; the one-time code is hashed, single-use, expires quickly and is attempt-limited.",
+  "GET /api/root/slug": "Lets a person find their workspace address from the root host before signing in; rate-limited and returns no tenant data beyond the address.",
+  "POST /api/root/enter": "Hands a freshly verified root-host sign-in to a workspace host; it checks the signed, short-lived proof itself and issues no session without it.",
+  "GET /auth/handoff": "Receives the one-time handoff from the root host and creates the session on the workspace host; the token is signed, single-use and short-lived, and the host decides the tenant.",
+  "ROUTE /api/auth": "The sign-in, sign-out, passkey and session routes cannot require a session; each handler enforces its own checks (rate limits, one-time codes, CSRF guard in front of them).",
+};
+
+/**
  * Tokenize TypeScript/JavaScript source. Comments are dropped. Strings are one token; template literals are a
  * `template` token, their `${...}` code inline as ordinary tokens, then `templateEnd`. Regex literals are one token.
  *
@@ -411,10 +428,13 @@ function onlyThrows(toks, from, to, fnName) {
 /**
  * @param {string} src tenant-app.ts source
  * @param {Record<string, string | {reason: string, onlyThrows?: string}>} exemptions "METHOD path" -> reason
- * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[]}}
+ * @param {Record<string, string>} publicRoutes "METHOD path" -> reason: the only non-middleware registrations allowed
+ *   before the authentication line
+ * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[]}}
+ *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys matching no pre-auth registration
  */
-export function scan(src, exemptions = {}) {
-  const result = { routes: [], ungated: [], unparsed: [], stale: [] };
+export function scan(src, exemptions = {}, publicRoutes = {}) {
+  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [] };
   let toks;
   try { toks = tokenize(src); } catch (e) { result.unparsed.push({ line: 0, reason: `Could not tokenize: ${e.message}` }); return result; }
 
@@ -431,6 +451,7 @@ export function scan(src, exemptions = {}) {
   // Pass 1: every use of the identifier `app` in the whole source. Registrations before the auth line are out of
   // scope, but any other use (alias, destructuring, passing it on) is reported wherever it is.
   const regs = [];
+  const preRegs = []; // non-middleware registrations before the authentication line (must be on the public allow-list)
   // Parses `<method>[<generics>](...)` with the method token at `m`; returns the registration or null (reported).
   const parseCall = (m, line, label) => {
     const method = toks[m].value;
@@ -451,7 +472,7 @@ export function scan(src, exemptions = {}) {
   // Every `.method(` chained after a registration call's closing paren is itself a registration.
   // Returns the index just past the chain, or -1 when it was reported as unparsed. With collect=false (registrations
   // before the authentication line) the chain is only walked.
-  const chain = (after, collect = true) => {
+  const chain = (after, collect = true, into = regs) => {
     let p = after;
     while (isP(toks[p], ".") || isP(toks[p], "?.")) {
       const line = toks[p].line;
@@ -462,7 +483,7 @@ export function scan(src, exemptions = {}) {
       const reg = parseCall(p + 1, line, "chained .");
       if (!reg) return -1;
       reg.tok = p;
-      if (collect && toks[p + 1].value !== "onError") regs.push(reg);
+      if (collect && toks[p + 1].value !== "onError") into.push(reg);
       p = reg.argTo + 1;
     }
     return p;
@@ -528,7 +549,8 @@ export function scan(src, exemptions = {}) {
       // registration inside a function or block there can run after authentication. The authentication line itself
       // may chain registrations (app.use("/api/*", authenticate).get(...)).
       if (!topLevel(i)) result.unparsed.push({ line: t.line, reason: `Registration before the authentication line is not a top-level statement of the factory: ${brief(toks.slice(i, i + 4))}` });
-      const e = chain(reg.argTo + 1, i === authAt);
+      if (i !== authAt && !isOnError && reg.method !== "use") preRegs.push(reg);
+      const e = chain(reg.argTo + 1, true, i === authAt ? regs : preRegs);
       if (e >= 0) wholeStatement(i, e, t.line);
       continue;
     }
@@ -581,6 +603,34 @@ export function scan(src, exemptions = {}) {
   }
 
   const seenExempt = new Set();
+  // Pre-auth registrations: public only when listed. Middleware (`use`) is out of scope and never reaches here.
+  const seenPublic = new Set();
+  for (const reg of preRegs) {
+    if (reg.method === "use") continue; // chained middleware
+    const args = splitArgs(toks, reg.argFrom, reg.argTo);
+    let label = reg.method.toUpperCase();
+    let pathArg;
+    if (reg.method === "on") {
+      const mt = args[0] ? toks.slice(args[0][0], args[0][1]) : [];
+      const literalMethods = mt.length > 0 && mt.every((t) => t.type === "str" || (t.type === "punct" && ["[", "]", ","].includes(t.value)));
+      label = literalMethods ? mt.filter((t) => t.type === "str").map((t) => t.value.toUpperCase()).join("|") : "ON";
+      pathArg = args[1];
+    } else pathArg = args[0];
+    const ptoks = pathArg ? toks.slice(pathArg[0], pathArg[1]) : [];
+    if (!(ptoks.length === 1 && ptoks[0].type === "str" && !ptoks[0].value.includes("\\"))) {
+      result.unparsed.push({ line: reg.line, reason: `${label} registered before the authentication line has a path that is not a plain string literal, so it cannot be matched against the public allow-list: ${brief(ptoks) || "?"}` });
+      continue;
+    }
+    const key = `${label} ${ptoks[0].value}`;
+    const entry = { key, method: label, path: ptoks[0].value, line: reg.line, gated: false, gates: [], exempt: null };
+    if (!Object.hasOwn(publicRoutes, key)) {
+      result.ungated.push({ ...entry, reason: "Registered before the authentication line (unauthenticated) and not on the public allow-list (PUBLIC_CORE_ROUTES)" });
+    } else if (seenPublic.has(key)) {
+      result.ungated.push({ ...entry, reason: "Duplicate registration of a public route before the authentication line; only one is allowed" });
+    }
+    seenPublic.add(key);
+  }
+  for (const key of Object.keys(publicRoutes)) if (!seenPublic.has(key)) result.stalePublic.push(key);
   for (const reg of regs) {
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();

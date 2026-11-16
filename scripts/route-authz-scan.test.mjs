@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
-import { CORE_EXEMPTIONS, scan, tokenize } from "./route-authz-scan.mjs";
+import { CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, scan, tokenize } from "./route-authz-scan.mjs";
 
 const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
 const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
@@ -14,10 +14,11 @@ const ungated = (body, ex = {}) => scan(wrap(body), ex).ungated.map((u) => u.key
 const GOOD = 'app.get("/api/ok", async (c) => { need(c, "x:read"); return c.json({}); });\n';
 
 test("the real tenant-app.ts passes with the documented exemptions", () => {
-  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS);
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
   assert.deepEqual(r.unparsed, []);
   assert.deepEqual(r.ungated, []);
   assert.deepEqual(r.stale, []);
+  assert.deepEqual(r.stalePublic, []);
   const jobs = r.routes.filter((x) => x.path === "/api/jobs");
   assert.equal(jobs.length, 1);
   assert.deepEqual(jobs[0].gates, ["jobs:read"]);
@@ -148,7 +149,7 @@ test("a missing authentication line is a failure, not a pass", () => {
 });
 
 test("routes registered before the authentication line are not in scope", () => {
-  const r = scan(`function f() {\nconst app = new Hono();\napp.get("/api/bootstrap", async (c) => 1);\n${AUTH}${GOOD}return app;\n}`, {});
+  const r = scan(`function f() {\nconst app = new Hono();\napp.get("/api/bootstrap", async (c) => 1);\n${AUTH}${GOOD}return app;\n}`, {}, { "GET /api/bootstrap": "public" });
   assert.deepEqual(r.ungated, []);
   assert.equal(r.routes.length, 1);
 });
@@ -388,4 +389,37 @@ test("regression: route registration outside the factory function is unparsed", 
   assert.ok(unparsedOf(extra(`export function g(app) { app.get("/api/evil", ${U}); }`)) > 0);
   assert.ok(unparsedOf(extra(`const w = make(); w.app.get("/api/evil", ${U});`)) > 0);
   assert.equal(unparsedOf(extra(`const v = c.get("host");`)), 0);
+});
+
+const PRE = (pre, pub) => scan(`function f() {\nconst app = new Hono();\n${pre}\n${AUTH}\nreturn app;\n}`, {}, pub);
+const OPEN_H = "async (c) => c.json({})";
+
+test("public allow-list: an unlisted route before the auth line is ungated, a listed one passes", () => {
+  assert.deepEqual(PRE(`app.get("/api/evil", ${OPEN_H});`, {}).ungated.map((u) => u.key), ["GET /api/evil"]);
+  assert.deepEqual(PRE(`app.post("/x", ${OPEN_H});`, {}).ungated.map((u) => u.key), ["POST /x"]);
+  const ok = PRE(`app.get("/api/pub", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.deepEqual(ok.ungated, []);
+  assert.deepEqual(ok.stalePublic, []);
+  assert.deepEqual(ok.unparsed, []);
+});
+
+test("public allow-list: middleware before the auth line stays out of scope", () => {
+  const r = PRE('app.use("*", async (c, next) => { await next(); });', {});
+  assert.deepEqual(r.ungated, []);
+});
+
+test("public allow-list: stale, duplicate, dynamic path, and entries registered after auth", () => {
+  assert.deepEqual(PRE("", { "GET /api/gone": "why" }).stalePublic, ["GET /api/gone"]);
+  const dup = PRE(`app.get("/api/pub", ${OPEN_H});\napp.get("/api/pub", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.equal(dup.ungated.length, 1);
+  assert.match(dup.ungated[0].reason, /Duplicate/);
+  const dyn = PRE(`app.get(PATH, ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.equal(dyn.unparsed.length >= 1, true);
+  const after = scan(wrap(GOOD), {}, { "GET /api/ok": "why" });
+  assert.deepEqual(after.stalePublic, ["GET /api/ok"]);
+});
+
+test("public allow-list: a chained pre-auth registration is checked too", () => {
+  const r = PRE(`app.get("/api/pub", ${OPEN_H}).post("/api/evil", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.deepEqual(r.ungated.map((u) => u.key), ["POST /api/evil"]);
 });
