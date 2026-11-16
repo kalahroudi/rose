@@ -179,7 +179,7 @@ test("bypass: an alias created before the authentication line is reported", () =
     const r = scan(`const app = new Hono<Env>();\n${pre}\n${AUTH}a.get("/api/x", h);`, {});
     assert.equal(r.unparsed.length, 1, pre);
   }
-  assert.deepEqual(scan(`const app = new Hono<Env>();\napp.get("/api/pre", h);\n${AUTH}${GOOD}return app;`, {}).unparsed, []);
+  assert.deepEqual(scan(`const app = new Hono<Env>();\napp.get("/api/pre", async (c) => c.json(1));\n${AUTH}${GOOD}return app;`, {}).unparsed, []);
 });
 
 test("bypass: an empty permission is not a gate", () => {
@@ -422,4 +422,37 @@ test("public allow-list: stale, duplicate, dynamic path, and entries registered 
 test("public allow-list: a chained pre-auth registration is checked too", () => {
   const r = PRE(`app.get("/api/pub", ${OPEN_H}).post("/api/evil", ${OPEN_H});`, { "GET /api/pub": "why" });
   assert.deepEqual(r.ungated.map((u) => u.key), ["POST /api/evil"]);
+});
+
+test("review: identifier `of` before `/` is division, so a trick cannot hide a route", () => {
+  const real = readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+  const authLine = 'app.use("/api/*", authenticate);';
+  const trick = (route) => `let of: any = 1;\n {}\n of / (${route} as any); //'\n ;\n`;
+  const pre = real.replace(authLine, trick("app.get('/api/evil', H)") + authLine);
+  assert.notEqual(pre, real);
+  const r = scan(pre, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+  assert.ok(r.ungated.length + r.unparsed.length > 0);
+  const post = real.replace(authLine, authLine + "\n" + trick("app.get('/api/evil', H)"));
+  const r2 = scan(post, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+  assert.ok(r2.ungated.length + r2.unparsed.length > 0);
+  // for-of with a regex still tokenizes as a regex
+  assert.ok(tokenize("for (const x of /a/.exec(s)) {}").some((t) => t.type === "regex"));
+  assert.ok(tokenize("for (x of /a/.exec(s)) {}").some((t) => t.type === "regex"));
+  assert.ok(!tokenize("let of = 1; of / 2 / 3;").some((t) => t.type === "regex"));
+  assert.throws(() => tokenize("for (let of / 2; ;) {}"), /Ambiguous/);
+});
+
+test("review: app.on with a non-standard method cannot forge a synthetic key", () => {
+  const forged = PRE(`app.on("ROUTE", "/api/auth", ${OPEN_H});`, { "ROUTE /api/auth": "why" });
+  assert.ok(forged.unparsed.length >= 1);
+  assert.deepEqual(forged.stalePublic, ["ROUTE /api/auth"]);
+  assert.ok(unparsedOf(wrap(`app.on("ALL", "/api/x", ${GATE});`)) >= 1);
+  assert.equal(unparsedOf(wrap(`app.on(["GET", "post"], "/api/x", ${GATE});`)), 0);
+});
+
+test("review: allow-listed pre-auth routes must have only inline handler arguments", () => {
+  const r = PRE(`app.get("/api/bootstrap", "/api/evil", ${OPEN_H});`, { "GET /api/bootstrap": "why" });
+  assert.ok(r.unparsed.length >= 1);
+  const ok = PRE(`app.get("/api/bootstrap", ${OPEN_H}, ${OPEN_H});`, { "GET /api/bootstrap": "why" });
+  assert.deepEqual(ok.unparsed, []);
 });

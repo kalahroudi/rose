@@ -53,6 +53,7 @@ export function tokenize(src) {
   };
   let pos = 0;
   const parens = []; // for each open `(`: did an if/while/for/with keyword open it?
+  const fors = []; // for each open `(`: is it the header of a `for` loop?
   const fail = (msg, at) => { throw new Error(`${msg} (line ${lineOf(at)})`); };
 
   const regexAllowed = (out) => {
@@ -88,7 +89,12 @@ export function tokenize(src) {
     if (prev.type === "id") {
       if (!KEYWORDS_BEFORE_REGEX.has(prev.value)) return false;
       if (p2 && p2.type === "punct" && (p2.value === "." || p2.value === "?.")) return false; // property name, not a keyword
-      if (prev.value === "of") return !!p2 && (p2.type === "id" || (p2.type === "punct" && (p2.value === "]" || p2.value === "}"))); // `for (x of /re/...)` vs an identifier named `of`
+      if (prev.value === "of") {
+        // `of` is a keyword only directly inside a `for (` header; anywhere else it is an identifier (division follows).
+        if (!fors[fors.length - 1]) return false;
+        if (p2 && p2.type === "id" && ["let", "var", "const"].includes(p2.value)) fail("Ambiguous `of` before `/` in a for header (identifier or for-of keyword)", prev.pos);
+        return !!p2 && (p2.type === "id" || (p2.type === "punct" && (p2.value === "]" || p2.value === "}")));
+      }
       return true;
     }
     return false;
@@ -186,8 +192,9 @@ export function tokenize(src) {
       if (c === "(") {
         const k = out.length >= 2 ? out[out.length - 2] : undefined, k2 = out.length >= 3 ? out[out.length - 3] : undefined;
         const afterDot = k2 && k2.type === "punct" && (k2.value === "." || k2.value === "?.");
+        fors.push(!!k && k.type === "id" && !afterDot && (k.value === "for" || (k.value === "await" && k2 && k2.type === "id" && k2.value === "for")));
         parens.push(!!k && k.type === "id" && !afterDot && (["if", "while", "for", "with"].includes(k.value) || (k.value === "await" && k2 && k2.type === "id" && k2.value === "for")));
-      } else if (c === ")") out[out.length - 1].ctl = parens.pop() === true;
+      } else if (c === ")") { out[out.length - 1].ctl = parens.pop() === true; fors.pop(); }
     }
   }
 
@@ -258,6 +265,10 @@ function splitArgs(toks, from, to) {
   if (s < to) args.push([s, to]);
   return args;
 }
+
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]);
+/** app.on with literal methods: every method must be a standard HTTP verb, so the label never equals a synthetic one (ROUTE, MOUNT, ALL, USE, ON). */
+const onMethodsOk = (mt) => mt.filter((t) => t.type === "str").every((t) => HTTP_METHODS.has(t.value.toUpperCase()));
 
 const CONTROL = new Set(["if", "for", "while", "switch", "catch", "with", "else", "return", "typeof", "await", "in", "of", "new", "do", "case", "throw", "void", "delete", "yield"]);
 
@@ -614,6 +625,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
       const mt = args[0] ? toks.slice(args[0][0], args[0][1]) : [];
       const literalMethods = mt.length > 0 && mt.every((t) => t.type === "str" || (t.type === "punct" && ["[", "]", ","].includes(t.value)));
       label = literalMethods ? mt.filter((t) => t.type === "str").map((t) => t.value.toUpperCase()).join("|") : "ON";
+      if (literalMethods && !onMethodsOk(mt)) { result.unparsed.push({ line: reg.line, reason: `app.on registered before the authentication line uses a method that is not a standard HTTP method (could collide with a synthetic key such as ROUTE): ${brief(mt)}` }); continue; }
       pathArg = args[1];
     } else pathArg = args[0];
     const ptoks = pathArg ? toks.slice(pathArg[0], pathArg[1]) : [];
@@ -623,6 +635,11 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     }
     const key = `${label} ${ptoks[0].value}`;
     const entry = { key, method: label, path: ptoks[0].value, line: reg.line, gated: false, gates: [], exempt: null };
+    if (reg.method !== "route" && reg.method !== "mount") {
+      const rest = reg.method === "on" ? args.slice(2) : args.slice(1);
+      const bad = rest.findIndex(([a, b]) => !parseFn(toks, a, b));
+      if (bad >= 0) { result.unparsed.push({ line: reg.line, reason: `${label} ${ptoks[0].value}: extra argument before the authentication line is not an inline function: ${brief(toks.slice(rest[bad][0], Math.min(rest[bad][1], rest[bad][0] + 6)))}` }); continue; }
+    }
     if (!Object.hasOwn(publicRoutes, key)) {
       result.ungated.push({ ...entry, reason: "Registered before the authentication line (unauthenticated) and not on the public allow-list (PUBLIC_CORE_ROUTES)" });
     } else if (seenPublic.has(key)) {
@@ -640,6 +657,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
       const mt = m ? toks.slice(m[0], m[1]) : [];
       const literalMethods = mt.length > 0 && mt.every((t) => t.type === "str" || (t.type === "punct" && ["[", "]", ","].includes(t.value)));
       label = literalMethods ? mt.filter((t) => t.type === "str").map((t) => t.value.toUpperCase()).join("|") : "ON";
+      if (literalMethods && !onMethodsOk(mt)) { result.unparsed.push({ line: reg.line, reason: `app.on uses a method that is not a standard HTTP method (could collide with a synthetic key such as ROUTE): ${brief(mt)}` }); continue; }
       pathArg = args[1];
     } else if (reg.method === "use") {
       pathArg = args[0] && (toks[args[0][0]].type === "str" || toks[args[0][0]].type === "template") ? args[0] : null;
