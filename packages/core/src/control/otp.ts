@@ -12,6 +12,13 @@ const MAX_CODES_PER_REQUESTER = 5;
 /** Per (scope, email) across all requesters: anti mail-bomb cap, well above what one requester can reach. */
 const MAX_CODES_PER_EMAIL = 20;
 const WINDOW = 15 * 60_000;
+/**
+ * Total guesses (attempts + foreign_attempts) across all codes of one (scope, email) created within
+ * GUESS_WINDOW. A guess made in any 15-minute span lands on a code created at most CODE_TTL before it,
+ * so counting codes from WINDOW + CODE_TTL bounds guesses in any 15-minute span at this value.
+ */
+const MAX_GUESSES_PER_EMAIL = 100;
+const GUESS_WINDOW = WINDOW + CODE_TTL;
 
 const codeHash = async (masterKey: string, scope: string, email: string, code: string) =>
   hmacHex(await deriveHmacKey(masterKey, "login-code/v1"), `${scope}\u0000${email}\u0000${code}`);
@@ -53,6 +60,8 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
  * can use the code that was emailed last). Guesses by a code's own requester spend its `attempts`
  * budget; guesses by anyone else spend the smaller `foreign_attempts` budget, so a stranger can never
  * exhaust the owner's guesses (total guesses per code stay bounded at MAX_ATTEMPTS + MAX_FOREIGN_ATTEMPTS).
+ * Across all codes of one (scope, email) from the last GUESS_WINDOW, at most MAX_GUESSES_PER_EMAIL guesses
+ * are spent; at the cap verify answers false like any bad code and spends nothing.
  * Live = unconsumed, unexpired and the relevant budget unspent. Each verify spends at most one attempt on
  * each distinct candidate, before comparing, and a correct code is consumed atomically.
  */
@@ -76,15 +85,17 @@ export async function verifyLoginCode(db: D1Database, masterKey: string, scope: 
   }
   const given = await codeHash(masterKey, scope, email, code);
   let matched: Row | null = null;
+  // Cap total guesses per address in the same statement that spends one, so parallel verifies can not exceed it.
+  const capSql = " AND (SELECT COALESCE(SUM(attempts + foreign_attempts), 0) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?";
   for (const { row, foreign } of candidates) {
     // Spend an attempt before comparing, so parallel guesses can not exceed the budget.
     const spent = await db
       .prepare(
         foreign
-          ? "UPDATE login_codes SET foreign_attempts = foreign_attempts + 1 WHERE id = ? AND foreign_attempts < ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?"
-          : "UPDATE login_codes SET attempts = attempts + 1 WHERE id = ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?",
+          ? "UPDATE login_codes SET foreign_attempts = foreign_attempts + 1 WHERE id = ? AND foreign_attempts < ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?" + capSql
+          : "UPDATE login_codes SET attempts = attempts + 1 WHERE id = ? AND attempts < ? AND consumed_at IS NULL AND expires_at > ?" + capSql,
       )
-      .bind(...(foreign ? [row.id, MAX_FOREIGN_ATTEMPTS, MAX_ATTEMPTS, t] : [row.id, MAX_ATTEMPTS, t]))
+      .bind(...(foreign ? [row.id, MAX_FOREIGN_ATTEMPTS, MAX_ATTEMPTS, t] : [row.id, MAX_ATTEMPTS, t]), email, scope, t - GUESS_WINDOW, MAX_GUESSES_PER_EMAIL)
       .run();
     if (spent.meta.changes === 0) continue;
     if (!matched && (await timingSafeEqual(row.code_hash, given))) matched = row;

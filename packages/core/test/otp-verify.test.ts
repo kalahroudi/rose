@@ -54,6 +54,60 @@ describe("sign-in code guess budgets", () => {
   });
 });
 
+describe("sign-in code per-address guess cap", () => {
+  const total = async (scope: string, email: string) =>
+    (await env.DB.prepare("SELECT COALESCE(SUM(attempts + foreign_attempts), 0) AS n FROM login_codes WHERE scope = ? AND email = ?").bind(scope, email).first<{ n: number }>())!.n;
+  // 20 requesters, one code each; the first 19 spend all 5 owner guesses (95), the last 4 more (99).
+  const fill = async (scope: string, email: string) => {
+    let last = "";
+    for (let i = 0; i < 20; i++) {
+      last = await issueLoginCode(env.DB, KEY, scope, email, `r${i}`);
+      await tick();
+      for (let g = 0; g < (i < 19 ? 5 : 4); g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
+    }
+    return last;
+  };
+
+  it("rotating requesters hit the cap at exactly 100 and the 101st guess fails even with the right code", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const last = await fill(scope, email);
+    expect(await total(scope, email)).toBe(99);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), "stranger")).toBe(false);
+    expect(await total(scope, email)).toBe(100);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, last, "r19")).toBe(false);
+    expect(await total(scope, email)).toBe(100);
+  });
+
+  it("parallel guesses near the cap do not exceed it", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const last = await fill(scope, email);
+    await Promise.all(Array.from({ length: 6 }, (_, i) => verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `p${i}`)));
+    expect(await total(scope, email)).toBeLessThanOrEqual(100);
+  });
+
+  it("guesses on codes older than the window do not count", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const old = Date.now() - 26 * 60_000;
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester, attempts, foreign_attempts) VALUES (?, ?, ?, ?, ?, ?, ?, 5, 3)")
+        .bind(`old-${uniq()}-${i}`, email, scope, "x", old + 600_000, old, `old${i}`).run();
+    }
+    const code = await issueLoginCode(env.DB, KEY, scope, email, "fresh");
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "fresh")).toBe(true);
+  });
+
+  it("a legitimate owner with a couple of typos still signs in", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const code = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    for (let i = 0; i < 2; i++) expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), "owner")).toBe(false);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "owner")).toBe(true);
+  });
+});
+
 describe("sign-in code verify rate limits", () => {
   const worker = createTenantWorker({ modules: [notes] });
   const limiter = (limit: number) => {
