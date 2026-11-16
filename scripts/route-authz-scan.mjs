@@ -5,6 +5,7 @@
 
 const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
 const REGISTRARS = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all", "on", "use", "route", "mount"]);
+const isLT = (ch) => ch === "\n" || ch === "\r" || ch === "\u2028" || ch === "\u2029";
 const OPEN = new Set(["(", "[", "{"]);
 const CLOSE = new Set([")", "]", "}"]);
 
@@ -25,8 +26,9 @@ export const CORE_EXEMPTIONS = {
  * closes a block reads as division.
  */
 export function tokenize(src) {
+  // Line terminators are the JS set (\n, \r, U+2028, U+2029) everywhere; CRLF counts as one.
   const nl = [];
-  for (let i = 0; i < src.length; i++) if (src[i] === "\n") nl.push(i);
+  for (let i = 0; i < src.length; i++) if (isLT(src[i]) && !(src[i] === "\r" && src[i + 1] === "\n")) nl.push(i);
   const lineOf = (pos) => {
     let lo = 0, hi = nl.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (nl[mid] < pos) lo = mid + 1; else hi = mid; }
@@ -39,8 +41,26 @@ export function tokenize(src) {
   const regexAllowed = (out) => {
     const prev = out[out.length - 1];
     if (!prev) return true;
+    if (prev.type === "tmplOpen") return true;
     const p2 = out[out.length - 2];
     if (prev.type === "punct") {
+      if (prev.value === "!") {
+        // Postfix TypeScript non-null `x! / 2` is division; `!/re/` after an operator is a regex.
+        let j = out.length - 1;
+        while (j >= 0 && out[j].type === "punct" && out[j].value === "!") j--;
+        const base = out[j];
+        const dotBefore = out[j - 1]?.type === "punct" && (out[j - 1].value === "." || out[j - 1].value === "?.");
+        const operand = base && (
+          (base.type === "id" && (dotBefore || !KEYWORDS_BEFORE_REGEX.has(base.value))) ||
+          (base.type === "punct" && ((base.value === ")" && !base.ctl) || base.value === "]")));
+        const odd = base && ["num", "str", "regex", "templateEnd"].includes(base.type);
+        if (operand || odd) {
+          const first = out[j + 1];
+          if (operand && base.pos + base.value.length === first.pos) return false; // `x!/`: postfix, division
+          if (odd || first.line === base.line) fail("Ambiguous `!` before `/` (non-null assertion or logical not)", first.pos);
+          return true; // `!` on a new line: ASI, so a prefix operator and a regex follows
+        }
+      }
       if ((prev.value === "+" || prev.value === "-") && p2 && p2.type === "punct" && p2.value === prev.value && p2.pos + 1 === prev.pos) {
         const p3 = out[out.length - 3];
         if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) return false; // postfix ++/--: division follows
@@ -65,7 +85,7 @@ export function tokenize(src) {
       const c = src[pos], start = pos, n = src[pos + 1];
       const push = (type, value) => out.push({ type, value, pos: start, line: lineOf(start) });
       const prev = out[out.length - 1];
-      if (c === "/" && n === "/") { while (pos < src.length && src[pos] !== "\n") pos++; continue; }
+      if (c === "/" && n === "/") { while (pos < src.length && !isLT(src[pos])) pos++; continue; }
       if (c === "/" && n === "*") {
         const end = src.indexOf("*/", pos + 2);
         if (end < 0) fail("Unterminated block comment", pos);
@@ -76,8 +96,8 @@ export function tokenize(src) {
         pos++;
         let v = "";
         while (pos < src.length && src[pos] !== c) {
-          if (src[pos] === "\n") fail("Unterminated string", start);
-          if (src[pos] === "\\") { v += src.slice(pos, pos + 2); pos += 2; continue; }
+          if (isLT(src[pos])) fail("Unterminated string", start);
+          if (src[pos] === "\\") { const w = src[pos + 1] === "\r" && src[pos + 2] === "\n" ? 3 : 2; v += src.slice(pos, pos + w); pos += w; continue; }
           v += src[pos++];
         }
         if (pos >= src.length) fail("Unterminated string", start);
@@ -95,7 +115,7 @@ export function tokenize(src) {
           if (pos >= src.length) fail("Unterminated template literal", start);
           if (src[pos] === "\\") { tk.text += src.slice(pos, pos + 2); pos += 2; continue; }
           if (src[pos] === "`") { pos++; break; }
-          if (src[pos] === "$" && src[pos + 1] === "{") { tk.interp = true; pos += 2; lex(out, true); continue; }
+          if (src[pos] === "$" && src[pos + 1] === "{") { tk.interp = true; out.push({ type: "tmplOpen", value: "${", pos, line: lineOf(pos) }); pos += 2; lex(out, true); continue; }
           tk.text += src[pos];
           pos++;
         }
@@ -104,7 +124,7 @@ export function tokenize(src) {
       }
       if (c === "/" && regexAllowed(out)) {
         let i = pos + 1, inClass = false, ok = false;
-        while (i < src.length && src[i] !== "\n") {
+        while (i < src.length && !isLT(src[i])) {
           if (src[i] === "\\") { i += 2; continue; }
           if (src[i] === "[") inClass = true;
           else if (src[i] === "]") inClass = false;
@@ -142,7 +162,7 @@ export function tokenize(src) {
       if (c === "." && n === "." && src[pos + 2] === ".") { pos += 3; push("punct", "..."); continue; }
       if (stopAtBrace) {
         if (c === "{") depth++;
-        else if (c === "}") { if (depth === 0) { pos++; return; } depth--; }
+        else if (c === "}") { if (depth === 0) { out.push({ type: "tmplClose", value: "}", pos, line: lineOf(pos) }); pos++; return; } depth--; }
       }
       pos++;
       push("punct", c);
@@ -476,6 +496,8 @@ export function scan(src, exemptions = {}) {
       }
     }
   }
+  const inHole = new Array(toks.length);
+  { let h = 0; toks.forEach((t, i) => { if (t.type === "tmplOpen") h++; inHole[i] = h > 0; if (t.type === "tmplClose") h--; }); }
   const dep = new Array(toks.length);
   { let cur = 0; toks.forEach((t, i) => { if (t.type === "punct" && OPEN.has(t.value)) { dep[i] = cur++; } else if (t.type === "punct" && CLOSE.has(t.value)) { dep[i] = --cur; } else dep[i] = cur; }); }
   const base = lo >= 0 ? dep[lo] + 1 : 0;
@@ -493,6 +515,7 @@ export function scan(src, exemptions = {}) {
     if (isId(toks[i - 1], "return") && (toks[i + 1] === undefined || isP(toks[i + 1], ";") || isP(toks[i + 1], "}")) && topLevel(i - 1)) continue; // `return app` of the factory
     if (isDecl(i)) continue; // the declaration
     const isOnError = isP(toks[i + 1], ".") && isId(toks[i + 2], "onError") && isP(toks[i + 3], "(");
+    if (inHole[i]) { result.unparsed.push({ line: t.line, reason: `Use of \`app\` inside a template literal \`\${...}\` hole: ${brief(toks.slice(i, i + 4))}` }); continue; }
     if (!isOnError && (!isP(toks[i + 1], ".") || !isId(toks[i + 2]) || !REGISTRARS.has(toks[i + 2].value))) {
       result.unparsed.push({ line: t.line, reason: `Use of \`app\` that is not a recognised route registration: ${brief(toks.slice(i, i + 4))}` });
       continue;
@@ -512,6 +535,19 @@ export function scan(src, exemptions = {}) {
     if (!isOnError) regs.push(reg);
     const e = chain(reg.argTo + 1);
     if (e >= 0) wholeStatement(i, e, t.line);
+  }
+
+  // Registrations outside the factory (the returned app is public API; helpers may receive it) are not analysed, so
+  // refuse the shapes that register routes there: `app.<registrar>(` or any `.<registrar>(` with a "/..." path argument.
+  if (lo >= 0) {
+    for (let i = 0; i < toks.length; i++) {
+      if (i >= lo && i <= hi) continue;
+      if (!isId(toks[i]) || !REGISTRARS.has(toks[i].value) || !(isP(toks[i - 1], ".") || isP(toks[i - 1], "?.")) || !isP(toks[i + 1], "(")) continue;
+      const close = matching(toks, i + 1);
+      const first = close < 0 ? [] : splitArgs(toks, i + 2, close).slice(0, 2).map(([x]) => toks[x]);
+      const slashPath = first.some((t) => (t.type === "str" && t.value.startsWith("/")) || (t.type === "template" && t.text.startsWith("/")));
+      if (slashPath || isId(toks[i - 2], "app")) result.unparsed.push({ line: toks[i].line, reason: `Route registration outside the factory function that holds the authentication line: ${brief(toks.slice(Math.max(0, i - 2), i + 4))}` });
+    }
   }
 
   // `need`: exactly one declaration in the whole source, `const need = (...) => { ... }` directly in the factory,

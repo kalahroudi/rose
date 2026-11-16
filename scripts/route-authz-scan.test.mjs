@@ -356,3 +356,36 @@ test("regression: a gate that relies on ASI (no semicolon) counts", () => {
   assert.ok(!ok('need(c, "a:b") + 1; return 1'));
   assert.ok(!ok('need(c, "a:b") || x; return 1'));
 });
+
+const U = 'async (c) => c.json({ leaked: true })';
+
+test("regression: // comments end at \\r, U+2028 and U+2029 too", () => {
+  for (const lt of ["\r", " ", " "]) {
+    assert.deepEqual(ungated(`// c${lt}app.get("/api/evil", ${U});`), ["GET /api/evil"], JSON.stringify(lt));
+  }
+  assert.equal(tokenize("a // x b").length, 2);
+  assert.equal(tokenize("a\r\nb\rc")[2].line, 3);
+});
+
+test("regression: `/` after a postfix non-null `!` is division; ambiguous spacing fails closed", () => {
+  const body = `const p = "/api/evil"; const n = [1][0]; const h = n! / 2; app.get(p, ${U}); const q = 1 / 2;`;
+  assert.deepEqual(ungated(body), ["GET p"]);
+  assert.deepEqual(ungated(`const h2 = [1][0]!/2; app.get('/api/evil', ${U}); const q2 = 1 / 2;`), ["GET /api/evil"]);
+  assert.equal(tokenize("x!/2").filter((t) => t.type === "regex").length, 0);
+  assert.equal(tokenize("x = !/re/.test(y)").filter((t) => t.type === "regex").length, 1);
+  assert.ok(unparsedOf(wrap("const a = x ! / 2; app.get('/api/evil', " + U + "); const b = 1 / 2;")) > 0);
+});
+
+test("regression: template holes emit tokens and a registration in a hole is unparsed", () => {
+  const types = tokenize("`a${b}c`").map((t) => t.type);
+  assert.deepEqual(types, ["template", "tmplOpen", "id", "tmplClose", "templateEnd"]);
+  const src = `const tag = (_s, ...v) => v[1];\nconst r = tag\`\${(0)}\${app.get("/api/a", ${GOOD.slice(GOOD.indexOf("async"), -3)})\n}\`;\nr.get("/api/evil", ${U});`;
+  assert.ok(unparsedOf(wrap(src)) > 0);
+});
+
+test("regression: route registration outside the factory function is unparsed", () => {
+  const extra = (code) => wrap("") + "\n" + code;
+  assert.ok(unparsedOf(extra(`export function g(app) { app.get("/api/evil", ${U}); }`)) > 0);
+  assert.ok(unparsedOf(extra(`const w = make(); w.app.get("/api/evil", ${U});`)) > 0);
+  assert.equal(unparsedOf(extra(`const v = c.get("host");`)), 0);
+});
