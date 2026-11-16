@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
-import { CORE_EXEMPTIONS, scan, tokenize } from "./route-authz-scan.mjs";
+import { CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, scan, tokenize } from "./route-authz-scan.mjs";
 
 const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
 const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
@@ -14,10 +14,11 @@ const ungated = (body, ex = {}) => scan(wrap(body), ex).ungated.map((u) => u.key
 const GOOD = 'app.get("/api/ok", async (c) => { need(c, "x:read"); return c.json({}); });\n';
 
 test("the real tenant-app.ts passes with the documented exemptions", () => {
-  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS);
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
   assert.deepEqual(r.unparsed, []);
   assert.deepEqual(r.ungated, []);
   assert.deepEqual(r.stale, []);
+  assert.deepEqual(r.stalePublic, []);
   const jobs = r.routes.filter((x) => x.path === "/api/jobs");
   assert.equal(jobs.length, 1);
   assert.deepEqual(jobs[0].gates, ["jobs:read"]);
@@ -148,14 +149,15 @@ test("a missing authentication line is a failure, not a pass", () => {
 });
 
 test("routes registered before the authentication line are not in scope", () => {
-  const r = scan(`function f() {\nconst app = new Hono();\napp.get("/api/bootstrap", async (c) => 1);\n${AUTH}${GOOD}return app;\n}`, {});
+  const r = scan(`function f() {\nconst app = new Hono();\napp.get("/api/bootstrap", async (c) => 1);\n${AUTH}${GOOD}return app;\n}`, {}, { "GET /api/bootstrap": "public" });
   assert.deepEqual(r.ungated, []);
   assert.equal(r.routes.length, 1);
 });
 
 test("the authentication line itself is not detected inside a comment or string", () => {
-  assert.equal(scan('// app.use("/api/*", authenticate)\napp.get("/api/x", (c) => 1);', {}).unparsed.length, 1);
-  assert.equal(scan('const s = \'app.use("/api/*", authenticate)\';', {}).unparsed.length, 1);
+  const noAuth = (src) => scan(src, {}).unparsed.some((u) => /Could not find the authentication line/.test(u.reason));
+  assert.ok(noAuth('// app.use("/api/*", authenticate)\napp.get("/api/x", (c) => 1);'));
+  assert.ok(noAuth('const s = \'app.use("/api/*", authenticate)\';'));
 });
 
 test("bypass: a chained registration after a gated one is checked", () => {
@@ -178,7 +180,7 @@ test("bypass: an alias created before the authentication line is reported", () =
     const r = scan(`const app = new Hono<Env>();\n${pre}\n${AUTH}a.get("/api/x", h);`, {});
     assert.equal(r.unparsed.length, 1, pre);
   }
-  assert.deepEqual(scan(`const app = new Hono<Env>();\napp.get("/api/pre", h);\n${AUTH}${GOOD}return app;`, {}).unparsed, []);
+  assert.deepEqual(scan(`const app = new Hono<Env>();\napp.get("/api/pre", async (c) => c.json(1));\n${AUTH}${GOOD}return app;`, {}).unparsed, []);
 });
 
 test("bypass: an empty permission is not a gate", () => {
@@ -388,4 +390,126 @@ test("regression: route registration outside the factory function is unparsed", 
   assert.ok(unparsedOf(extra(`export function g(app) { app.get("/api/evil", ${U}); }`)) > 0);
   assert.ok(unparsedOf(extra(`const w = make(); w.app.get("/api/evil", ${U});`)) > 0);
   assert.equal(unparsedOf(extra(`const v = c.get("host");`)), 0);
+});
+
+const PRE = (pre, pub) => scan(`function f() {\nconst app = new Hono();\n${pre}\n${AUTH}\nreturn app;\n}`, {}, pub);
+const OPEN_H = "async (c) => c.json({})";
+
+test("public allow-list: an unlisted route before the auth line is ungated, a listed one passes", () => {
+  assert.deepEqual(PRE(`app.get("/api/evil", ${OPEN_H});`, {}).ungated.map((u) => u.key), ["GET /api/evil"]);
+  assert.deepEqual(PRE(`app.post("/x", ${OPEN_H});`, {}).ungated.map((u) => u.key), ["POST /x"]);
+  const ok = PRE(`app.get("/api/pub", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.deepEqual(ok.ungated, []);
+  assert.deepEqual(ok.stalePublic, []);
+  assert.deepEqual(ok.unparsed, []);
+});
+
+test("public allow-list: middleware before the auth line stays out of scope", () => {
+  const r = PRE('app.use("*", async (c, next) => { await next(); });', {});
+  assert.deepEqual(r.ungated, []);
+});
+
+test("public allow-list: stale, duplicate, dynamic path, and entries registered after auth", () => {
+  assert.deepEqual(PRE("", { "GET /api/gone": "why" }).stalePublic, ["GET /api/gone"]);
+  const dup = PRE(`app.get("/api/pub", ${OPEN_H});\napp.get("/api/pub", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.equal(dup.ungated.length, 1);
+  assert.match(dup.ungated[0].reason, /Duplicate/);
+  const dyn = PRE(`app.get(PATH, ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.equal(dyn.unparsed.length >= 1, true);
+  const after = scan(wrap(GOOD), {}, { "GET /api/ok": "why" });
+  assert.deepEqual(after.stalePublic, ["GET /api/ok"]);
+});
+
+test("public allow-list: a chained pre-auth registration is checked too", () => {
+  const r = PRE(`app.get("/api/pub", ${OPEN_H}).post("/api/evil", ${OPEN_H});`, { "GET /api/pub": "why" });
+  assert.deepEqual(r.ungated.map((u) => u.key), ["POST /api/evil"]);
+});
+
+test("review: identifier `of` before `/` is division, so a trick cannot hide a route", () => {
+  const real = readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+  const authLine = 'app.use("/api/*", authenticate);';
+  const trick = (route) => `let of: any = 1;\n {}\n of / (${route} as any); //'\n ;\n`;
+  const pre = real.replace(authLine, trick("app.get('/api/evil', H)") + authLine);
+  assert.notEqual(pre, real);
+  const r = scan(pre, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+  assert.ok(r.ungated.length + r.unparsed.length > 0);
+  const post = real.replace(authLine, authLine + "\n" + trick("app.get('/api/evil', H)"));
+  const r2 = scan(post, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+  assert.ok(r2.ungated.length + r2.unparsed.length > 0);
+  // for-of with a regex still tokenizes as a regex
+  assert.ok(tokenize("for (const x of /a/.exec(s)) {}").some((t) => t.type === "regex"));
+  assert.ok(tokenize("for (x of /a/.exec(s)) {}").some((t) => t.type === "regex"));
+  assert.ok(!tokenize("let of = 1; of / 2 / 3;").some((t) => t.type === "regex"));
+  assert.throws(() => tokenize("for (let of / 2; ;) {}"), /Ambiguous/);
+});
+
+test("review: app.on with a non-standard method cannot forge a synthetic key", () => {
+  const forged = PRE(`app.on("ROUTE", "/api/auth", ${OPEN_H});`, { "ROUTE /api/auth": "why" });
+  assert.ok(forged.unparsed.length >= 1);
+  assert.deepEqual(forged.stalePublic, ["ROUTE /api/auth"]);
+  assert.ok(unparsedOf(wrap(`app.on("ALL", "/api/x", ${GATE});`)) >= 1);
+  assert.equal(unparsedOf(wrap(`app.on(["GET", "post"], "/api/x", ${GATE});`)), 0);
+});
+
+test("review: allow-listed pre-auth routes must have only inline handler arguments", () => {
+  const r = PRE(`app.get("/api/bootstrap", "/api/evil", ${OPEN_H});`, { "GET /api/bootstrap": "why" });
+  assert.ok(r.unparsed.length >= 1);
+  const ok = PRE(`app.get("/api/bootstrap", ${OPEN_H}, ${OPEN_H});`, { "GET /api/bootstrap": "why" });
+  assert.deepEqual(ok.unparsed, []);
+});
+
+test("review: ambiguous regex-vs-division slashes fail closed (L6, L11, L12), before and after the auth line", () => {
+  const real = readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+  const authLine = 'app.use("/api/*", authenticate);';
+  const tricks = [
+    "{}\n/'/; app.get('/api/evil', H); //'\n;\n",
+    "let of: any = 1;\nfor (const k in of / (app.get('/api/evil', H) as any) as any) {} //' ) {}\n",
+    "for (void of / (app.get('/api/evil', H)); false;) {} //' ) {}\n",
+    "let x: any;\nfor ((x) of /'/.source) app.get('/api/evil', H); //' )\n;\n",
+    "for (x! of /'/.source) app.get('/api/evil', H); //' )\n;\n",
+  ];
+  for (const trick of tricks) {
+    for (const src of [real.replace(authLine, trick + authLine), real.replace(authLine, authLine + "\n" + trick)]) {
+      assert.notEqual(src, real);
+      const r = scan(src, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+      assert.ok(r.ungated.length + r.unparsed.length + r.stale.length + r.stalePublic.length > 0, trick);
+    }
+  }
+  assert.ok(scan(real.replace(authLine, tricks[0] + authLine), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES).unparsed.some((u) => /Ambiguous/.test(u.reason) && u.line > 0));
+});
+
+test("review: ordinary division and regex are not ambiguity findings", () => {
+  const ok = (body) => assert.deepEqual(scan(wrap(body), {}).unparsed, [], body);
+  ok("const x = (a) / 2;");
+  ok("const y = (a) / 2 + b / 3; const z = [1][0] / 2;");
+  ok("const r = /a'b/.test(s); const q = (/x/g).test(s); f(/y\"/);");
+  ok(GOOD);
+  const rec = [];
+  tokenize("const x = (a) / 2;", { record: rec });
+  assert.equal(rec.length, 1);
+  tokenize("const r = /a/;", { record: rec });
+  assert.equal(rec.length, 1);
+});
+
+test("raw cross-check: scanned words inside strings, regexes or comments are reported unparsed", () => {
+  const un = (body) => scan(wrap(body), {}).unparsed.map((u) => u.reason);
+  assert.ok(un('const s = "app.get(";').some((r) => /inside what the scanner read as a string, regex or comment/.test(r)));
+  assert.ok(un("// authenticate is next\n").some((r) => /authenticate/.test(r)));
+  assert.ok(un("const r = /need(/;").some((r) => /need/.test(r)));
+  assert.deepEqual(un(GOOD), []);
+});
+
+test("`#name` after a keyword-named private field is a property, and `extends /re/` is ambiguous", () => {
+  const toks = tokenize("class Z { #in = 1; m() { return this.#in / 2; } }");
+  assert.ok(!toks.some((t) => t.type === "regex"));
+  const rec = [];
+  tokenize("class Z extends /x/.constructor {}", { record: rec });
+  assert.equal(rec.length, 1);
+  const hide = "class Z extends /'/.constructor {}; app.get(\"/api/evil\", async (c) => c.json(1)); //' {}\n";
+  assert.ok(scan(wrap(hide), {}).unparsed.length > 0);
+});
+
+test("impossible readings are discarded: no false positive on (1) / 2 + [4][0] / 2", () => {
+  const r = scan(wrap("const a = (1) / 2 + [4][0] / 2; const b = (a) / 2 + f(b) / 3;"), {});
+  assert.deepEqual(r.unparsed, []);
 });

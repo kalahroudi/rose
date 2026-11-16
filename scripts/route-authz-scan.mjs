@@ -3,7 +3,7 @@
 // `need(<ctx>, <permission>)`. TypeScript 7 has no JS API and we add no dependencies, so this is a small
 // tokenizer plus a token-level walk, not a regex over text. See docs/pentest.md (AUTHZ-07).
 
-const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "extends"]);
 const REGISTRARS = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all", "on", "use", "route", "mount"]);
 const isLT = (ch) => ch === "\n" || ch === "\r" || ch === "\u2028" || ch === "\u2029";
 const OPEN = new Set(["(", "[", "{"]);
@@ -16,16 +16,38 @@ export const CORE_EXEMPTIONS = {
 };
 
 /**
+ * Routes registered before app.use("/api/*", authenticate) in the real tenant-app.ts: they run without a session
+ * and without need(), so each must be listed here with the reason it is public. "METHOD path" -> reason (same key
+ * format as CORE_EXEMPTIONS: ALL for app.all, ROUTE for app.route mounts). `app.use(...)` middleware before the
+ * authentication line is NOT covered by this list (it never answers a request on its own by convention; the scanner
+ * leaves it out of scope).
+ */
+export const PUBLIC_CORE_ROUTES = {
+  "GET /api/bootstrap": "The signed-out SPA needs the host kind, brand and sign-in options before anyone can authenticate; it returns only what the request host already reveals and no tenant data.",
+  "POST /api/root/code/request": "Sign-in on the root (apex) host starts signed out; protected by the per-address rate limit and a response that is identical whether or not the address is known.",
+  "POST /api/root/code/verify": "Completes the root-host sign-in, so it cannot require a session; the one-time code is hashed, single-use, expires quickly and is attempt-limited.",
+  "GET /api/root/slug": "Lets a person find their workspace address from the root host before signing in; rate-limited and returns no tenant data beyond the address.",
+  "POST /api/root/enter": "Hands a freshly verified root-host sign-in to a workspace host; it checks the signed, short-lived proof itself and issues no session without it.",
+  "GET /auth/handoff": "Receives the one-time handoff from the root host and creates the session on the workspace host; the token is signed, single-use and short-lived, and the host decides the tenant.",
+  "ROUTE /api/auth": "The sign-in, sign-out, passkey and session routes cannot require a session; each handler enforces its own checks (rate limits, one-time codes, CSRF guard in front of them).",
+};
+
+/**
  * Tokenize TypeScript/JavaScript source. Comments are dropped. Strings are one token; template literals are a
  * `template` token, their `${...}` code inline as ordinary tokens, then `templateEnd`. Regex literals are one token.
  *
  * Regex vs division is decided from the previous significant token: a `/` starts a regex when there is none, when
  * it is punctuation other than `)`, `]`, `}`, or when it is a keyword such as `return`/`typeof`. After an
  * identifier, number, string, template, regex, `)`, `]` or `}` it is division, except after the `)` that closes the
- * condition of `if`/`while`/`for`/`with`, where a regex follows. Known blind spot: a regex right after a `}` that
- * closes a block reads as division.
+ * condition of `if`/`while`/`for`/`with`, where a regex follows.
+ *
+ * That guess is only a guess: after `}`, `)`, `]`, `>`, a postfix `++`/`--`, a contextual keyword (`of` in a for
+ * header, `await`, `yield`) both readings can be valid JS/TS, and crafted source can make them disagree about what is
+ * code. Every such `/` is AMBIGUOUS. `tokenize` returns the heuristic reading and records the ambiguous slashes
+ * (`opts.record`); `opts.mode` ("regex" | "division") forces all of them one way and `opts.flip` flips one. Use
+ * `tokenizeSafe` for scanning: it fails closed when the readings disagree.
  */
-export function tokenize(src) {
+export function tokenize(src, opts = {}) {
   // Line terminators are the JS set (\n, \r, U+2028, U+2029) everywhere; CRLF counts as one.
   const nl = [];
   for (let i = 0; i < src.length; i++) if (isLT(src[i]) && !(src[i] === "\r" && src[i + 1] === "\n")) nl.push(i);
@@ -36,8 +58,10 @@ export function tokenize(src) {
   };
   let pos = 0;
   const parens = []; // for each open `(`: did an if/while/for/with keyword open it?
+  const fors = []; // for each open `(`: is it the header of a `for` loop?
   const fail = (msg, at) => { throw new Error(`${msg} (line ${lineOf(at)})`); };
 
+  let amb = false; // set by regexAllowed when the `/` being decided is ambiguous
   const regexAllowed = (out) => {
     const prev = out[out.length - 1];
     if (!prev) return true;
@@ -49,7 +73,7 @@ export function tokenize(src) {
         let j = out.length - 1;
         while (j >= 0 && out[j].type === "punct" && out[j].value === "!") j--;
         const base = out[j];
-        const dotBefore = out[j - 1]?.type === "punct" && (out[j - 1].value === "." || out[j - 1].value === "?.");
+        const dotBefore = out[j - 1]?.type === "punct" && (out[j - 1].value === "." || out[j - 1].value === "?." || out[j - 1].value === "#");
         const operand = base && (
           (base.type === "id" && (dotBefore || !KEYWORDS_BEFORE_REGEX.has(base.value))) ||
           (base.type === "punct" && ((base.value === ")" && !base.ctl) || base.value === "]")));
@@ -63,15 +87,24 @@ export function tokenize(src) {
       }
       if ((prev.value === "+" || prev.value === "-") && p2 && p2.type === "punct" && p2.value === prev.value && p2.pos + 1 === prev.pos) {
         const p3 = out[out.length - 3];
-        if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) return false; // postfix ++/--: division follows
+        if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) { amb = true; return false; } // postfix ++/-- (division) or prefix on the next line (regex)
       }
       if (prev.value === ")" && prev.ctl) return true;
-      return !CLOSE.has(prev.value);
+      if (CLOSE.has(prev.value) || prev.value === ">") { amb = true; return prev.value === ">"; } // `}` block/object, `)`, `]`, generic `>`: heuristic only
+      return true;
     }
     if (prev.type === "id") {
       if (!KEYWORDS_BEFORE_REGEX.has(prev.value)) return false;
-      if (p2 && p2.type === "punct" && (p2.value === "." || p2.value === "?.")) return false; // property name, not a keyword
-      if (prev.value === "of") return !!p2 && (p2.type === "id" || (p2.type === "punct" && (p2.value === "]" || p2.value === "}"))); // `for (x of /re/...)` vs an identifier named `of`
+      if (p2 && p2.type === "punct" && (p2.value === "." || p2.value === "?." || p2.value === "#")) return false; // property name (`.name`, `#name`), not a keyword
+      if (prev.value === "extends") { amb = true; return true; } // `class A extends /re/.x {}` is a regex; `extends` as a plain identifier is division
+      if (prev.value === "of") {
+        // `of` is a keyword only directly inside a `for (` header; anywhere else it is an identifier (division follows).
+        if (!fors[fors.length - 1]) return false;
+        if (p2 && p2.type === "id" && ["let", "var", "const"].includes(p2.value)) fail("Ambiguous `of` before `/` in a for header (identifier or for-of keyword)", prev.pos);
+        amb = true; // for-of keyword or identifier named `of`: both readings are valid after any left side (`x!`, `(x)`, `x`, ...)
+        return !!p2 && (p2.type === "id" || (p2.type === "punct" && (p2.value === "]" || p2.value === "}")));
+      }
+      if (prev.value === "await" || prev.value === "yield") amb = true; // contextual: keyword in async/generator code, identifier elsewhere
       return true;
     }
     return false;
@@ -122,7 +155,17 @@ export function tokenize(src) {
         out.push({ type: "templateEnd", value: "`", pos, line: lineOf(pos - 1) });
         continue;
       }
-      if (c === "/" && regexAllowed(out)) {
+      let asRegex = false;
+      if (c === "/") {
+        amb = false;
+        asRegex = regexAllowed(out);
+        if (amb) {
+          opts.record?.push({ pos: start, line: lineOf(start) });
+          if (opts.mode) asRegex = opts.mode === "regex";
+          if (opts.flip === start) asRegex = !asRegex;
+        }
+      }
+      if (c === "/" && asRegex) {
         let i = pos + 1, inClass = false, ok = false;
         while (i < src.length && !isLT(src[i])) {
           if (src[i] === "\\") { i += 2; continue; }
@@ -169,14 +212,67 @@ export function tokenize(src) {
       if (c === "(") {
         const k = out.length >= 2 ? out[out.length - 2] : undefined, k2 = out.length >= 3 ? out[out.length - 3] : undefined;
         const afterDot = k2 && k2.type === "punct" && (k2.value === "." || k2.value === "?.");
+        fors.push(!!k && k.type === "id" && !afterDot && (k.value === "for" || (k.value === "await" && k2 && k2.type === "id" && k2.value === "for")));
         parens.push(!!k && k.type === "id" && !afterDot && (["if", "while", "for", "with"].includes(k.value) || (k.value === "await" && k2 && k2.type === "id" && k2.value === "for")));
-      } else if (c === ")") out[out.length - 1].ctl = parens.pop() === true;
+      } else if (c === ")") { out[out.length - 1].ctl = parens.pop() === true; fors.pop(); }
     }
   }
 
   const out = [];
   lex(out, false);
   return out;
+}
+
+const MAX_AMBIGUOUS = 200;
+// Tokens that decide what the scan sees: brackets, strings, templates and the identifiers it looks for. A different
+// reading of an ambiguous `/` only matters when it changes this sequence (numbers, operators, other identifiers and
+// regex bodies do not), which keeps ordinary division such as `(a) / 2 + b / 3` from being reported.
+const RELEVANT_IDS = new Set([...REGISTRARS, "app", "need", "authenticate", "can", "forbidden", "notFound", "Hono", "onError", "function", "return", "throw", "const", "let", "var", "async", "await", "new"]);
+const significant = (toks) => toks
+  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
+  .map((t) => `${t.type}\u0000${t.value}\u0000${t.text ?? ""}`)
+  .join("\n");
+
+/**
+ * Tokenize for scanning, failing closed on regex-vs-division ambiguity. The heuristic reading is tokenized; every
+ * ambiguous `/` is then re-read (a) all as regex, (b) all as division, (c) each one flipped on its own, which is at most
+ * 2 + MAX_AMBIGUOUS extra passes (no exponential search; mixed flips of several slashes are not tried). If any reading
+ * yields a different `significant` token sequence, the source is reported unparsed. A reading that fails to tokenize
+ * (unterminated string, template or comment) is discarded: the source must be valid JS/TS, so such a reading cannot be
+ * the real one. Heuristic reading failing is still an error.
+ */
+const NOT_AFTER_REGEX = new Set(["in", "instanceof", "of", "as", "satisfies"]);
+/**
+ * True when a reading puts a regex token directly followed, on the same line, by a number, identifier (other than
+ * in/instanceof/of/as/satisfies), string, template or regex token, with no operator between. That is a syntax error in
+ * JS/TS, so such a reading cannot be the real one (it is how `(1) / 2 + [4][0] / 2` read as a regex is rejected).
+ */
+function impossibleReading(toks) {
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (toks[i].type !== "regex") continue;
+    const n = toks[i + 1];
+    if (n.line !== toks[i].line) continue;
+    if (n.type === "num" || n.type === "str" || n.type === "template" || n.type === "regex") return true;
+    if (n.type === "id" && !NOT_AFTER_REGEX.has(n.value)) return true;
+  }
+  return false;
+}
+
+export function tokenizeSafe(src) {
+  const record = [];
+  const main = tokenize(src, { record });
+  if (!record.length) return main;
+  const err = (msg, line) => Object.assign(new Error(`${msg} (line ${line})`), { line });
+  if (record.length > MAX_AMBIGUOUS) throw err(`More than ${MAX_AMBIGUOUS} ambiguous \`/\` (regex literal or division) in the source`, record[0].line);
+  const want = significant(main);
+  const readings = [[{ mode: "regex" }, record[0]], [{ mode: "division" }, record[0]], ...record.map((r) => [{ flip: r.pos }, r])];
+  for (const [o, at] of readings) {
+    let t;
+    try { t = tokenize(src, o); } catch { continue; }
+    if (impossibleReading(t)) continue;
+    if (significant(t) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
+  }
+  return main;
 }
 
 const PERMISSION = /^[a-z][a-z-]*:[a-z][a-z-]*$/;
@@ -241,6 +337,10 @@ function splitArgs(toks, from, to) {
   if (s < to) args.push([s, to]);
   return args;
 }
+
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]);
+/** app.on with literal methods: every method must be a standard HTTP verb, so the label never equals a synthetic one (ROUTE, MOUNT, ALL, USE, ON). */
+const onMethodsOk = (mt) => mt.filter((t) => t.type === "str").every((t) => HTTP_METHODS.has(t.value.toUpperCase()));
 
 const CONTROL = new Set(["if", "for", "while", "switch", "catch", "with", "else", "return", "typeof", "await", "in", "of", "new", "do", "case", "throw", "void", "delete", "yield"]);
 
@@ -411,12 +511,32 @@ function onlyThrows(toks, from, to, fnName) {
 /**
  * @param {string} src tenant-app.ts source
  * @param {Record<string, string | {reason: string, onlyThrows?: string}>} exemptions "METHOD path" -> reason
- * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[]}}
+ * @param {Record<string, string>} publicRoutes "METHOD path" -> reason: the only non-middleware registrations allowed
+ *   before the authentication line
+ * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[]}}
+ *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys matching no pre-auth registration
  */
-export function scan(src, exemptions = {}) {
-  const result = { routes: [], ungated: [], unparsed: [], stale: [] };
+export function scan(src, exemptions = {}, publicRoutes = {}) {
+  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [] };
   let toks;
-  try { toks = tokenize(src); } catch (e) { result.unparsed.push({ line: 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+  try { toks = tokenizeSafe(src); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+
+  // Mechanism-independent cross-check on the raw text: whatever the tokenizer decided, every occurrence of the words
+  // the scan depends on must be an identifier token. A hit inside what was read as a string, regex, template or
+  // comment is reported (fail closed). Prose or strings that legitimately contain e.g. `app.get(` are therefore
+  // reported too; that is accepted, reword them.
+  {
+    const idAt = new Set(toks.filter((t) => t.type === "id").map((t) => t.pos));
+    const reg = [...REGISTRARS].join("|");
+    const patterns = [/\bapp\b/dg, /\bauthenticate\b/dg, /\bneed(?=\s*\()/dg, /\bcan(?=\s*\()/dg, /\bforbidden(?=\s*\()/dg, new RegExp(`\\??\\.\\s*(${reg})\\s*\\(`, "dg")];
+    const lineAt = (i) => src.slice(0, i).split(/\r\n|[\n\r\u2028\u2029]/).length;
+    for (const re of patterns) {
+      for (const m of src.matchAll(re)) {
+        const at = m.indices[1]?.[0] ?? m.index;
+        if (!idAt.has(at)) result.unparsed.push({ line: lineAt(at), reason: `${JSON.stringify(src.slice(at, at + 12).split(/\W/)[0] || m[0])} appears inside what the scanner read as a string, regex or comment` });
+      }
+    }
+  }
 
   // The authentication line: app.use("/api/*", authenticate)
   let from = -1;
@@ -431,6 +551,7 @@ export function scan(src, exemptions = {}) {
   // Pass 1: every use of the identifier `app` in the whole source. Registrations before the auth line are out of
   // scope, but any other use (alias, destructuring, passing it on) is reported wherever it is.
   const regs = [];
+  const preRegs = []; // non-middleware registrations before the authentication line (must be on the public allow-list)
   // Parses `<method>[<generics>](...)` with the method token at `m`; returns the registration or null (reported).
   const parseCall = (m, line, label) => {
     const method = toks[m].value;
@@ -451,7 +572,7 @@ export function scan(src, exemptions = {}) {
   // Every `.method(` chained after a registration call's closing paren is itself a registration.
   // Returns the index just past the chain, or -1 when it was reported as unparsed. With collect=false (registrations
   // before the authentication line) the chain is only walked.
-  const chain = (after, collect = true) => {
+  const chain = (after, collect = true, into = regs) => {
     let p = after;
     while (isP(toks[p], ".") || isP(toks[p], "?.")) {
       const line = toks[p].line;
@@ -462,7 +583,7 @@ export function scan(src, exemptions = {}) {
       const reg = parseCall(p + 1, line, "chained .");
       if (!reg) return -1;
       reg.tok = p;
-      if (collect && toks[p + 1].value !== "onError") regs.push(reg);
+      if (collect && toks[p + 1].value !== "onError") into.push(reg);
       p = reg.argTo + 1;
     }
     return p;
@@ -528,7 +649,8 @@ export function scan(src, exemptions = {}) {
       // registration inside a function or block there can run after authentication. The authentication line itself
       // may chain registrations (app.use("/api/*", authenticate).get(...)).
       if (!topLevel(i)) result.unparsed.push({ line: t.line, reason: `Registration before the authentication line is not a top-level statement of the factory: ${brief(toks.slice(i, i + 4))}` });
-      const e = chain(reg.argTo + 1, i === authAt);
+      if (i !== authAt && !isOnError && reg.method !== "use") preRegs.push(reg);
+      const e = chain(reg.argTo + 1, true, i === authAt ? regs : preRegs);
       if (e >= 0) wholeStatement(i, e, t.line);
       continue;
     }
@@ -581,6 +703,40 @@ export function scan(src, exemptions = {}) {
   }
 
   const seenExempt = new Set();
+  // Pre-auth registrations: public only when listed. Middleware (`use`) is out of scope and never reaches here.
+  const seenPublic = new Set();
+  for (const reg of preRegs) {
+    if (reg.method === "use") continue; // chained middleware
+    const args = splitArgs(toks, reg.argFrom, reg.argTo);
+    let label = reg.method.toUpperCase();
+    let pathArg;
+    if (reg.method === "on") {
+      const mt = args[0] ? toks.slice(args[0][0], args[0][1]) : [];
+      const literalMethods = mt.length > 0 && mt.every((t) => t.type === "str" || (t.type === "punct" && ["[", "]", ","].includes(t.value)));
+      label = literalMethods ? mt.filter((t) => t.type === "str").map((t) => t.value.toUpperCase()).join("|") : "ON";
+      if (literalMethods && !onMethodsOk(mt)) { result.unparsed.push({ line: reg.line, reason: `app.on registered before the authentication line uses a method that is not a standard HTTP method (could collide with a synthetic key such as ROUTE): ${brief(mt)}` }); continue; }
+      pathArg = args[1];
+    } else pathArg = args[0];
+    const ptoks = pathArg ? toks.slice(pathArg[0], pathArg[1]) : [];
+    if (!(ptoks.length === 1 && ptoks[0].type === "str" && !ptoks[0].value.includes("\\"))) {
+      result.unparsed.push({ line: reg.line, reason: `${label} registered before the authentication line has a path that is not a plain string literal, so it cannot be matched against the public allow-list: ${brief(ptoks) || "?"}` });
+      continue;
+    }
+    const key = `${label} ${ptoks[0].value}`;
+    const entry = { key, method: label, path: ptoks[0].value, line: reg.line, gated: false, gates: [], exempt: null };
+    if (reg.method !== "route" && reg.method !== "mount") {
+      const rest = reg.method === "on" ? args.slice(2) : args.slice(1);
+      const bad = rest.findIndex(([a, b]) => !parseFn(toks, a, b));
+      if (bad >= 0) { result.unparsed.push({ line: reg.line, reason: `${label} ${ptoks[0].value}: extra argument before the authentication line is not an inline function: ${brief(toks.slice(rest[bad][0], Math.min(rest[bad][1], rest[bad][0] + 6)))}` }); continue; }
+    }
+    if (!Object.hasOwn(publicRoutes, key)) {
+      result.ungated.push({ ...entry, reason: "Registered before the authentication line (unauthenticated) and not on the public allow-list (PUBLIC_CORE_ROUTES)" });
+    } else if (seenPublic.has(key)) {
+      result.ungated.push({ ...entry, reason: "Duplicate registration of a public route before the authentication line; only one is allowed" });
+    }
+    seenPublic.add(key);
+  }
+  for (const key of Object.keys(publicRoutes)) if (!seenPublic.has(key)) result.stalePublic.push(key);
   for (const reg of regs) {
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();
@@ -590,6 +746,7 @@ export function scan(src, exemptions = {}) {
       const mt = m ? toks.slice(m[0], m[1]) : [];
       const literalMethods = mt.length > 0 && mt.every((t) => t.type === "str" || (t.type === "punct" && ["[", "]", ","].includes(t.value)));
       label = literalMethods ? mt.filter((t) => t.type === "str").map((t) => t.value.toUpperCase()).join("|") : "ON";
+      if (literalMethods && !onMethodsOk(mt)) { result.unparsed.push({ line: reg.line, reason: `app.on uses a method that is not a standard HTTP method (could collide with a synthetic key such as ROUTE): ${brief(mt)}` }); continue; }
       pathArg = args[1];
     } else if (reg.method === "use") {
       pathArg = args[0] && (toks[args[0][0]].type === "str" || toks[args[0][0]].type === "template") ? args[0] : null;
