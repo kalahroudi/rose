@@ -160,3 +160,18 @@ export function setRoutes(text, routes) {
 
 export const readText = (p) => readFileSync(p, "utf8");
 export const writeText = (p, s) => writeFileSync(p, s);
+
+/**
+ * Why the console refused to issue a development sign-in code to an operator address, given what the local
+ * control plane holds. Returns an actionable message, or null when none of the known causes apply.
+ * Pure: the caller does the (read-only) lookups. Never include codes or tokens.
+ */
+export function diagnoseOperatorSignIn(email, { userExists, isOperator, passkeys }) {
+  if (!userExists || !isOperator) {
+    return `${email} is not an operator in this dev control plane, so the console sends it no code: pass --operator-email <an operator's address>.`;
+  }
+  if (passkeys > 0) {
+    return `${email} has a console passkey, so emailed codes are refused: pass --operator-email of an operator without a passkey, or remove the passkey in the console.`;
+  }
+  return null;
+}
