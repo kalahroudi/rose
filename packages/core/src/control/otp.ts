@@ -63,7 +63,8 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
  * Across all codes of one (scope, email) from the last GUESS_WINDOW, at most MAX_GUESSES_PER_EMAIL guesses
  * are spent; at the cap verify answers false like any bad code and spends nothing.
  * Live = unconsumed, unexpired and the relevant budget unspent. Each verify spends at most one attempt on
- * each distinct candidate, before comparing, and a correct code is consumed atomically.
+ * each distinct candidate (a matching candidate first, so the last guess under the cap goes to it); a code
+ * is accepted only after its attempt was spent under the caps, and a correct code is consumed atomically.
  */
 export async function verifyLoginCode(db: D1Database, masterKey: string, scope: string, email: string, code: string, requester: string): Promise<boolean> {
   const t = now();
@@ -87,8 +88,12 @@ export async function verifyLoginCode(db: D1Database, masterKey: string, scope: 
   let matched: Row | null = null;
   // Cap total guesses per address in the same statement that spends one, so parallel verifies can not exceed it.
   const capSql = " AND (SELECT COALESCE(SUM(attempts + foreign_attempts), 0) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?";
-  for (const { row, foreign } of candidates) {
-    // Spend an attempt before comparing, so parallel guesses can not exceed the budget.
+  // Compare every candidate (no early exit) and spend on a matching one first, so the last guess under the
+  // cap is never taken by a non-matching candidate. Each candidate still spends before it can be accepted.
+  const compared = await Promise.all(candidates.map(async (c) => ({ ...c, hit: await timingSafeEqual(c.row.code_hash, given) })));
+  compared.sort((a, b) => Number(b.hit) - Number(a.hit));
+  for (const { row, foreign, hit } of compared) {
+    // Spend an attempt (atomically, under the caps) before accepting, so parallel guesses can not exceed the budget.
     const spent = await db
       .prepare(
         foreign
@@ -98,7 +103,7 @@ export async function verifyLoginCode(db: D1Database, masterKey: string, scope: 
       .bind(...(foreign ? [row.id, MAX_FOREIGN_ATTEMPTS, MAX_ATTEMPTS, t] : [row.id, MAX_ATTEMPTS, t]), email, scope, t - GUESS_WINDOW, MAX_GUESSES_PER_EMAIL)
       .run();
     if (spent.meta.changes === 0) continue;
-    if (!matched && (await timingSafeEqual(row.code_hash, given))) matched = row;
+    if (!matched && hit) matched = row;
   }
   if (!matched) return false;
   const consumed = await db.prepare("UPDATE login_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(t, matched.id).run();
