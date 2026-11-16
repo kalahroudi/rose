@@ -3,7 +3,7 @@
 // `need(<ctx>, <permission>)`. TypeScript 7 has no JS API and we add no dependencies, so this is a small
 // tokenizer plus a token-level walk, not a regex over text. See docs/pentest.md (AUTHZ-07).
 
-const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "extends"]);
 const REGISTRARS = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all", "on", "use", "route", "mount"]);
 const isLT = (ch) => ch === "\n" || ch === "\r" || ch === "\u2028" || ch === "\u2029";
 const OPEN = new Set(["(", "[", "{"]);
@@ -39,10 +39,15 @@ export const PUBLIC_CORE_ROUTES = {
  * Regex vs division is decided from the previous significant token: a `/` starts a regex when there is none, when
  * it is punctuation other than `)`, `]`, `}`, or when it is a keyword such as `return`/`typeof`. After an
  * identifier, number, string, template, regex, `)`, `]` or `}` it is division, except after the `)` that closes the
- * condition of `if`/`while`/`for`/`with`, where a regex follows. Known blind spot: a regex right after a `}` that
- * closes a block reads as division.
+ * condition of `if`/`while`/`for`/`with`, where a regex follows.
+ *
+ * That guess is only a guess: after `}`, `)`, `]`, `>`, a postfix `++`/`--`, a contextual keyword (`of` in a for
+ * header, `await`, `yield`) both readings can be valid JS/TS, and crafted source can make them disagree about what is
+ * code. Every such `/` is AMBIGUOUS. `tokenize` returns the heuristic reading and records the ambiguous slashes
+ * (`opts.record`); `opts.mode` ("regex" | "division") forces all of them one way and `opts.flip` flips one. Use
+ * `tokenizeSafe` for scanning: it fails closed when the readings disagree.
  */
-export function tokenize(src) {
+export function tokenize(src, opts = {}) {
   // Line terminators are the JS set (\n, \r, U+2028, U+2029) everywhere; CRLF counts as one.
   const nl = [];
   for (let i = 0; i < src.length; i++) if (isLT(src[i]) && !(src[i] === "\r" && src[i + 1] === "\n")) nl.push(i);
@@ -56,6 +61,7 @@ export function tokenize(src) {
   const fors = []; // for each open `(`: is it the header of a `for` loop?
   const fail = (msg, at) => { throw new Error(`${msg} (line ${lineOf(at)})`); };
 
+  let amb = false; // set by regexAllowed when the `/` being decided is ambiguous
   const regexAllowed = (out) => {
     const prev = out[out.length - 1];
     if (!prev) return true;
@@ -67,7 +73,7 @@ export function tokenize(src) {
         let j = out.length - 1;
         while (j >= 0 && out[j].type === "punct" && out[j].value === "!") j--;
         const base = out[j];
-        const dotBefore = out[j - 1]?.type === "punct" && (out[j - 1].value === "." || out[j - 1].value === "?.");
+        const dotBefore = out[j - 1]?.type === "punct" && (out[j - 1].value === "." || out[j - 1].value === "?." || out[j - 1].value === "#");
         const operand = base && (
           (base.type === "id" && (dotBefore || !KEYWORDS_BEFORE_REGEX.has(base.value))) ||
           (base.type === "punct" && ((base.value === ")" && !base.ctl) || base.value === "]")));
@@ -81,20 +87,24 @@ export function tokenize(src) {
       }
       if ((prev.value === "+" || prev.value === "-") && p2 && p2.type === "punct" && p2.value === prev.value && p2.pos + 1 === prev.pos) {
         const p3 = out[out.length - 3];
-        if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) return false; // postfix ++/--: division follows
+        if (p3 && (p3.type === "id" || (p3.type === "punct" && (p3.value === ")" || p3.value === "]")))) { amb = true; return false; } // postfix ++/-- (division) or prefix on the next line (regex)
       }
       if (prev.value === ")" && prev.ctl) return true;
-      return !CLOSE.has(prev.value);
+      if (CLOSE.has(prev.value) || prev.value === ">") { amb = true; return prev.value === ">"; } // `}` block/object, `)`, `]`, generic `>`: heuristic only
+      return true;
     }
     if (prev.type === "id") {
       if (!KEYWORDS_BEFORE_REGEX.has(prev.value)) return false;
-      if (p2 && p2.type === "punct" && (p2.value === "." || p2.value === "?.")) return false; // property name, not a keyword
+      if (p2 && p2.type === "punct" && (p2.value === "." || p2.value === "?." || p2.value === "#")) return false; // property name (`.name`, `#name`), not a keyword
+      if (prev.value === "extends") { amb = true; return true; } // `class A extends /re/.x {}` is a regex; `extends` as a plain identifier is division
       if (prev.value === "of") {
         // `of` is a keyword only directly inside a `for (` header; anywhere else it is an identifier (division follows).
         if (!fors[fors.length - 1]) return false;
         if (p2 && p2.type === "id" && ["let", "var", "const"].includes(p2.value)) fail("Ambiguous `of` before `/` in a for header (identifier or for-of keyword)", prev.pos);
+        amb = true; // for-of keyword or identifier named `of`: both readings are valid after any left side (`x!`, `(x)`, `x`, ...)
         return !!p2 && (p2.type === "id" || (p2.type === "punct" && (p2.value === "]" || p2.value === "}")));
       }
+      if (prev.value === "await" || prev.value === "yield") amb = true; // contextual: keyword in async/generator code, identifier elsewhere
       return true;
     }
     return false;
@@ -145,7 +155,17 @@ export function tokenize(src) {
         out.push({ type: "templateEnd", value: "`", pos, line: lineOf(pos - 1) });
         continue;
       }
-      if (c === "/" && regexAllowed(out)) {
+      let asRegex = false;
+      if (c === "/") {
+        amb = false;
+        asRegex = regexAllowed(out);
+        if (amb) {
+          opts.record?.push({ pos: start, line: lineOf(start) });
+          if (opts.mode) asRegex = opts.mode === "regex";
+          if (opts.flip === start) asRegex = !asRegex;
+        }
+      }
+      if (c === "/" && asRegex) {
         let i = pos + 1, inClass = false, ok = false;
         while (i < src.length && !isLT(src[i])) {
           if (src[i] === "\\") { i += 2; continue; }
@@ -201,6 +221,58 @@ export function tokenize(src) {
   const out = [];
   lex(out, false);
   return out;
+}
+
+const MAX_AMBIGUOUS = 200;
+// Tokens that decide what the scan sees: brackets, strings, templates and the identifiers it looks for. A different
+// reading of an ambiguous `/` only matters when it changes this sequence (numbers, operators, other identifiers and
+// regex bodies do not), which keeps ordinary division such as `(a) / 2 + b / 3` from being reported.
+const RELEVANT_IDS = new Set([...REGISTRARS, "app", "need", "authenticate", "can", "forbidden", "notFound", "Hono", "onError", "function", "return", "throw", "const", "let", "var", "async", "await", "new"]);
+const significant = (toks) => toks
+  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
+  .map((t) => `${t.type}\u0000${t.value}\u0000${t.text ?? ""}`)
+  .join("\n");
+
+/**
+ * Tokenize for scanning, failing closed on regex-vs-division ambiguity. The heuristic reading is tokenized; every
+ * ambiguous `/` is then re-read (a) all as regex, (b) all as division, (c) each one flipped on its own, which is at most
+ * 2 + MAX_AMBIGUOUS extra passes (no exponential search; mixed flips of several slashes are not tried). If any reading
+ * yields a different `significant` token sequence, the source is reported unparsed. A reading that fails to tokenize
+ * (unterminated string, template or comment) is discarded: the source must be valid JS/TS, so such a reading cannot be
+ * the real one. Heuristic reading failing is still an error.
+ */
+const NOT_AFTER_REGEX = new Set(["in", "instanceof", "of", "as", "satisfies"]);
+/**
+ * True when a reading puts a regex token directly followed, on the same line, by a number, identifier (other than
+ * in/instanceof/of/as/satisfies), string, template or regex token, with no operator between. That is a syntax error in
+ * JS/TS, so such a reading cannot be the real one (it is how `(1) / 2 + [4][0] / 2` read as a regex is rejected).
+ */
+function impossibleReading(toks) {
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (toks[i].type !== "regex") continue;
+    const n = toks[i + 1];
+    if (n.line !== toks[i].line) continue;
+    if (n.type === "num" || n.type === "str" || n.type === "template" || n.type === "regex") return true;
+    if (n.type === "id" && !NOT_AFTER_REGEX.has(n.value)) return true;
+  }
+  return false;
+}
+
+export function tokenizeSafe(src) {
+  const record = [];
+  const main = tokenize(src, { record });
+  if (!record.length) return main;
+  const err = (msg, line) => Object.assign(new Error(`${msg} (line ${line})`), { line });
+  if (record.length > MAX_AMBIGUOUS) throw err(`More than ${MAX_AMBIGUOUS} ambiguous \`/\` (regex literal or division) in the source`, record[0].line);
+  const want = significant(main);
+  const readings = [[{ mode: "regex" }, record[0]], [{ mode: "division" }, record[0]], ...record.map((r) => [{ flip: r.pos }, r])];
+  for (const [o, at] of readings) {
+    let t;
+    try { t = tokenize(src, o); } catch { continue; }
+    if (impossibleReading(t)) continue;
+    if (significant(t) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
+  }
+  return main;
 }
 
 const PERMISSION = /^[a-z][a-z-]*:[a-z][a-z-]*$/;
@@ -447,7 +519,24 @@ function onlyThrows(toks, from, to, fnName) {
 export function scan(src, exemptions = {}, publicRoutes = {}) {
   const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [] };
   let toks;
-  try { toks = tokenize(src); } catch (e) { result.unparsed.push({ line: 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+  try { toks = tokenizeSafe(src); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+
+  // Mechanism-independent cross-check on the raw text: whatever the tokenizer decided, every occurrence of the words
+  // the scan depends on must be an identifier token. A hit inside what was read as a string, regex, template or
+  // comment is reported (fail closed). Prose or strings that legitimately contain e.g. `app.get(` are therefore
+  // reported too; that is accepted, reword them.
+  {
+    const idAt = new Set(toks.filter((t) => t.type === "id").map((t) => t.pos));
+    const reg = [...REGISTRARS].join("|");
+    const patterns = [/\bapp\b/dg, /\bauthenticate\b/dg, /\bneed(?=\s*\()/dg, /\bcan(?=\s*\()/dg, /\bforbidden(?=\s*\()/dg, new RegExp(`\\??\\.\\s*(${reg})\\s*\\(`, "dg")];
+    const lineAt = (i) => src.slice(0, i).split(/\r\n|[\n\r\u2028\u2029]/).length;
+    for (const re of patterns) {
+      for (const m of src.matchAll(re)) {
+        const at = m.indices[1]?.[0] ?? m.index;
+        if (!idAt.has(at)) result.unparsed.push({ line: lineAt(at), reason: `${JSON.stringify(src.slice(at, at + 12).split(/\W/)[0] || m[0])} appears inside what the scanner read as a string, regex or comment` });
+      }
+    }
+  }
 
   // The authentication line: app.use("/api/*", authenticate)
   let from = -1;

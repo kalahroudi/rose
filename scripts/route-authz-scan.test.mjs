@@ -155,8 +155,9 @@ test("routes registered before the authentication line are not in scope", () => 
 });
 
 test("the authentication line itself is not detected inside a comment or string", () => {
-  assert.equal(scan('// app.use("/api/*", authenticate)\napp.get("/api/x", (c) => 1);', {}).unparsed.length, 1);
-  assert.equal(scan('const s = \'app.use("/api/*", authenticate)\';', {}).unparsed.length, 1);
+  const noAuth = (src) => scan(src, {}).unparsed.some((u) => /Could not find the authentication line/.test(u.reason));
+  assert.ok(noAuth('// app.use("/api/*", authenticate)\napp.get("/api/x", (c) => 1);'));
+  assert.ok(noAuth('const s = \'app.use("/api/*", authenticate)\';'));
 });
 
 test("bypass: a chained registration after a gated one is checked", () => {
@@ -455,4 +456,60 @@ test("review: allow-listed pre-auth routes must have only inline handler argumen
   assert.ok(r.unparsed.length >= 1);
   const ok = PRE(`app.get("/api/bootstrap", ${OPEN_H}, ${OPEN_H});`, { "GET /api/bootstrap": "why" });
   assert.deepEqual(ok.unparsed, []);
+});
+
+test("review: ambiguous regex-vs-division slashes fail closed (L6, L11, L12), before and after the auth line", () => {
+  const real = readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+  const authLine = 'app.use("/api/*", authenticate);';
+  const tricks = [
+    "{}\n/'/; app.get('/api/evil', H); //'\n;\n",
+    "let of: any = 1;\nfor (const k in of / (app.get('/api/evil', H) as any) as any) {} //' ) {}\n",
+    "for (void of / (app.get('/api/evil', H)); false;) {} //' ) {}\n",
+    "let x: any;\nfor ((x) of /'/.source) app.get('/api/evil', H); //' )\n;\n",
+    "for (x! of /'/.source) app.get('/api/evil', H); //' )\n;\n",
+  ];
+  for (const trick of tricks) {
+    for (const src of [real.replace(authLine, trick + authLine), real.replace(authLine, authLine + "\n" + trick)]) {
+      assert.notEqual(src, real);
+      const r = scan(src, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES);
+      assert.ok(r.ungated.length + r.unparsed.length + r.stale.length + r.stalePublic.length > 0, trick);
+    }
+  }
+  assert.ok(scan(real.replace(authLine, tricks[0] + authLine), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES).unparsed.some((u) => /Ambiguous/.test(u.reason) && u.line > 0));
+});
+
+test("review: ordinary division and regex are not ambiguity findings", () => {
+  const ok = (body) => assert.deepEqual(scan(wrap(body), {}).unparsed, [], body);
+  ok("const x = (a) / 2;");
+  ok("const y = (a) / 2 + b / 3; const z = [1][0] / 2;");
+  ok("const r = /a'b/.test(s); const q = (/x/g).test(s); f(/y\"/);");
+  ok(GOOD);
+  const rec = [];
+  tokenize("const x = (a) / 2;", { record: rec });
+  assert.equal(rec.length, 1);
+  tokenize("const r = /a/;", { record: rec });
+  assert.equal(rec.length, 1);
+});
+
+test("raw cross-check: scanned words inside strings, regexes or comments are reported unparsed", () => {
+  const un = (body) => scan(wrap(body), {}).unparsed.map((u) => u.reason);
+  assert.ok(un('const s = "app.get(";').some((r) => /inside what the scanner read as a string, regex or comment/.test(r)));
+  assert.ok(un("// authenticate is next\n").some((r) => /authenticate/.test(r)));
+  assert.ok(un("const r = /need(/;").some((r) => /need/.test(r)));
+  assert.deepEqual(un(GOOD), []);
+});
+
+test("`#name` after a keyword-named private field is a property, and `extends /re/` is ambiguous", () => {
+  const toks = tokenize("class Z { #in = 1; m() { return this.#in / 2; } }");
+  assert.ok(!toks.some((t) => t.type === "regex"));
+  const rec = [];
+  tokenize("class Z extends /x/.constructor {}", { record: rec });
+  assert.equal(rec.length, 1);
+  const hide = "class Z extends /'/.constructor {}; app.get(\"/api/evil\", async (c) => c.json(1)); //' {}\n";
+  assert.ok(scan(wrap(hide), {}).unparsed.length > 0);
+});
+
+test("impossible readings are discarded: no false positive on (1) / 2 + [4][0] / 2", () => {
+  const r = scan(wrap("const a = (1) / 2 + [4][0] / 2; const b = (a) / 2 + f(b) / 3;"), {});
+  assert.deepEqual(r.unparsed, []);
 });
