@@ -79,6 +79,40 @@ describe("sign-in code per-address guess cap", () => {
     expect(await total(scope, email)).toBe(100);
   });
 
+  // r0 keeps 1 own guess (4 spent), r1..r18 spend 90, r19 (newest code) 4, plus 1 foreign: 99 counted.
+  const fillEdge = async (scope: string, email: string) => {
+    let last = "";
+    for (let i = 0; i < 20; i++) {
+      last = await issueLoginCode(env.DB, KEY, scope, email, `r${i}`);
+      await tick();
+      for (let g = 0; g < (i === 0 || i === 19 ? 4 : 5); g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
+    }
+    // One foreign guess on the newest code brings the count to 99 and leaves it open.
+    await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), "stranger");
+    return last;
+  };
+
+  it("at 99 guesses the correct newest code of another requester still verifies", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const newest = await fillEdge(scope, email);
+    expect(await total(scope, email)).toBe(99);
+    // r0's own code is still open and is a candidate too; the single remaining guess must go to the match.
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, newest, "r0")).toBe(true);
+    expect(await total(scope, email)).toBe(100);
+  });
+
+  it("at 99 guesses a wrong guess still spends the last one and the next verify is refused", async () => {
+    const scope = `v-${uniq()}`;
+    const email = "o@example.com";
+    const newest = await fillEdge(scope, email);
+    expect(await total(scope, email)).toBe(99);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(newest), "r0")).toBe(false);
+    expect(await total(scope, email)).toBe(100);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, newest, "r0")).toBe(false);
+    expect(await total(scope, email)).toBe(100);
+  });
+
   it("parallel guesses near the cap do not exceed it", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
