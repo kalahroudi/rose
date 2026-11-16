@@ -33,6 +33,15 @@ export const PUBLIC_CORE_ROUTES = {
 };
 
 /**
+ * Registrations after the authentication line on paths outside /api and /svc: they get neither authentication nor
+ * need(), so each must be listed here with the reason that is safe. "METHOD path" -> reason (same key format as
+ * CORE_EXEMPTIONS). An entry matching no such registration is reported as stale.
+ */
+export const OUTSIDE_SCOPE_ROUTES = {
+  "POST /__dev/tick": "Development-only job tick for `pnpm dev`; the handler throws notFound() unless ENVIRONMENT is \"development\", so it does nothing in production.",
+};
+
+/**
  * Tokenize TypeScript/JavaScript source. Comments are dropped. Strings are one token; template literals are a
  * `template` token, their `${...}` code inline as ordinary tokens, then `templateEnd`. Regex literals are one token.
  *
@@ -513,11 +522,14 @@ function onlyThrows(toks, from, to, fnName) {
  * @param {Record<string, string | {reason: string, onlyThrows?: string}>} exemptions "METHOD path" -> reason
  * @param {Record<string, string>} publicRoutes "METHOD path" -> reason: the only non-middleware registrations allowed
  *   before the authentication line
- * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[]}}
+ * @param {Record<string, string> | null} outsideRoutes "METHOD path" -> reason: the only registrations allowed after the
+ *   authentication line on paths outside /api and /svc. null (default) leaves them unchecked (legacy behaviour).
+ * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[], staleOutside: string[]}}
  *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys matching no pre-auth registration
  */
-export function scan(src, exemptions = {}, publicRoutes = {}) {
-  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [] };
+export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null) {
+  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [], staleOutside: [] };
+  const seenOutside = new Set();
   let toks;
   try { toks = tokenizeSafe(src); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
 
@@ -760,7 +772,16 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     else path = brief(ptoks) || "?";
     if (literal) {
       const first = path.startsWith("/") ? path.slice(1).split("/")[0] : null;
-      if (first !== null && /^[A-Za-z0-9_.~-]+$/.test(first) && first !== "api" && first !== "svc") continue; // out of scope
+      if (first !== null && /^[A-Za-z0-9_.~-]+$/.test(first) && first !== "api" && first !== "svc") {
+        if (outsideRoutes !== null) {
+          const okey = `${label} ${path}`;
+          const oentry = { key: okey, method: label, path, line: reg.line, gated: false, gates: [], exempt: null };
+          if (!Object.hasOwn(outsideRoutes, okey)) result.ungated.push({ ...oentry, reason: "Registered outside /api and /svc after the authentication line (no authentication, no need()) and not on the allow-list (OUTSIDE_SCOPE_ROUTES)" });
+          else if (seenOutside.has(okey)) result.ungated.push({ ...oentry, reason: "Duplicate registration of an allow-listed outside-scope route; only one is allowed" });
+          seenOutside.add(okey);
+        }
+        continue; // out of scope for the need() check
+      }
     }
     // Re-applying authentication is not a route.
     if (reg.method === "use" && args.length === 2 && literal && args[1][1] - args[1][0] === 1 && isId(toks[args[1][0]], "authenticate")) continue;
@@ -806,5 +827,6 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     }
   }
   for (const key of Object.keys(exemptions)) if (!seenExempt.has(key)) result.stale.push(key);
+  if (outsideRoutes !== null) for (const key of Object.keys(outsideRoutes)) if (!seenOutside.has(key)) result.staleOutside.push(key);
   return result;
 }

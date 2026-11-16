@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
-import { CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, scan, tokenize } from "./route-authz-scan.mjs";
+import { CORE_EXEMPTIONS, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_ROUTES, scan, tokenize } from "./route-authz-scan.mjs";
 
 const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
 const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
@@ -512,4 +512,31 @@ test("`#name` after a keyword-named private field is a property, and `extends /r
 test("impossible readings are discarded: no false positive on (1) / 2 + [4][0] / 2", () => {
   const r = scan(wrap("const a = (1) / 2 + [4][0] / 2; const b = (a) / 2 + f(b) / 3;"), {});
   assert.deepEqual(r.unparsed, []);
+});
+
+test("the real tenant-app.ts passes with OUTSIDE_SCOPE_ROUTES enforced", () => {
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, OUTSIDE_SCOPE_ROUTES);
+  assert.deepEqual([r.unparsed, r.ungated, r.stale, r.stalePublic, r.staleOutside], [[], [], [], [], []]);
+});
+
+test("an unlisted post-auth route outside /api and /svc is reported", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({ secret: 1 }));'), {}, {}, {});
+  assert.deepEqual(r.ungated.map((u) => u.key), ["GET /evil"]);
+  assert.deepEqual(r.staleOutside, []);
+});
+
+test("a listed post-auth route outside /api and /svc passes", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({}));'), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual([r.ungated, r.unparsed, r.staleOutside], [[], [], []]);
+});
+
+test("a stale outside-scope entry is reported", () => {
+  const r = scan(wrap(GOOD), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual(r.staleOutside, ["GET /evil"]);
+  assert.deepEqual(r.ungated, []);
+});
+
+test("a duplicate listed outside-scope registration is reported", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({})); app.get("/evil", async (c) => c.json({}));'), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual(r.ungated.map((u) => u.key), ["GET /evil"]);
 });
