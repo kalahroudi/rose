@@ -3,6 +3,10 @@
 // `need(<ctx>, <permission>)`. TypeScript 7 has no JS API and we add no dependencies, so this is a small
 // tokenizer plus a token-level walk, not a regex over text. See docs/pentest.md (AUTHZ-07).
 
+import { createHash } from "node:crypto";
+
+const idName = (v) => (v === "inline" ? "identifier:inline" : v); // an identifier named inline must not match the reserved inline entries
+
 const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "extends"]);
 const REGISTRARS = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all", "on", "use", "route", "mount"]);
 const isLT = (ch) => ch === "\n" || ch === "\r" || ch === "\u2028" || ch === "\u2029";
@@ -19,8 +23,7 @@ export const CORE_EXEMPTIONS = {
  * Routes registered before app.use("/api/*", authenticate) in the real tenant-app.ts: they run without a session
  * and without need(), so each must be listed here with the reason it is public. "METHOD path" -> reason (same key
  * format as CORE_EXEMPTIONS: ALL for app.all, ROUTE for app.route mounts). `app.use(...)` middleware before the
- * authentication line is NOT covered by this list (it never answers a request on its own by convention; the scanner
- * leaves it out of scope).
+ * authentication line is covered by PUBLIC_CORE_MIDDLEWARE instead.
  */
 export const PUBLIC_CORE_ROUTES = {
   "GET /api/bootstrap": "The signed-out SPA needs the host kind, brand and sign-in options before anyone can authenticate; it returns only what the request host already reveals and no tenant data.",
@@ -31,6 +34,32 @@ export const PUBLIC_CORE_ROUTES = {
   "GET /auth/handoff": "Receives the one-time handoff from the root host and creates the session on the workspace host; the token is signed, single-use and short-lived, and the host decides the tenant.",
   "ROUTE /api/auth": "The sign-in, sign-out, passkey and session routes cannot require a session; each handler enforces its own checks (rate limits, one-time codes, CSRF guard in front of them).",
 };
+
+/**
+ * Middleware registered with `app.use(path, handler)` before the authentication line in the real tenant-app.ts. It
+ * runs for requests that are not yet authenticated and could answer them, so every such registration must match an
+ * entry here exactly, and all of them must come before the first public route (public routes rely on them).
+ * Entries, in source order:
+ * - Named: `{ path, handler, from, reason }`. `handler` is the exact form: an identifier (`csrfGuard`; a cast
+ *   `requestContext as never` counts as `requestContext`) or a call with no arguments (`etag()`, never
+ *   interchangeable with a bare `etag`). `from` is the module it must be imported from, unrenamed; the name must
+ *   appear nowhere else in the file (no declaration, parameter, assignment or other use that could rebind it).
+ * - Inline: `{ path, handler: "inline", fingerprint, reason }`. `fingerprint` is `middlewareFingerprint()` of the
+ *   handler's tokens plus where each free identifier it uses comes from (an import's module and export, or a
+ *   built-in). Those identifiers must not be declared, assigned or passed around anywhere else in the file. Editing
+ *   the code, or re-pointing a helper's import, fails the scan until the entry is re-reviewed and updated.
+ * Each registration consumes the first unused matching entry; matches must follow the list order. An entry that
+ * nothing consumes is stale (in `stalePublic` as "USE <path> <handler>"); a malformed entry is unparsed.
+ */
+export const PUBLIC_CORE_MIDDLEWARE = [
+  { path: "*", handler: "inline", fingerprint: "42a79847e9eaf569", reason: "Environment check: answers only with a fixed 500 when the server is misconfigured, otherwise calls next(); reads no tenant data." },
+  { path: "*", handler: "requestContext", from: "./http/base", reason: "Attaches the request id and logging context and calls next(); it never answers a request." },
+  { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "Rejects cross-site state-changing requests before anything runs; it can only deny." },
+  { path: "/svc/*", handler: "csrfGuard", from: "./http/base", reason: "Rejects cross-site state-changing requests before anything runs; it can only deny." },
+  { path: "/api/*", handler: "inline", fingerprint: "6473efbb2ee99bd0", reason: "Runs next() first, then only sets a Cache-Control header on the finished response; answers nothing itself." },
+  { path: "/api/*", handler: "etag()", from: "hono/etag", reason: "Hono etag middleware: hashes the finished response and may turn it into a 304; adds no data of its own." },
+  { path: "*", handler: "inline", fingerprint: "f86106658b3aed18", reason: "Tenant resolution: derives the tenant from the request host, stores it on the context and calls next(); it never answers." },
+];
 
 /**
  * Registrations after the authentication line on paths outside /api and /svc: they get neither authentication nor
@@ -237,8 +266,8 @@ const MAX_AMBIGUOUS = 200;
 // reading of an ambiguous `/` only matters when it changes this sequence (numbers, operators, other identifiers and
 // regex bodies do not), which keeps ordinary division such as `(a) / 2 + b / 3` from being reported.
 const RELEVANT_IDS = new Set([...REGISTRARS, "app", "need", "authenticate", "can", "forbidden", "notFound", "Hono", "onError", "function", "return", "throw", "const", "let", "var", "async", "await", "new"]);
-const significant = (toks) => toks
-  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
+const significant = (toks, extraIds) => toks
+  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) || extraIds.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
   .map((t) => `${t.type}\u0000${t.value}\u0000${t.text ?? ""}`)
   .join("\n");
 
@@ -267,19 +296,19 @@ function impossibleReading(toks) {
   return false;
 }
 
-export function tokenizeSafe(src) {
+export function tokenizeSafe(src, extraIds = new Set()) {
   const record = [];
   const main = tokenize(src, { record });
   if (!record.length) return main;
   const err = (msg, line) => Object.assign(new Error(`${msg} (line ${line})`), { line });
   if (record.length > MAX_AMBIGUOUS) throw err(`More than ${MAX_AMBIGUOUS} ambiguous \`/\` (regex literal or division) in the source`, record[0].line);
-  const want = significant(main);
+  const want = significant(main, extraIds);
   const readings = [[{ mode: "regex" }, record[0]], [{ mode: "division" }, record[0]], ...record.map((r) => [{ flip: r.pos }, r])];
   for (const [o, at] of readings) {
     let t;
     try { t = tokenize(src, o); } catch { continue; }
     if (impossibleReading(t)) continue;
-    if (significant(t) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
+    if (significant(t, extraIds) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
   }
   return main;
 }
@@ -413,6 +442,72 @@ function parseFn(toks, from, to) {
   return { from, to, pf, pt, bodyFrom, bodyTo, block, param };
 }
 
+/**
+ * Fingerprint of an inline middleware handler: a hash of its tokens (comments and whitespace ignored) plus where each
+ * free identifier it uses comes from (`name=module:export` for an import, `name=global` for a built-in), so swapping
+ * the code, or rebinding a helper it calls to another module, changes the fingerprint.
+ */
+export function middlewareFingerprint(handlerToks, bindings = []) {
+  const code = handlerToks.map((t) => [t.type, t.value ?? null, t.text ?? null]);
+  return createHash("sha256").update(JSON.stringify([code, [...bindings].sort()])).digest("hex").slice(0, 16);
+}
+
+/** Built-ins an inline pre-auth middleware may use without an import. */
+const MIDDLEWARE_GLOBALS = new Set(["Response", "Request", "Headers", "URL", "URLSearchParams", "JSON", "Date", "Math", "Promise", "Error", "Object", "Array", "String", "Number", "Boolean", "Symbol", "Map", "Set", "crypto", "console", "undefined", "NaN", "Infinity"]);
+const GLOBAL_OBJECTS = new Set(["globalThis", "self", "window", "global", "Reflect"]);
+const JS_WORDS = new Set(["async", "await", "function", "return", "if", "else", "try", "catch", "finally", "throw", "new", "const", "let", "var", "true", "false", "null", "typeof", "instanceof", "in", "of", "for", "while", "do", "break", "continue", "switch", "case", "default", "void", "delete", "this", "as", "satisfies", "yield", "class", "extends", "super"]);
+
+/** Value import specifiers of the file: local name -> [{ module, imported, at }] (`at` = token index of the local name). */
+function importsOf(toks) {
+  const map = new Map();
+  const add = (local, module, imported) => { if (!map.has(local.value)) map.set(local.value, []); map.get(local.value).push({ module, imported, at: local.idx }); };
+  for (let i = 0; i < toks.length; i++) {
+    if (!isId(toks[i], "import") || isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i + 1], "(") || isP(toks[i + 1], ".")) continue;
+    let j = i + 1;
+    let end = j;
+    while (end < toks.length && !isId(toks[end], "from") && !isP(toks[end], ";") && toks[end].type !== "str") end++;
+    const module = isId(toks[end], "from") && toks[end + 1]?.type === "str" ? toks[end + 1].value : null;
+    const typeOnly = isId(toks[j], "type") && !isP(toks[j + 1], ",") && !isId(toks[j + 1], "from");
+    if (module !== null && !typeOnly) {
+      const loc = (k) => ({ value: toks[k].value, idx: k });
+      while (j < end) {
+        if (isId(toks[j])) { add(loc(j), module, "default"); j++; }
+        else if (isP(toks[j], "*") && isId(toks[j + 1], "as") && isId(toks[j + 2])) { add(loc(j + 2), module, "*"); j += 3; }
+        else if (isP(toks[j], "{")) {
+          const close = matching(toks, j);
+          if (close < 0) break;
+          for (const [x, y] of splitArgs(toks, j + 1, close)) {
+            let k = x;
+            if (isId(toks[k], "type") && k + 1 < y) continue; // type-only specifier: no value binding
+            const imported = toks[k]?.value;
+            if (isId(toks[k + 1], "as") && isId(toks[k + 2]) && k + 3 === y) add(loc(k + 2), module, imported);
+            else if (k + 1 === y && isId(toks[k])) add(loc(k), module, imported);
+          }
+          j = close + 1;
+        } else j++;
+      }
+    }
+    i = Math.max(i, end);
+  }
+  return map;
+}
+
+/**
+ * Occurrences of identifier `name` (not property names after `.`/`?.`/`#`) at token indexes other than `allowed`.
+ * With `readsOk`, a read that cannot bind the name is also allowed: a call or member access (`name(`, `name.`,
+ * `name?.`) that does not follow `function`, `class`, `*` or a TypeScript declaration keyword (`namespace`, `enum`, ...).
+ */
+function strayUses(toks, name, allowed, readsOk = false) {
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (!isId(toks[i], name) || isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#") || allowed.has(i)) continue;
+    const read = (isP(toks[i + 1], "(") || isP(toks[i + 1], ".") || isP(toks[i + 1], "?.")) && !["function", "class", "namespace", "module", "enum", "interface", "type", "declare"].some((w) => isId(toks[i - 1], w)) && !isP(toks[i - 1], "*");
+    if (readsOk && read) continue;
+    out.push(i);
+  }
+  return out;
+}
+
 /** True when `name` is (re)declared anywhere in the function (any param, const/let/var, function, class, catch). */
 function redeclares(toks, fn, name) {
   const lo = fn.from, hi = fn.to;
@@ -524,14 +619,24 @@ function onlyThrows(toks, from, to, fnName) {
  *   before the authentication line
  * @param {Record<string, string> | null} outsideRoutes "METHOD path" -> reason: the only registrations allowed after the
  *   authentication line on paths outside /api and /svc. null (default) leaves them unchecked (legacy behaviour).
+ * @param {{path: string, handler: string, reason: string}[] | null} publicMiddleware ordered allow-list of the
+ *   `app.use` registrations allowed before the authentication line (see PUBLIC_CORE_MIDDLEWARE). null (default)
+ *   leaves them unchecked (legacy behaviour).
  * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[], staleOutside: string[]}}
- *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys matching no pre-auth registration
+ *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys (and unused
+ *   publicMiddleware entries as "USE <path> <handler>") matching no pre-auth registration
  */
-export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null) {
+export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null, publicMiddleware = null) {
   const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [], staleOutside: [] };
   const seenOutside = new Set();
   let toks;
-  try { toks = tokenizeSafe(src); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+  // With the middleware allow-list, the names it matches by (named middleware, every import, the built-ins and global
+  // objects inline middleware may use) also count: a reading that hides one of them in a "regex" could rebind it.
+  let extraIds = new Set();
+  if (Array.isArray(publicMiddleware)) {
+    try { extraIds = new Set([...importsOf(tokenize(src)).keys(), ...MIDDLEWARE_GLOBALS, ...GLOBAL_OBJECTS, ...Array.from(publicMiddleware, (e) => (typeof e?.handler === "string" ? e.handler.replace(/\(\)$/, "") : "")).filter(Boolean)]); } catch { /* tokenizeSafe reports it */ }
+  }
+  try { toks = tokenizeSafe(src, extraIds); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
 
   // Mechanism-independent cross-check on the raw text: whatever the tokenizer decided, every occurrence of the words
   // the scan depends on must be an identifier token. A hit inside what was read as a string, regex, template or
@@ -661,7 +766,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
       // registration inside a function or block there can run after authentication. The authentication line itself
       // may chain registrations (app.use("/api/*", authenticate).get(...)).
       if (!topLevel(i)) result.unparsed.push({ line: t.line, reason: `Registration before the authentication line is not a top-level statement of the factory: ${brief(toks.slice(i, i + 4))}` });
-      if (i !== authAt && !isOnError && reg.method !== "use") preRegs.push(reg);
+      if (i !== authAt && !isOnError) preRegs.push(reg);
       const e = chain(reg.argTo + 1, true, i === authAt ? regs : preRegs);
       if (e >= 0) wholeStatement(i, e, t.line);
       continue;
@@ -717,8 +822,9 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
   const seenExempt = new Set();
   // Pre-auth registrations: public only when listed. Middleware (`use`) is out of scope and never reaches here.
   const seenPublic = new Set();
+  const preUse = preRegs.filter((r) => r.method === "use").sort((a, b) => a.tok - b.tok);
   for (const reg of preRegs) {
-    if (reg.method === "use") continue; // chained middleware
+    if (reg.method === "use") continue; // middleware: checked against publicMiddleware below
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();
     let pathArg;
@@ -749,6 +855,105 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
     seenPublic.add(key);
   }
   for (const key of Object.keys(publicRoutes)) if (!seenPublic.has(key)) result.stalePublic.push(key);
+  if (publicMiddleware !== null && !Array.isArray(publicMiddleware)) {
+    result.unparsed.push({ line: 0, reason: "The public middleware allow-list (PUBLIC_CORE_MIDDLEWARE) is not an array; pre-authentication middleware was not checked" });
+  } else if (publicMiddleware !== null) {
+    const list = Array.from(publicMiddleware); // holes become undefined, which validation rejects
+    const nonEmpty = (v) => typeof v === "string" && v.trim() !== "";
+    // Entries that are not well-formed never exempt anything: they are reported and skipped.
+    const used = list.map((e, k) => {
+      const ok = e !== null && typeof e === "object" && nonEmpty(e.path) && nonEmpty(e.handler) && nonEmpty(e.reason)
+        && (e.handler === "inline" ? typeof e.fingerprint === "string" && /^[0-9a-f]{16}$/.test(e.fingerprint) && e.from === undefined : nonEmpty(e.from) && e.fingerprint === undefined);
+      if (!ok) result.unparsed.push({ line: 0, reason: `PUBLIC_CORE_MIDDLEWARE[${k}] is not a valid entry (named: { path, handler, from, reason }; inline: { path, handler: "inline", fingerprint (16 hex digits), reason }; reason non-empty): ${JSON.stringify(e) ?? String(e)}` });
+      return !ok;
+    });
+    const imports = importsOf(toks);
+    // Every token index where a named pre-auth middleware is used as the handler: the only allowed non-import uses.
+    const handlerAt = new Map();
+    for (const reg of preUse) {
+      const args = splitArgs(toks, reg.argFrom, reg.argTo);
+      if (args.length === 2 && isId(toks[args[1][0]])) { const n = toks[args[1][0]].value; if (!handlerAt.has(n)) handlerAt.set(n, new Set()); handlerAt.get(n).add(args[1][0]); }
+    }
+    const firstPublicRoute = Math.min(...preRegs.filter((r) => r.method !== "use").map((r) => r.tok));
+    let lastAt = -1;
+    for (const reg of preUse) {
+      const args = splitArgs(toks, reg.argFrom, reg.argTo);
+      const ptoks = args[0] ? toks.slice(args[0][0], args[0][1]) : [];
+      if (args.length !== 2 || !(ptoks.length === 1 && ptoks[0].type === "str" && !ptoks[0].value.includes("\\"))) {
+        result.unparsed.push({ line: reg.line, reason: `app.use registered before the authentication line must be app.use("<literal path>", <one handler>); cannot read it literally: ${brief(toks.slice(reg.argFrom, Math.min(reg.argTo, reg.argFrom + 6))) || "?"}` });
+        continue;
+      }
+      const [ha, hb] = args[1];
+      const h = toks.slice(ha, hb);
+      const fn = parseFn(toks, ha, hb);
+      let handler = null, name = null, fingerprint = null, from = null;
+      if (fn) handler = "inline";
+      else if (h.length === 1 && isId(h[0])) { name = h[0].value; handler = idName(name); }
+      else if (h.length === 3 && isId(h[0]) && isId(h[1], "as") && isId(h[2])) { name = h[0].value; handler = idName(name); }
+      else if (h.length === 3 && isId(h[0]) && isP(h[1], "(") && isP(h[2], ")")) { name = h[0].value; handler = `${idName(name)}()`; }
+      if (handler === null) {
+        result.unparsed.push({ line: reg.line, reason: `app.use ${ptoks[0].value}: handler before the authentication line is not an inline function, an identifier, a cast identifier or a call with no arguments: ${brief(h) || "?"}` });
+        continue;
+      }
+      const ungated = (reason) => result.ungated.push({ key: `USE ${ptoks[0].value}`, method: "USE", path: ptoks[0].value, line: reg.line, gated: false, gates: [], exempt: null, reason });
+      if (reg.tok > firstPublicRoute) {
+        ungated("Middleware registered after a public route but before the authentication line; public routes rely on the middleware above them (CSRF guard, request context), so every pre-auth app.use must come before the first public route");
+        continue;
+      }
+      if (!list.some((e, k) => !used[k] && e.path === ptoks[0].value && e.handler === handler)) {
+        ungated("Middleware registered before the authentication line and not on the public middleware allow-list (PUBLIC_CORE_MIDDLEWARE)");
+        continue;
+      }
+      if (name !== null) {
+        // Matched by name, so the name must be one unrenamed value import and appear nowhere else in the file
+        // (no declaration, parameter, assignment or other use that could rebind it).
+        const imp = imports.get(name) ?? [];
+        const stray = imp.length === 1 ? strayUses(toks, name, new Set([imp[0].at, ...handlerAt.get(name)])) : [];
+        if (imp.length !== 1 || imp[0].imported !== name || stray.length) {
+          result.unparsed.push({ line: stray.length ? toks[stray[0]].line : reg.line, reason: `app.use ${ptoks[0].value}: middleware \`${name}\` must be bound by exactly one unrenamed import and used nowhere else in this file (only as a pre-auth middleware); the allow-list matches it by name, so another binding could swap it` });
+          continue;
+        }
+        from = imp[0].module;
+      } else {
+        // Inline: pin the code and where every free identifier it uses comes from.
+        const bindings = [];
+        let bad = null;
+        for (let k = ha; k < hb && !bad; k++) {
+          const t = toks[k];
+          if (!isId(t) || JS_WORDS.has(t.value) || isP(toks[k - 1], ".") || isP(toks[k - 1], "?.") || isP(toks[k - 1], "#")) continue;
+          if (isP(toks[k + 1], ":") && (isP(toks[k - 1], "{") || isP(toks[k - 1], ","))) continue; // object key
+          if ((fn.param >= 0 && toks[fn.param].value === t.value) || redeclares(toks, fn, t.value)) continue; // local to the handler (its code is pinned)
+          const imp = imports.get(t.value) ?? [];
+          const inside = new Set(); for (let q = ha; q < hb; q++) if (isId(toks[q], t.value)) inside.add(q);
+          if (imp.length === 1) inside.add(imp[0].at);
+          const stray = strayUses(toks, t.value, inside, true);
+          // A built-in can also be replaced through a global object (globalThis.Response = ..., Reflect.set(...)) or by
+          // its name as a string, so none of those may appear anywhere in the file.
+          const viaGlobal = imp.length === 0 && toks.some((u) => (isId(u) && GLOBAL_OBJECTS.has(u.value)) || ((u.type === "str" || u.type === "template") && (u.value ?? u.text ?? "").includes(t.value)));
+          if (imp.length > 1 || (imp.length === 0 && !MIDDLEWARE_GLOBALS.has(t.value)) || stray.length || viaGlobal) bad = t;
+          else bindings.push(imp.length ? `${t.value}=${imp[0].module}:${imp[0].imported}` : `${t.value}=global`);
+        }
+        if (bad) {
+          result.unparsed.push({ line: bad.line, reason: `app.use ${ptoks[0].value}: inline middleware uses \`${bad.value}\`, which must be one value import or a built-in and must not be declared, assigned or passed around elsewhere in this file (only called or read as \`${bad.value}(\` / \`${bad.value}.\`); a built-in also must not be reachable through globalThis/self/window/global/Reflect or named in a string` });
+          continue;
+        }
+        fingerprint = middlewareFingerprint(h, [...new Set(bindings)]);
+      }
+      // Exact match only: path, handler form, the import's module for named middleware, the fingerprint for inline.
+      const matches = (e) => e.path === ptoks[0].value && e.handler === handler && (handler === "inline" ? e.fingerprint === fingerprint : e.from === from);
+      const at = list.findIndex((e, k) => !used[k] && matches(e));
+      if (at >= 0) {
+        used[at] = true;
+        if (at < lastAt) ungated(`Middleware before the authentication line runs in a different order than PUBLIC_CORE_MIDDLEWARE lists it (entry ${at} comes after entry ${lastAt} in the source); middleware order matters, so keep the list in source order`);
+        lastAt = Math.max(lastAt, at);
+        continue;
+      }
+      ungated(handler === "inline"
+        ? `Inline middleware before the authentication line does not match the reviewed code of any PUBLIC_CORE_MIDDLEWARE inline entry on this path (fingerprint ${fingerprint}); re-review it and update the entry's fingerprint and reason`
+        : `Middleware \`${name}\` is imported from "${from}", not from the module its PUBLIC_CORE_MIDDLEWARE entry names`);
+    }
+    list.forEach((e, k) => { if (!used[k] && e && typeof e === "object") result.stalePublic.push(`USE ${e.path} ${e.handler}`); });
+  }
   for (const reg of regs) {
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();
