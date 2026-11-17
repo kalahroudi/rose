@@ -161,8 +161,16 @@ export function setRoutes(text, routes) {
 export const readText = (p) => readFileSync(p, "utf8");
 export const writeText = (p, s) => writeFileSync(p, s);
 
-export function operatorNoSessionReason(error, verifyBrief) {
-  return error ?? `the verify succeeded without a session cookie (${verifyBrief ?? "no response"})`;
+/**
+ * `withheld`: the console answered 200 but sent no code. Then `local` says whether a local-stack diagnosis
+ * applies: `why` is its result (null when no known cause), `diagnosisError` is why it could not run.
+ */
+export function operatorNoSessionReason(error, verifyBrief, { withheld = false, local = false, why = null, diagnosisError = null } = {}) {
+  if (error == null) return `the verify succeeded without a session cookie (${verifyBrief ?? "no response"})`;
+  if (!withheld) return error;
+  if (!local) return `${error} Is this a production deployment? Use --provision wrangler.`;
+  if (diagnosisError) return `${error} (could not diagnose: ${diagnosisError})`;
+  return why ?? `${error} The operator has no passkey yet got no code: check BOOTSTRAP_OPERATOR_EMAIL and the console logs.`;
 }
 
 /**
