@@ -124,6 +124,13 @@ describe("workspace deletion safeguards", () => {
     expect(await code(inv)).toBe("reauth_required");
     expect((await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-admin@x.example", role: "admin" } })).status).toBe(201);
     expect((await a.fetch("/api/invitations", { cookie: await sessionCookie("passkey"), body: { email: "new-owner@x.example", role: "owner" } })).status).toBe(201);
+    // A stale session cannot invite an admin or mint an admin API key.
+    const staleAdminInv = await a.fetch("/api/invitations", { cookie: staleCode, body: { email: "stale-admin@x.example", role: "admin" } });
+    expect(staleAdminInv.status).toBe(403);
+    expect(await code(staleAdminInv)).toBe("reauth_required");
+    const staleKey = await a.fetch("/api/api-keys", { cookie: staleCode, body: { name: "s", role: "admin" } });
+    expect(staleKey.status).toBe(403);
+    expect(await code(staleKey)).toBe("reauth_required");
     // A session from the future is not fresh either.
     const { assertFreshSession } = await import("../src/control/sessions");
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
