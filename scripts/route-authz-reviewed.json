@@ -1,0 +1,63 @@
+{
+  "./http/base:requestContext": {
+    "packages/core/src/http/base.ts": "7ce0e6eeff75f91f716d7a7ee951ea0f",
+    "npm:hono": "hono@4.13.17/1c9cecc27f0b",
+    "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
+    "packages/core/src/env.ts": "4fc45b8243f40849436bdac71bdfae37",
+    "packages/core/src/control/jobs.ts": "f68a2e4a7a01c1d4b1459f24f54065c3",
+    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f",
+    "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
+    "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
+    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "cloudflare:workers": "builtin",
+    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
+  },
+  "./http/base:csrfGuard": {
+    "packages/core/src/http/base.ts": "7ce0e6eeff75f91f716d7a7ee951ea0f",
+    "npm:hono": "hono@4.13.17/1c9cecc27f0b",
+    "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
+    "packages/core/src/env.ts": "4fc45b8243f40849436bdac71bdfae37",
+    "packages/core/src/control/jobs.ts": "f68a2e4a7a01c1d4b1459f24f54065c3",
+    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f",
+    "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
+    "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
+    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "cloudflare:workers": "builtin",
+    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
+  },
+  "./env:assertEnvironment": {
+    "packages/core/src/env.ts": "4fc45b8243f40849436bdac71bdfae37",
+    "packages/core/src/control/jobs.ts": "f68a2e4a7a01c1d4b1459f24f54065c3",
+    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f",
+    "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
+    "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
+    "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
+    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "cloudflare:workers": "builtin",
+    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
+  },
+  "./tenancy/resolve:hostnameOf": {
+    "packages/core/src/tenancy/resolve.ts": "f37fdc3cb45a784db42adaea56f1df5c",
+    "packages/core/src/control/tenants.ts": "62091deaf18d204cec22ba18084f4032",
+    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f",
+    "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
+    "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
+    "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59"
+  },
+  "./tenancy/resolve:resolveHost": {
+    "packages/core/src/tenancy/resolve.ts": "f37fdc3cb45a784db42adaea56f1df5c",
+    "packages/core/src/control/tenants.ts": "62091deaf18d204cec22ba18084f4032",
+    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/http/pagination.ts": "c521c3a4455b48d74b1ff42aba799d8f",
+    "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
+    "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
+    "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59"
+  },
+  "hono/etag:etag": {
+    "npm:hono": "hono@4.13.17/1c9cecc27f0b"
+  }
+}
