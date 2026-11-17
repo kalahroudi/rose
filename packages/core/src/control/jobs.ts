@@ -14,6 +14,7 @@ export interface JobRow {
   result: string | null;
   error: string | null;
   attempts: number;
+  claim: string | null;
   run_after: number;
   created_by: string | null;
   created_at: number;
@@ -71,37 +72,46 @@ export async function enqueueJob(
 }
 
 export type JobOutcome = { done: true; result?: unknown } | { done: false; retryInMs: number; note?: string };
-export type JobHandler<E> = (env: E, job: JobRow, payload: Record<string, unknown>) => Promise<JobOutcome>;
+export type JobHandler<E> = ((env: E, job: JobRow, payload: Record<string, unknown>) => Promise<JobOutcome>) & { idempotent?: true };
+
+/** Delivery is at least once, so every registered handler must be safe to run again; this is how a handler says it is. */
+export const idempotent = <E>(fn: JobHandler<E>): JobHandler<E> => Object.assign(fn, { idempotent: true as const });
 
 /**
- * Claim and run one job. Claiming is an atomic compare-and-set, so a queue message, a
- * redelivery and the sweep can all race for the same job and exactly one of them runs it.
+ * Claim and run one job. Delivery is at least once: a queue message, a redelivery and the
+ * sweep race through an atomic compare-and-set, but the sweep reclaims a job left "running"
+ * for STALE_RUNNING, so a slow worker can overlap its reclaimer. Handlers must be idempotent.
+ * Every outcome write is guarded by the unique claim token, so a run that lost ownership
+ * cannot overwrite the newer run's outcome.
  */
 async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHandler<E>>, job: JobRow): Promise<boolean> {
   const handler = handlers[job.type];
   if (!handler) return false;
+  const token = newId("claim");
   const claim = await env.DB
-    .prepare("UPDATE jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = ? AND updated_at = ?")
-    .bind(now(), job.id, job.status, job.updated_at)
+    .prepare("UPDATE jobs SET status = 'running', attempts = attempts + 1, claim = ?, updated_at = ? WHERE id = ? AND status = ? AND updated_at = ?")
+    .bind(token, now(), job.id, job.status, job.updated_at)
     .run();
   if (claim.meta.changes === 0) return false;
+  const claimed = job.attempts + 1;
+  const owned = "WHERE id = ? AND status = 'running' AND claim = ?";
   try {
     const outcome = await handler(env, job, JSON.parse(job.payload) as Record<string, unknown>);
     if (outcome.done) {
-      await env.DB.prepare("UPDATE jobs SET status = 'succeeded', payload = '{}', result = ?, error = NULL, updated_at = ? WHERE id = ?").bind(JSON.stringify(outcome.result ?? null), now(), job.id).run();
+      await env.DB.prepare(`UPDATE jobs SET status = 'succeeded', payload = '{}', result = ?, error = NULL, updated_at = ? ${owned}`).bind(JSON.stringify(outcome.result ?? null), now(), job.id, token).run();
     } else {
-      await env.DB.prepare("UPDATE jobs SET status = 'queued', run_after = ?, error = ?, updated_at = ? WHERE id = ?").bind(now() + outcome.retryInMs, outcome.note ?? null, now(), job.id).run();
-      await notify(env, job, outcome.retryInMs);
+      const r = await env.DB.prepare(`UPDATE jobs SET status = 'queued', run_after = ?, error = ?, updated_at = ? ${owned}`).bind(now() + outcome.retryInMs, outcome.note ?? null, now(), job.id, token).run();
+      if (r.meta.changes > 0) await notify(env, job, outcome.retryInMs);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const final = job.attempts + 1 >= MAX_ATTEMPTS;
+    const final = claimed >= MAX_ATTEMPTS;
     const backoff = 2 ** job.attempts * 15_000;
-    await env.DB
-      .prepare("UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? WHERE id = ?")
-      .bind(final ? "failed" : "queued", final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id)
+    const r = await env.DB
+      .prepare(`UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? ${owned}`)
+      .bind(final ? "failed" : "queued", final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id, token)
       .run();
-    if (!final) await notify(env, job, backoff);
+    if (!final && r.meta.changes > 0) await notify(env, job, backoff);
   }
   return true;
 }

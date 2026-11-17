@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAuthRoutes, checkCode, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
-import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } from "./control/jobs";
+import { enqueueJob, listJobs, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
@@ -54,7 +54,7 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
   const handlers: Record<string, JobHandler<TenantWorkerEnv>> = {
     // Destroys the tenant's private database (and with it the only copy of its wrapped
     // data key), then removes its identity records. Idempotent, so retries are safe.
-    "tenant.purge": async (env, _job, payload) => {
+    "tenant.purge": idempotent(async (env, _job, payload) => {
       const tenantId = String(payload.tenantId ?? "");
       const row = await getTenant(env.DB, tenantId);
       if (row) {
@@ -69,13 +69,13 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
       await deleteTenantRecords(env.DB, tenantId);
       invalidateHostCache();
       return { done: true, result: { purged: tenantId } };
-    },
+    }),
   };
   for (const mod of modules) {
     for (const [name, run] of Object.entries(mod.jobs ?? {})) {
       // A module job runs for the tenant recorded on the job row when it was queued by
       // that tenant's own request. The payload can not redirect it to another tenant.
-      handlers[`m.${mod.id}.${name}`] = async (env, job, payload) => {
+      handlers[`m.${mod.id}.${name}`] = idempotent(async (env, job, payload) => {
         const row = await getTenant(env.DB, job.scope);
         // The tenant was deleted or suspended after queuing: drop the work instead of retrying it.
         if (!row || row.status === "deleting") return { done: true, result: { skipped: "workspace no longer exists" } };
@@ -91,12 +91,13 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
             tenant,
             db,
             crypto,
+            jobId: job.id,
             audit: (action, target, meta) => writeTenantAudit(db, { actor: `job:${job.created_by ?? "system"}`, action: `${mod.id}.${action}`, target, meta }),
           },
           plain,
         );
         return { done: true, result };
-      };
+      });
     }
   }
   return handlers;
