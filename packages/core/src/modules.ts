@@ -38,7 +38,10 @@ export interface ModuleContext {
 }
 
 /** Context for background jobs: bound to the tenant that queued the job, with no request. */
-export type ModuleJobContext = Pick<ModuleContext, "tenant" | "db" | "crypto" | "audit">;
+export type ModuleJobContext = Pick<ModuleContext, "tenant" | "db" | "crypto" | "audit"> & {
+  /** Stable across redelivery and stale reclaim, so a job can derive row ids that make a rerun a no-op. */
+  jobId: string;
+};
 
 export interface ModuleRoute {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
