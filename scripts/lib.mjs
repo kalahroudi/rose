@@ -161,6 +161,10 @@ export function setRoutes(text, routes) {
 export const readText = (p) => readFileSync(p, "utf8");
 export const writeText = (p, s) => writeFileSync(p, s);
 
+export function operatorNoSessionReason(error, verifyBrief) {
+  return error ?? `the verify succeeded without a session cookie (${verifyBrief ?? "no response"})`;
+}
+
 /**
  * Why the console refused to issue a development sign-in code to an operator address, given what the local
  * control plane holds. Returns an actionable message, or null when none of the known causes apply.
