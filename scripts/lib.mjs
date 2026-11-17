@@ -178,7 +178,13 @@ export function operatorNoSessionReason(error, verifyBrief, { withheld = false, 
  * control plane holds. Returns an actionable message, or null when none of the known causes apply.
  * Pure: the caller does the (read-only) lookups. Never include codes or tokens.
  */
-export function diagnoseOperatorSignIn(email, { userExists, isOperator, passkeys }) {
+export function diagnoseOperatorSignIn(email, { userExists, isOperator, passkeys, noOperators = false }) {
+  if (noOperators) {
+    if (passkeys > 0) {
+      return `This dev control plane has no operators yet and ${email} has a console passkey, so emailed codes are refused: remove that passkey, or pass --operator-email <the BOOTSTRAP_OPERATOR_EMAIL value from apps/admin/.dev.vars>.`;
+    }
+    return `This dev control plane has no operators yet, so the console sends a code only to its bootstrap address: pass --operator-email <the BOOTSTRAP_OPERATOR_EMAIL value from apps/admin/.dev.vars>, or sign in to the console with that address once. If ${email} already is that address, check BOOTSTRAP_OPERATOR_EMAIL is set (not empty) in apps/admin/.dev.vars and restart the dev stack.`;
+  }
   if (!userExists || !isOperator) {
     return `${email} is not an operator in this dev control plane, so the console sends it no code: pass --operator-email <an operator's address>.`;
   }
