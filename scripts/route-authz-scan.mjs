@@ -4,6 +4,10 @@
 // tokenizer plus a token-level walk, not a regex over text. See docs/pentest.md (AUTHZ-07).
 
 import { createHash } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
+import { builtinModules } from "node:module";
+import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const idName = (v) => (v === "inline" ? "identifier:inline" : v); // an identifier named inline must not match the reserved inline entries
 
@@ -493,6 +497,190 @@ function importsOf(toks) {
 }
 
 /**
+ * Reviewed pre-auth helpers, keyed "<module as imported in tenant-app.ts>:<export>". The value is the manifest of
+ * the module's whole import tree (`helperManifest()`): `{ "<repo-relative file>": "<sha256 prefix of the file>" }`
+ * for every file reached through any import (relative, workspace package), `"npm:<package>"` -> its full
+ * pnpm-lock.yaml pin, and each `node:`/`cloudflare:` specifier -> "builtin" (listing it is the review). Any added,
+ * removed or edited file fails the scan until the manifest is re-reviewed and regenerated. The manifests live in
+ * route-authz-reviewed.json (the repo guard rejects those paths and specifiers quoted in source files).
+ */
+export const REVIEWED_HELPERS = JSON.parse(readFileSync(new URL("./route-authz-reviewed.json", import.meta.url), "utf8"));
+
+export const HELPER_MAX_FILES = 40;
+export const HELPER_MAX_BYTES = 262144;
+const SCRIPT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const PROBE_EXTS = [...SCRIPT_EXTS, ".json"];
+
+/** Where helper modules and the lockfile come from: the real core sources by default; tests override `read`/`lockfile`. */
+export function diskSources(root = fileURLToPath(new URL("../", import.meta.url))) {
+  const realRoot = realpathSync(root);
+  // A symlink anywhere on the path would hash the link's own location while its imports resolve next to the target.
+  const read = (path) => { try { return realpathSync(path) === resolve(realRoot, relative(root, path)) ? readFileSync(path, "utf8") : null; } catch { return null; } };
+  return { srcDir: resolve(root, "packages", "core", "src"), read, lockfile: read(resolve(root, "pnpm-lock.yaml")) };
+}
+
+const packageOf = (spec) => spec.split("/").slice(0, spec.startsWith("@") ? 2 : 1).join("/");
+
+function lockedVersion(lockfile, spec) {
+  const name = packageOf(spec);
+  if (typeof lockfile !== "string") throw new Error(`pnpm-lock.yaml could not be read, so the version of \`${name}\` is not pinned`);
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^  '?${esc}@([^\\s:'(]+)[^:]*:`, "gm");
+  const versions = new Set([...lockfile.matchAll(re)].map((m) => m[1]));
+  if (versions.size === 0) throw new Error(`pnpm-lock.yaml lists 0 versions of \`${name}\`; at least one is needed to pin it`);
+  // The version alone does not pin the code: a pnpm patch, a swapped resolution, an overrides/importer alias or a
+  // link: all keep the same `name@version` key. Hash every lockfile entry of the package (all its versions) that decides what gets installed.
+  const parts = [...lockfile.matchAll(new RegExp(`^  '?${esc}@[^\\n]*(?:\\n    [^\\n]*)*`, "gm"))].map((m) => m[0]);
+  parts.push(...lockfile.matchAll(new RegExp(`^      '?${esc}'?:(?:\\n        [^\\n]*)+`, "gm")).map((m) => m[0]));
+  parts.push(...lockfile.matchAll(/^(?:overrides|patchedDependencies|packageExtensionsChecksum|pnpmfileChecksum):[^\n]*(?:\n[ ][^\n]*)*/gm).map((m) => m[0]));
+  return `${name}@${[...versions].sort().join("+")}/${createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 12)}`;
+}
+
+/** Every module specifier a file imports. `require` and a dynamic `import()` with a non-literal argument throw (the tree cannot be known). */
+function importSpecs(text, where) {
+  let toks;
+  try { toks = tokenizeSafe(text, new Set(["import", "export", "from", "require"])); } catch (e) { throw new Error(`${where} could not be tokenized: ${e.message}`); }
+  const plain = (t) => t?.type === "str" && !t.value.includes("\\");
+  const specs = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (!isId(t)) continue;
+    // `module.require`, `globalThis.require` and an escaped `require` load modules too, so only the name is checked.
+    if (t.value === "require" || t.value.includes("\\")) throw new Error(`${where} uses \`require\`, so its imports cannot be listed`);
+    if (isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#")) continue;
+    if (t.value === "import") {
+      if (isP(toks[i + 1], ".")) continue; // import.meta
+      if (isP(toks[i + 1], "(")) {
+        if (!plain(toks[i + 2]) || !(isP(toks[i + 3], ")") || isP(toks[i + 3], ","))) throw new Error(`${where} has a dynamic import() whose argument is not a plain string literal (line ${t.line})`);
+        specs.push(toks[i + 2].value);
+        continue;
+      }
+      let depth = 0, j = i + 1;
+      for (; j < toks.length && !(depth === 0 && toks[j].type === "str"); j++) {
+        if (isP(toks[j], "{")) depth++;
+        else if (isP(toks[j], "}")) depth--;
+      }
+      if (j >= toks.length || !plain(toks[j])) throw new Error(`${where} has an import statement with no readable module specifier (line ${t.line})`);
+      specs.push(toks[j].value);
+    } else if (t.value === "export") {
+      let j = i + 1;
+      if (isId(toks[j], "type") && (isP(toks[j + 1], "*") || isP(toks[j + 1], "{"))) j++;
+      let after;
+      if (isP(toks[j], "{")) { const m = matching(toks, j); if (m < 0) throw new Error(`${where} has an unclosed export list (line ${t.line})`); after = m + 1; }
+      else if (isP(toks[j], "*")) { after = j + 1; if (isId(toks[after], "as")) after += 2; }
+      else continue;
+      if (!isId(toks[after], "from")) {
+        if (isP(toks[j], "{")) continue; // `export { a }` with no source
+        throw new Error(`${where} has an \`export *\` with no readable module specifier (line ${t.line})`);
+      }
+      if (!plain(toks[after + 1])) throw new Error(`${where} has an export-from with no readable module specifier (line ${t.line})`);
+      specs.push(toks[after + 1].value);
+    }
+  }
+  return specs;
+}
+
+/**
+ * Manifest of the import tree behind the module `spec` as tenant-app.ts imports it: every import of every file is
+ * followed (no attempt to tell which names are used). Throws when anything cannot be resolved or read, when the tree
+ * passes HELPER_MAX_FILES / HELPER_MAX_BYTES (the caller reports it as unparsed), or for a specifier kind that cannot be pinned.
+ */
+export function helperManifest(spec, src) {
+  const root = resolve(src.srcDir, "..", "..", "..");
+  const manifest = {};
+  const seen = new Set();
+  let files = 0, bytes = 0;
+  const rel = (file) => relative(root, file).split(sep).join("/");
+  const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 32);
+  const visit = (file, why) => {
+    const name = rel(file);
+    if (name.startsWith("../") || name.split("/").includes("node_modules")) throw new Error(`${why} resolves to \`${name}\`, outside the repository sources`);
+    if (seen.has(file)) return;
+    seen.add(file);
+    const text = src.read(file);
+    if (text === null) throw new Error(`${why} resolves to \`${name}\`, which cannot be read`);
+    files++;
+    bytes += Buffer.byteLength(text);
+    if (files > HELPER_MAX_FILES) throw new Error(`import tree of \`${spec}\` is larger than the cap (${HELPER_MAX_FILES} files)`);
+    if (bytes > HELPER_MAX_BYTES) throw new Error(`import tree of \`${spec}\` is larger than the cap (${HELPER_MAX_BYTES} bytes)`);
+    manifest[name] = hash(text.replaceAll("\r\n", "\n"));
+    if (/\.[tj]sx$/.test(file)) throw new Error(`${name} is JSX, which the import scanner cannot tokenize, so its imports cannot be listed`);
+    if (SCRIPT_EXTS.some((e) => file.endsWith(e))) for (const s of importSpecs(text, name)) follow(s, file);
+  };
+  const probe = (from, relSpec) => {
+    const base = resolve(dirname(from), relSpec);
+    // Every candidate a bundler or vitest may pick; more than one hit is ambiguous, so it is reported, not guessed.
+    const found = new Set([...(PROBE_EXTS.some((e) => base.endsWith(e)) ? [base] : []), ...PROBE_EXTS.flatMap((e) => [`${base}${e}`, resolve(base, `index${e}`)])].filter((f) => src.read(f) !== null));
+    if (found.size !== 1) throw new Error(`import "${relSpec}" (from ${rel(from)}) resolves to ${found.size} files; it must resolve to exactly one`);
+    return [...found][0];
+  };
+  const workspaceDir = (name, from) => {
+    if (name.startsWith("@rose/")) return resolve(root, "packages", name.slice(6));
+    const lock = typeof src.lockfile === "string" ? src.lockfile : "";
+    const lines = lock.split("\n");
+    // Only the importer (workspace package) that owns the importing file decides what `name` is for that file:
+    // another app linking a same-named package must not turn this npm import into a walked directory.
+    const importers = [];
+    let inImporters = false;
+    for (const l of lines) {
+      if (/^\S/.test(l)) inImporters = l === "importers:";
+      else if (inImporters && /^  \S/.test(l)) importers.push(l.trim().replace(/:$/, "").replace(/^'|'$/g, ""));
+    }
+    const fromRel = relative(root, from).split(sep).join("/");
+    const owns = (k) => k === "." || fromRel === k || fromRel.startsWith(`${k}/`);
+    const owner = importers.filter(owns).sort((a, b) => (b === "." ? -1 : b.length) - (a === "." ? -1 : a.length))[0];
+    if (owner === undefined) return null;
+    const dirs = new Set();
+    let importer = null;
+    inImporters = false;
+    lines.forEach((l, k) => {
+      if (/^\S/.test(l)) inImporters = l === "importers:";
+      else if (inImporters && /^  \S/.test(l)) importer = l.trim().replace(/:$/, "").replace(/^'|'$/g, "");
+      else if (inImporters && importer === owner && (l === `      ${name}:` || l === `      '${name}':`)) {
+        const v = /^        version: link:(.+)$/.exec(lines[k + 2] ?? "");
+        if (v) dirs.add(resolve(root, importer, v[1].trim()));
+      }
+    });
+    if (dirs.size > 1) throw new Error(`\`${name}\` is linked to more than one directory in pnpm-lock.yaml`);
+    return dirs.size ? [...dirs][0] : null;
+  };
+  const follow = (s, from) => {
+    const why = `import "${s}" (from ${rel(from)})`;
+    if (s === "." || s === ".." || s.startsWith("./") || s.startsWith("../")) return visit(probe(from, s), why);
+    if (/^(?:node|cloudflare):[a-z0-9_][a-z0-9_./-]*$/.test(s)) { manifest[s] = "builtin"; return undefined; }
+    if (!/^(?:@[a-z0-9][\w.~-]*\/)?[a-z0-9][\w.~-]*(?:\/[\w.~@-]+)*$/.test(s)) throw new Error(`${why}: \`${s}\` is not a relative path, a lower-case node:/cloudflare: built-in, a workspace package or an npm package name, so it cannot be pinned`);
+    const name = packageOf(s);
+    if (builtinModules.includes(name)) throw new Error(`${why}: \`${name}\` is a Node built-in written without the \`node:\` prefix; import it as \`node:${name}\` so it can be pinned by specifier`);
+    const dir = workspaceDir(name, from);
+    if (dir === null) { manifest[`npm:${name}`] = lockedVersion(src.lockfile, s); return undefined; }
+    const pkgFile = resolve(dir, "package.json");
+    visit(pkgFile, why);
+    let pkg;
+    try { pkg = JSON.parse(src.read(pkgFile)); } catch { throw new Error(`${why}: ${rel(pkgFile)} is not valid JSON`); }
+    const sub = `.${s.slice(name.length)}`;
+    const target = typeof pkg.exports === "object" && pkg.exports !== null ? pkg.exports[sub] : sub === "." ? (pkg.exports ?? pkg.main) : undefined;
+    if (typeof target !== "string") throw new Error(`${why}: workspace package \`${name}\` has no plain string entry for \`${sub}\` in package.json`);
+    return visit(resolve(dir, target), why);
+  };
+  follow(spec, resolve(src.srcDir, "tenant-app.ts"));
+  return manifest;
+}
+
+/** [kind, reason] when the helper is not the reviewed one (kind "unparsed" = could not be read, "ungated" = changed or unreviewed), else null. */
+function helperProblem(module, imported, src) {
+  const key = `${module}:${imported}`;
+  let actual;
+  try { actual = helperManifest(module, src); } catch (e) { return ["unparsed", `Cannot read pre-auth helper \`${key}\`: ${e.message}`]; }
+  if (!Object.hasOwn(REVIEWED_HELPERS, key)) return ["ungated", `Pre-auth helper \`${key}\` is not on the reviewed list (REVIEWED_HELPERS); its tree is ${JSON.stringify(actual)}`];
+  const expected = REVIEWED_HELPERS[key];
+  if (expected === null || typeof expected !== "object" || Object.keys(expected).length === 0) return ["ungated", `Pre-auth helper \`${key}\` has no reviewed manifest in REVIEWED_HELPERS`];
+  const diffs = [...new Set([...Object.keys(expected), ...Object.keys(actual)])].flatMap((k) => (!Object.hasOwn(expected, k) ? [`${k} was added`] : !Object.hasOwn(actual, k) ? [`${k} was removed`] : expected[k] !== actual[k] ? [`${k} changed`] : []));
+  if (diffs.length) return ["ungated", `Pre-auth helper \`${key}\` changed since it was reviewed (${diffs.join(", ")}); re-review it and replace its REVIEWED_HELPERS manifest with ${JSON.stringify(actual)}`];
+  return null;
+}
+
+
+/**
  * Occurrences of identifier `name` (not property names after `.`/`?.`/`#`) at token indexes other than `allowed`.
  * With `readsOk`, a read that cannot bind the name is also allowed: a call or member access (`name(`, `name.`,
  * `name?.`) that does not follow `function`, `class`, `*` or a TypeScript declaration keyword (`namespace`, `enum`, ...).
@@ -626,7 +814,7 @@ function onlyThrows(toks, from, to, fnName) {
  *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys (and unused
  *   publicMiddleware entries as "USE <path> <handler>") matching no pre-auth registration
  */
-export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null, publicMiddleware = null) {
+export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null, publicMiddleware = null, sources = null) {
   const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [], staleOutside: [] };
   const seenOutside = new Set();
   let toks;
@@ -868,6 +1056,12 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
       return !ok;
     });
     const imports = importsOf(toks);
+    const helperSrc = sources ?? diskSources();
+    const helperProblems = (module, imported, line) => {
+      const p = helperProblem(module, imported, helperSrc);
+      if (p) return p[0] === "unparsed" ? result.unparsed.push({ line, reason: p[1] }) : result.ungated.push({ key: `HELPER ${module}:${imported}`, method: "HELPER", path: module, line, gated: false, gates: [], exempt: null, reason: p[1] });
+      return 0;
+    };
     // Every token index where a named pre-auth middleware is used as the handler: the only allowed non-import uses.
     const handlerAt = new Map();
     for (const reg of preUse) {
@@ -887,6 +1081,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
       const h = toks.slice(ha, hb);
       const fn = parseFn(toks, ha, hb);
       let handler = null, name = null, fingerprint = null, from = null;
+      const helperUses = new Map();
       if (fn) handler = "inline";
       else if (h.length === 1 && isId(h[0])) { name = h[0].value; handler = idName(name); }
       else if (h.length === 3 && isId(h[0]) && isId(h[1], "as") && isId(h[2])) { name = h[0].value; handler = idName(name); }
@@ -914,6 +1109,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
           continue;
         }
         from = imp[0].module;
+        helperUses.set(`${from}:${name}`, imp[0]);
       } else {
         // Inline: pin the code and where every free identifier it uses comes from.
         const bindings = [];
@@ -931,7 +1127,10 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
           // its name as a string, so none of those may appear anywhere in the file.
           const viaGlobal = imp.length === 0 && toks.some((u) => (isId(u) && GLOBAL_OBJECTS.has(u.value)) || ((u.type === "str" || u.type === "template") && (u.value ?? u.text ?? "").includes(t.value)));
           if (imp.length > 1 || (imp.length === 0 && !MIDDLEWARE_GLOBALS.has(t.value)) || stray.length || viaGlobal) bad = t;
-          else bindings.push(imp.length ? `${t.value}=${imp[0].module}:${imp[0].imported}` : `${t.value}=global`);
+          else {
+            bindings.push(imp.length ? `${t.value}=${imp[0].module}:${imp[0].imported}` : `${t.value}=global`);
+            if (imp.length) helperUses.set(`${imp[0].module}:${imp[0].imported}`, imp[0]);
+          }
         }
         if (bad) {
           result.unparsed.push({ line: bad.line, reason: `app.use ${ptoks[0].value}: inline middleware uses \`${bad.value}\`, which must be one value import or a built-in and must not be declared, assigned or passed around elsewhere in this file (only called or read as \`${bad.value}(\` / \`${bad.value}.\`); a built-in also must not be reachable through globalThis/self/window/global/Reflect or named in a string` });
@@ -944,6 +1143,9 @@ export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = nu
       const at = list.findIndex((e, k) => !used[k] && matches(e));
       if (at >= 0) {
         used[at] = true;
+        let helperBad = false;
+        for (const u of helperUses.values()) helperBad = helperProblems(u.module, u.imported, reg.line) > 0 || helperBad;
+        if (helperBad) continue;
         if (at < lastAt) ungated(`Middleware before the authentication line runs in a different order than PUBLIC_CORE_MIDDLEWARE lists it (entry ${at} comes after entry ${lastAt} in the source); middleware order matters, so keep the list in source order`);
         lastAt = Math.max(lastAt, at);
         continue;
