@@ -12,7 +12,7 @@ flowchart LR
   A[1 · Types<br/>no env in modules] --> B[2 · Per-tenant database<br/>runtime boundary]
   B --> C[3 · Guard<br/>static rules on every edit]
   C --> D[4 · Isolation contract<br/>tests for every module]
-  D --> E[5 · Protected core lock<br/>human approval]
+  D --> E[5 · Security review<br/>core changes listed]
   E --> F[6 · CI + CODEOWNERS]
 ```
 
@@ -62,7 +62,6 @@ silencing the symptom.
 | `csp` | Weakening `script-src` or `frame-ancestors` |
 | `secret-in-repo` | Keys, tokens, private keys, tracked `.dev.vars`/`.env` |
 | `spdx` | Missing license header |
-| `protected-file` | Unapproved change to the security core (next section) |
 
 **Exceptions** are explicit and visible:
 
@@ -73,7 +72,6 @@ await fetch(url, …);
 
 The comment must name the rule and give a reason. Every run prints the full list of
 exceptions, and the PR template asks for them, so they can not accumulate unseen.
-Exceptions never apply to the protected-file lock.
 
 ## 4. The isolation contract
 
@@ -81,7 +79,7 @@ Exceptions never apply to the protected-file lock.
 module in the manifest ([testing.md](testing.md#the-isolation-contract)). An agent adding
 a module does not need to remember to write isolation tests, and can not forget to.
 
-## 5. The protected core and `guard.lock.json`
+## 5. The security core
 
 These paths are the security core:
 
@@ -94,21 +92,26 @@ scripts/guard.mjs
 .github/workflows/**   .githooks/**   .claude/settings.json   CODEOWNERS
 ```
 
-`guard.lock.json` holds a SHA-256 of each. If any is added, changed or deleted, the guard
-fails with `protected-file` until a **human** reviews the diff and runs:
+Two things protect it, and both work through review rather than through the guard.
 
-```sh
-pnpm guard:approve
-```
+**CODEOWNERS review on GitHub.** Every path above is listed in [`CODEOWNERS`](../CODEOWNERS),
+so a pull request that changes one can not merge without the maintainer's review. This is
+only enforced when `main` has branch protection that requires CODEOWNERS review; turn it
+on, because nothing else stops a direct push or an approval from being skipped.
+[docs/deployment.md](deployment.md) lists it in the production checklist.
 
-which rewrites the lock. The lock's diff then appears in the pull request, where
-CODEOWNERS requires the maintainer's review. Modifying a migration that is already in
-the lock prints a loud warning: shipped migrations are immutable.
+**The `security-review` skill.** Before an agent reports a core change as finished, it runs
+`.claude/skills/security-review`, which lists every security-core file in the diff with the
+reason, so the owner sees exactly what to review (item E in that skill).
 
 For agents this means: you may propose a core change, but you can not make it silently.
-Explain what you changed and why, and ask the user to approve. `--approve` refuses to run
-when it detects an agent environment unless a human sets `ROSE_GUARD_APPROVE=human-reviewed`,
-and Claude Code asks for permission before running it.
+Make the smallest change, prove the security property with a test in `packages/core/test/`,
+explain what you changed and why in the pull request, and name it in your report to the
+user. The owner reviews it like any other pull request.
+
+Only the files that define the checks themselves, `scripts/guard.mjs` and `CODEOWNERS`,
+need the owner's agreement before an agent edits them. Weakening a rule, even where it
+would make a task pass, is never the fix ([AGENTS.md](../AGENTS.md), invariant 8).
 
 ## 6. Agent configuration shipped in the repo
 
@@ -140,9 +143,11 @@ everyone regardless of tool.
 - **Hooks are local.** Someone can commit with `--no-verify` or disable hooks. CI and
   branch protection are the enforcement that can not be skipped; turn on required status
   checks and CODEOWNERS review on `main`.
-- **The lock detects change, not intent.** It guarantees a human is asked; the quality of
-  that review is up to the human.
-- **Module `migrations` arrays are not locked**, only the core SQL files are. Editing a
-  shipped module migration is caught by review, not by the guard.
+- **Review detects change, not intent.** CODEOWNERS guarantees a pull request touching the
+  core is seen by the maintainer, and only when branch protection requires it. Review looks
+  at the diff, so a change made and reverted in one pull request can hide; the quality of
+  the review is up to the human.
+- **Module `migrations` arrays are not checked by the guard**, and neither are core SQL
+  files. Editing a shipped migration of either kind is caught by review.
 - The UI has no automated tests yet; UI rules in the guard cover injection and data
   egress, not behaviour.

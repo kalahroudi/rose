@@ -44,4 +44,4 @@ The `main` branch. There are no maintained release branches yet.
 ## If you run Rose in production
 
 Watch this repository's advisories, keep dependencies current (Dependabot is configured),
-and treat any change to `guard.lock.json` in your fork as a security review event.
+and treat any pull request that changes the security core (see [docs/agents.md](docs/agents.md#5-the-security-core)) as a security review event.
