@@ -23,7 +23,7 @@ export async function writePlatformAudit(
     .run();
 }
 
-export async function listPlatformAudit(db: D1Database, f: ListQuery & { action?: string }): Promise<Page<AuditEntry>> {
+export async function listPlatformAudit(db: D1Database, f: ListQuery & { action?: string | undefined }): Promise<Page<AuditEntry>> {
   const where: string[] = [];
   const args: unknown[] = [];
   if (f.q) {

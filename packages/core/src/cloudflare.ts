@@ -29,7 +29,7 @@ async function cf<T>(conn: CloudflareConnection, method: string, path: string, b
   const res = await fetch(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(conn.zoneId)}${path}`, {
     method,
     headers: { Authorization: `Bearer ${conn.apiToken}`, "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const json = (await res.json().catch(() => null)) as { success?: boolean; result?: T; errors?: { message: string }[] } | null;
   if (!res.ok || !json?.success) throw new Error(`Cloudflare API: ${json?.errors?.map((e) => e.message).join("; ") || `HTTP ${res.status}`}`);

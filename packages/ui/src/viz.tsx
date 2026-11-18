@@ -59,7 +59,7 @@ export function BarChart({ data, label, valueLabel = "Value" }: { data: { label:
 export interface FlowStep {
   label: string;
   sub?: string;
-  tone?: "on" | "ok" | "bad";
+  tone?: "on" | "ok" | "bad" | undefined;
   /** Label on the arrow leading into this step. */
   via?: string;
 }

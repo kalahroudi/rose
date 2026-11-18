@@ -273,7 +273,7 @@ export interface HelpContent {
   /** Why things work the way they do. */
   why?: { q: string; a: ReactNode }[];
   /** Short how-tos. `run` opens the relevant drawer. */
-  tasks?: { label: string; detail?: string; run?(): void }[];
+  tasks?: { label: string; detail?: string | undefined; run?: (() => void) | undefined }[];
   diagram?: { node: ReactNode; caption: string };
   /** Third-party references: open in a new tab or preview beside the page. */
   links?: { label: string; href: string }[];
@@ -362,7 +362,7 @@ function HelpDrawer({ title, help, open, onClose }: { title: string; help: HelpC
 export interface TabDef {
   id: string;
   label: string;
-  count?: number;
+  count?: number | undefined;
   prefetch?(): void;
 }
 
@@ -505,7 +505,7 @@ export function Gate({ queries, skeleton, children }: { queries: AnyQuery[]; ske
     return (
       <>
         <div className="topbar-progress" />
-        {slow ? <Skeleton kind={skeleton} /> : null}
+        {slow ? (skeleton === undefined ? <Skeleton /> : <Skeleton kind={skeleton} />) : null}
         {verySlow ? <p className="muted" role="status">Still loading. The server is taking longer than usual; you can keep waiting or reload the page.</p> : null}
       </>
     );

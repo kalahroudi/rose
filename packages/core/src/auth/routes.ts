@@ -39,7 +39,7 @@ export async function currentSession(c: Context, realm: Pick<AuthRealm, "scope" 
 
 export async function startSession(c: Context, realm: AuthRealm, user: UserRow, method: string): Promise<void> {
   const env = c.env as CoreEnv;
-  const { token, expiresAt } = await createSession(env.DB, { userId: user.id, scope: realm.scope, method, ip: clientIp(c), userAgent: c.req.header("User-Agent") });
+  const { token, expiresAt } = await createSession(env.DB, { userId: user.id, scope: realm.scope, method, ip: clientIp(c), ...(c.req.header("User-Agent") !== undefined ? { userAgent: c.req.header("User-Agent") } : {}) });
   setSessionCookie(c, realm.cookie, token, expiresAt);
   await touchLogin(env.DB, user.id);
   await realm.audit({ actor: user.email, action: `auth.login.${method}`, ip: clientIp(c) });
@@ -66,7 +66,10 @@ export async function requestCode(c: Context, opts: { scope: string; label: stri
     });
     return code;
   };
-  if (isDev(env)) return { ok: true, devCode: await work() };
+  if (isDev(env)) {
+    const devCode = await work();
+    return devCode === undefined ? { ok: true } : { ok: true, devCode };
+  }
   c.executionCtx.waitUntil(work().catch((err) => console.error(JSON.stringify({ level: "error", at: "requestCode", error: String(err) }))));
   return { ok: true };
 }

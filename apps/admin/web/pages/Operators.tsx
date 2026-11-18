@@ -26,7 +26,9 @@ export function OperatorsPage() {
       { q: "Why should there be at least two owners?", a: "If the only owner loses access to their mailbox and passkey, nobody can add operators or change connections. A second owner is your recovery path." },
       { q: "What can an operator see of tenant data?", a: "Nothing. Operators see the directory (names, addresses, member emails, domains). Tenant databases and keys are not reachable from this console at all." },
     ],
-    tasks: [{ label: "Add an operator", run: isOwner ? () => setAdding(true) : undefined, detail: isOwner ? undefined : "Only a platform owner can do this." }],
+    tasks: isOwner
+      ? [{ label: "Add an operator", run: () => setAdding(true) }]
+      : [{ label: "Add an operator", detail: "Only a platform owner can do this." }],
   };
 
   const remove = async (o: Operator) => {
@@ -49,7 +51,7 @@ export function OperatorsPage() {
   ];
 
   return (
-    <Page title="Operators" description="Staff who can use this console" help={help} actions={isOwner ? <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Add operator</Button> : undefined}>
+    <Page title="Operators" description="Staff who can use this console" help={help} actions={isOwner ? <Button variant="primary" icon="plus" onClick={() => setAdding(true)}>Add operator</Button> : null}>
       <Gate queries={[q]}>
         {() => (
           <DataTable
@@ -61,7 +63,10 @@ export function OperatorsPage() {
             freshKey={fresh}
             noun={["operator", "operators"]}
             searchPlaceholder="Search by email"
-            rowActions={isOwner ? (o) => (o.user_id === session.user.id ? null : <Button size="sm" variant="ghost" icon="trash" onClick={() => void remove(o)}>Remove</Button>) : undefined}
+            {...(isOwner && {
+              rowActions: (o: Operator) =>
+                o.user_id === session.user.id ? null : <Button size="sm" variant="ghost" icon="trash" onClick={() => void remove(o)}>Remove</Button>,
+            })}
             empty={{ icon: "users", title: "No operators", body: "Add the people on your team who run the platform." }}
           />
         )}

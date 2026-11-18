@@ -185,7 +185,7 @@ describe("queued work and deletion", () => {
 describe("job queue", () => {
   const fakeQueue = () => {
     const sent: { body: { jobId: string }; delaySeconds?: number }[] = [];
-    return { sent, send: async (body: { jobId: string }, o?: { delaySeconds?: number }) => void sent.push({ body, delaySeconds: o?.delaySeconds }) };
+    return { sent, send: async (body: { jobId: string }, o?: { delaySeconds?: number }) => void sent.push(o?.delaySeconds === undefined ? { body } : { body, delaySeconds: o.delaySeconds }) };
   };
   const batchOf = (ids: unknown[]) => {
     const acked: number[] = [];

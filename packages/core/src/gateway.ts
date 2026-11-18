@@ -50,7 +50,7 @@ export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, 
   }
   headers.set("X-Rose-Tenant-Token", token);
   headers.set("X-Rose-Tenant-Id", tenant.id);
-  const init: RequestInit = { method: request.method, headers, body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body, redirect: "manual" };
+  const init: RequestInit = { method: request.method, headers, redirect: "manual", ...(request.method === "GET" || request.method === "HEAD" ? {} : { body: request.body }) };
 
   let res: Response;
   if (mode === "dispatch") {

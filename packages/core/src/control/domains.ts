@@ -55,7 +55,7 @@ export async function removeDomain(db: D1Database, hostname: string): Promise<Do
 
 export type DomainItem = DomainRow & { tenant_slug: string; tenant_name: string };
 
-export async function listDomains(db: D1Database, f: ListQuery & { status?: string; tenantId?: string }): Promise<Page<DomainItem>> {
+export async function listDomains(db: D1Database, f: ListQuery & { status?: string | undefined; tenantId?: string | undefined }): Promise<Page<DomainItem>> {
   const where: string[] = [];
   const args: unknown[] = [];
   if (f.q) {

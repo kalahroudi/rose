@@ -9,7 +9,7 @@ const call = (path: string, init: { method?: string; body?: unknown; cookie?: st
   SELF.fetch(ORIGIN + path, {
     method: init.method ?? (init.body !== undefined ? "POST" : "GET"),
     headers: { Origin: ORIGIN, ...(init.cookie ? { Cookie: init.cookie } : {}), ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}) },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    ...(init.body !== undefined && { body: JSON.stringify(init.body) }),
   });
 const errCode = async (r: Response) => ((await r.clone().json()) as { error?: { code: string } }).error?.code;
 let n = 0;

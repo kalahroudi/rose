@@ -171,25 +171,23 @@ export function ContactsPage() {
             fetching={contacts.isFetching}
             columns={columns}
             rowKey={(c) => c.id}
-            onRowClick={canWrite ? (c) => setEditingId(c.id) : undefined}
+            {...(canWrite && { onRowClick: (c: Contact) => setEditingId(c.id) })}
             freshKey={fresh}
             noun={["contact", "contacts"]}
             searchPlaceholder="Name or company, or a full email address"
-            bulkActions={
-              canDelete
-                ? (sel) => (
+            {...(canDelete && {
+              bulkActions: (sel) => (
                     <>
                       {status !== "archived" ? <Button size="sm" onClick={() => void bulk("archive", sel)}>Archive</Button> : null}
                       {status !== "active" ? <Button size="sm" onClick={() => void bulk("activate", sel)}>Mark active</Button> : null}
                       <Button size="sm" variant="danger" icon="trash" onClick={() => void bulk("delete", sel)}>Delete</Button>
                     </>
-                  )
-                : undefined
-            }
-            rowActions={canDelete ? (c) => <IconButton small icon="trash" label={`Delete ${c.name}`} onClick={() => void remove(c)} /> : undefined}
+                  ),
+            })}
+            {...(canDelete && { rowActions: (c: Contact) => <IconButton small icon="trash" label={`Delete ${c.name}`} onClick={() => void remove(c)} /> })}
             empty={
               tab === "all"
-                ? { icon: "contact", title: "No contacts yet", body: "Add your first contact, or import a list from a CSV file.", action: canWrite ? <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>Add contact</Button> : undefined }
+                ? { icon: "contact", title: "No contacts yet", body: "Add your first contact, or import a list from a CSV file.", action: canWrite ? <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>Add contact</Button> : null }
                 : { icon: "contact", title: `No ${statusLabel[tab].toLowerCase()} contacts`, body: "Contacts appear here when their status matches this tab." }
             }
           />

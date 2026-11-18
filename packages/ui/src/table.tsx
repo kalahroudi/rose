@@ -103,10 +103,10 @@ export interface DataTableProps<T> {
   toolbar?: ReactNode;
   /** Enables row checkboxes and renders the bulk-action bar. */
   bulkActions?(selection: Selection): ReactNode;
-  rowActions?(row: T): ReactNode;
-  empty: { icon?: IconName; title: string; body?: string; action?: ReactNode };
+  rowActions?(row: T): ReactNode | null;
+  empty: { icon?: IconName; title: string; body?: string; action?: ReactNode | undefined };
   /** Row to highlight briefly, e.g. the one just created. */
-  freshKey?: string | null;
+  freshKey?: string | null | undefined;
   noun?: [singular: string, plural: string];
 }
 
@@ -185,7 +185,7 @@ export function DataTable<T>({ list, data, fetching, columns, rowKey, onRowClick
                 Nothing matches your search or filters.
               </EmptyState>
             ) : (
-              <EmptyState icon={empty.icon} title={empty.title} action={empty.action}>{empty.body}</EmptyState>
+              <EmptyState {...(empty.icon !== undefined ? { icon: empty.icon } : {})} title={empty.title} {...(empty.action !== undefined ? { action: empty.action } : {})}>{empty.body}</EmptyState>
             )
           ) : (
             <table className="table">
@@ -212,7 +212,7 @@ export function DataTable<T>({ list, data, fetching, columns, rowKey, onRowClick
                       <th key={c.id} style={c.width ? { width: c.width } : undefined} aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}>
                         <span className="row" >
                           {c.sort ? (
-                            <button type="button" className="th-sort" data-dir={dir} onClick={() => list.set({ sort: dir === "asc" ? `-${c.sort}` : c.sort })}>
+                            <button type="button" className="th-sort" data-dir={dir} onClick={() => list.set(dir === "asc" ? { sort: `-${c.sort}` } : c.sort === undefined ? {} : { sort: c.sort })}>
                               {c.header}
                               <Icon name="arrowUp" />
                             </button>
