@@ -89,7 +89,8 @@ create a record as tenant A, then asserts:
 7. a cross-site POST is blocked (403).
 
 `pnpm guard` fails if this file is missing, skipped, focused, or no longer passes the
-full manifest; it is also a protected file.
+full manifest. It is also part of the security core, so `CODEOWNERS` requires a
+maintainer's review of any change to it ([agents.md](agents.md#5-the-security-core)).
 
 ## What is not covered
 

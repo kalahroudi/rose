@@ -26,7 +26,7 @@ const SPDX = "SPDX-License-Identifier: Apache-2.0";
 export const RULES = {
   "raw-sql": {
     why: "Control-plane SQL is cross-tenant by nature. It lives only in packages/core, where every query is reviewed and tested for tenant scoping.",
-    fix: "Call a function from @rose/core (tenant app) or @rose/core/platform (admin worker). If none fits, propose a new repository function in packages/core (protected: needs human approval).",
+    fix: "Call a function from @rose/core (tenant app) or @rose/core/platform (admin worker). If none fits, propose a new repository function in packages/core (security core: merged only through CODEOWNERS review).",
   },
   "module-env": {
     why: "Modules must not reach bindings. A module that can touch `env` can open any tenant's database or the control plane, bypassing isolation.",

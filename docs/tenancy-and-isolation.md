@@ -67,8 +67,9 @@ or narrowed.
 
 ## What this does not protect against
 
-- A bug or malicious change inside `packages/core` itself. That is why it is a protected
-  path with a hash lock, CODEOWNERS and extra agent permissions ([agents.md](agents.md)).
+- A bug or malicious change inside `packages/core` itself. That is why it is in the
+  security core, where CODEOWNERS review, branch protection on `main` and extra agent
+  permissions are the controls ([agents.md](agents.md#5-the-security-core)).
 - A module that deliberately copies data somewhere else (for example an outbound
   `fetch`). The guard flags `fetch` in modules; review remains the control.
 - Compromise of the tenant worker's secrets or of the Cloudflare account.

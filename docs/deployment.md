@@ -116,7 +116,7 @@ migrations the next time it starts after a deploy.
 - [ ] At least two platform owners, each with a passkey.
 - [ ] Cloudflare Access in front of the console.
 - [ ] The tenant worker's master key is backed up in a secret manager.
-- [ ] Branch protection on `main` with CODEOWNERS review, so `guard.lock.json` changes are always seen by a human.
+- [ ] Branch protection on `main` that requires CODEOWNERS review. Nothing else makes the security core review real ([docs/agents.md](agents.md#5-the-security-core)).
 - [ ] You have read the limits in [architecture.md](architecture.md#known-limits).
 
 ## Operations

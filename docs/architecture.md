@@ -127,7 +127,7 @@ push; see [known limits](#known-limits).
 
 | Path | Role |
 |---|---|
-| `packages/core` | The security core: tenancy, auth, crypto, HTTP hardening, module system, jobs. **Protected** (see [agents.md](agents.md)). |
+| `packages/core` | The security core: tenancy, auth, crypto, HTTP hardening, module system, jobs. Merges only through CODEOWNERS review ([agents.md](agents.md#5-the-security-core)). |
 | `packages/ui` | Shared React shell and components used by both SPAs. See [ui.md](ui.md). |
 | `apps/app` | Tenant worker + SPA. Your product's modules live in `apps/app/worker/modules/`. |
 | `apps/admin` | Operator worker + SPA. |
