@@ -30,7 +30,7 @@ Each has a reason. If a task seems to require breaking one, stop and ask the use
 7. **The operator console (`apps/admin`) has no path to tenant data.** Never give it a
    Durable Object binding or a tenant key. Tenant-data work requested by an operator runs
    as a job in the tenant worker.
-8. **Do not weaken guardrails to get green.** No skipping/narrowing tests, no loosening
+8. **Do not weaken guardrails to get green.** No skipping/narrowing tests, no lowering coverage floors, no loosening
    the CSP, no deleting guard rules, no `--no-verify`. A `// guard-allow:` exception
    needs the user's explicit agreement and a real reason.
 9. **Shipped migrations are immutable**: add a new numbered migration instead of editing an existing one.
