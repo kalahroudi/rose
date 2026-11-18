@@ -99,8 +99,8 @@ First check whether the public API already covers it (`packages/core/src/index.t
 `packages/core/test/` that proves the security property still holds, and run `pnpm verify`.
 Then run the `security-review` skill, which lists every security-core file you changed so a
 human sees it before merge. The core is protected by a CODEOWNERS review on GitHub, which
-works only when `main` has branch protection that requires it. Only the files that define
-the checks themselves need a human first, here `scripts/guard.mjs` and `CODEOWNERS`
+works only when `main` has branch protection that requires it. An agent may change product code, the
+core included, but it needs the owner's agreement first for files that define the checks (the guard and route-scanner scripts, the pentest harness, CI workflows and git hooks, `.claude/`, the isolation contract and `packages/core/src/testing`, coverage floors, tsconfig strictness and the verify scripts) and irreversible or supply-chain changes (migrations, dependencies and the lockfile, deploy and wrangler config, CSP headers, AGENTS.md, CODEOWNERS)
 ([docs/agents.md](docs/agents.md#5-the-security-core)).
 
 ## Definition of done

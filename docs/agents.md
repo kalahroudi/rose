@@ -109,8 +109,7 @@ Make the smallest change, prove the security property with a test in `packages/c
 explain what you changed and why in the pull request, and name it in your report to the
 user. The owner reviews it like any other pull request.
 
-Only the files that define the checks themselves, `scripts/guard.mjs` and `CODEOWNERS`,
-need the owner's agreement before an agent edits them. Weakening a rule, even where it
+An agent needs the owner's agreement before it edits files that define the checks (the guard and route-scanner scripts, the pentest harness, CI workflows and git hooks, `.claude/`, the isolation contract and `packages/core/src/testing`, coverage floors, tsconfig strictness and the verify scripts) and irreversible or supply-chain changes (migrations, dependencies and the lockfile, deploy and wrangler config, CSP headers, AGENTS.md, CODEOWNERS). Weakening a rule, even where it
 would make a task pass, is never the fix ([AGENTS.md](../AGENTS.md), invariant 8).
 
 ## 6. Agent configuration shipped in the repo
