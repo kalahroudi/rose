@@ -320,7 +320,7 @@ describe("self-service signup on the root host", () => {
     });
 
     it("parses MAX_WORKSPACES_PER_USER: any positive integer, otherwise 5", () => {
-      const p = (v: string | undefined) => maxWorkspacesPerUser({ MAX_WORKSPACES_PER_USER: v });
+      const p = (v: string | undefined) => maxWorkspacesPerUser(v === undefined ? {} : { MAX_WORKSPACES_PER_USER: v });
       expect(p("1")).toBe(1);
       expect(p("1000000")).toBe(1_000_000);
       expect(p("12345678901")).toBe(12_345_678_901);

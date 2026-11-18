@@ -41,7 +41,9 @@ export async function createTestTenant(env: TenantWorkerEnv, worker: Fetcher, op
       const useCookie = init.cookie === undefined ? cookie : init.cookie;
       if (useCookie) headers.Cookie = useCookie;
       if (init.body !== undefined) headers["Content-Type"] = "application/json";
-      return worker.fetch(new Request(origin + path, { method: init.method ?? (init.body !== undefined ? "POST" : "GET"), headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }));
+      const requestInit: RequestInit = { method: init.method ?? (init.body !== undefined ? "POST" : "GET"), headers };
+      if (init.body !== undefined) requestInit.body = JSON.stringify(init.body);
+      return worker.fetch(new Request(origin + path, requestInit));
     },
   };
 }

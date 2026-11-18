@@ -505,7 +505,7 @@ export function Gate({ queries, skeleton, children }: { queries: AnyQuery[]; ske
     return (
       <>
         <div className="topbar-progress" />
-        {slow ? <Skeleton kind={skeleton} /> : null}
+        {slow ? (skeleton === undefined ? <Skeleton /> : <Skeleton kind={skeleton} />) : null}
         {verySlow ? <p className="muted" role="status">Still loading. The server is taking longer than usual; you can keep waiting or reload the page.</p> : null}
       </>
     );

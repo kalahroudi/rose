@@ -62,7 +62,7 @@ export interface MemberItem {
   last_login_at: number | null;
 }
 
-export async function listMembers(db: D1Database, tenantId: string, f: ListQuery & { role?: string }): Promise<Page<MemberItem>> {
+export async function listMembers(db: D1Database, tenantId: string, f: ListQuery & { role?: string | undefined }): Promise<Page<MemberItem>> {
   const where = ["m.tenant_id = ?"];
   const args: unknown[] = [tenantId];
   if (f.q) {

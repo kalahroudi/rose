@@ -185,7 +185,7 @@ export function DataTable<T>({ list, data, fetching, columns, rowKey, onRowClick
                 Nothing matches your search or filters.
               </EmptyState>
             ) : (
-              <EmptyState icon={empty.icon} title={empty.title} action={empty.action}>{empty.body}</EmptyState>
+              <EmptyState {...(empty.icon !== undefined ? { icon: empty.icon } : {})} title={empty.title} {...(empty.action !== undefined ? { action: empty.action } : {})}>{empty.body}</EmptyState>
             )
           ) : (
             <table className="table">
@@ -212,7 +212,7 @@ export function DataTable<T>({ list, data, fetching, columns, rowKey, onRowClick
                       <th key={c.id} style={c.width ? { width: c.width } : undefined} aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}>
                         <span className="row" >
                           {c.sort ? (
-                            <button type="button" className="th-sort" data-dir={dir} onClick={() => list.set({ sort: dir === "asc" ? `-${c.sort}` : c.sort })}>
+                            <button type="button" className="th-sort" data-dir={dir} onClick={() => list.set(dir === "asc" ? { sort: `-${c.sort}` } : c.sort === undefined ? {} : { sort: c.sort })}>
                               {c.header}
                               <Icon name="arrowUp" />
                             </button>
