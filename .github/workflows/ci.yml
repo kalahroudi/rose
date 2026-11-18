@@ -40,7 +40,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)
-        # Same suites as `pnpm test`, instrumented. Report only: no coverage thresholds.
+        # Same suites as `pnpm test`, instrumented. Fails if coverage drops below the floors in each vitest.config.ts.
         run: pnpm test:coverage
       - name: Keep the coverage report
         if: always()

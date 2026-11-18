@@ -33,7 +33,22 @@ istanbul is the only provider that works in the Workers runtime (v8 coverage doe
 - A package measures only its own source: `packages/core/src`, or `worker/` in each app.
   Core code exercised by the app and admin tests is not counted towards core.
 - The SPAs (`web/`, `packages/ui`) and `scripts/` are not measured.
-- There are no thresholds. Coverage is a map of untested code, not a gate.
+- Each package fails `pnpm test:coverage` if line, statement, function or branch
+  coverage drops below its floor. The floors live in each `vitest.config.ts`.
+
+### Coverage floors
+
+The floors ratchet.
+
+- Floors are measured coverage minus 1, rounded down.
+- A PR may raise floors and must never lower them unless the maintainer agrees in writing.
+- Untested new code fails the gate. Add tests; do not add istanbul ignore comments.
+
+| Package | Lines | Statements | Functions | Branches | Measured on |
+|---|---|---|---|---|---|
+| `packages/core` | 79 | 76 | 77 | 64 | 2026-11-18 |
+| `apps/app` | 86 | 87 | 93 | 88 | 2026-11-18 |
+| `apps/admin` | 65 | 63 | 76 | 43 | 2026-11-18 |
 
 ## Writing a module test
 
