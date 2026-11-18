@@ -11,7 +11,7 @@
 //
 // scripts/ci-local.test.mjs fails when ci.yml gains a `run:` command that STEPS does not run.
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -89,13 +89,13 @@ async function headSha() {
 }
 
 // ── Ports ────────────────────────────────────────────────────────────────────
-/** null when free; { pid } when something listens. macOS and Linux lsof. */
+/** Something listening on the port, with its PID when lsof reports one; null when free. */
 function listener(port) {
   return new Promise((done) => {
     const child = spawn("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     child.stdout.on("data", (d) => (out += d));
-    child.on("error", () => done(null)); // no lsof: cannot tell, do not block
+    child.on("error", () => done(null)); // no lsof (Windows): treat as free rather than block the run
     child.on("exit", () => {
       const line = out.split("\n").find((l) => l.trim() && !l.startsWith("COMMAND"));
       done(line ? { pid: line.trim().split(/\s+/)[1] } : null);
@@ -117,9 +117,10 @@ let devStack = null;
 
 function startDevStack(cwd) {
   console.log(dim(`\n$ node scripts/dev.mjs > ${DEV_LOG} 2>&1 &`));
-  devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-  const log = (d) => writeFileSync(DEV_LOG, d, { flag: "a" });
   rmSync(DEV_LOG, { force: true });
+  mkdirSync(LOG_DIR, { recursive: true });
+  devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const log = (d) => appendFileSync(DEV_LOG, d);
   devStack.stdout.on("data", log);
   devStack.stderr.on("data", log);
   devStack.on("exit", () => (devStack = null));
