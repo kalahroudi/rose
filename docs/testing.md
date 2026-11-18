@@ -32,7 +32,10 @@ istanbul is the only provider that works in the Workers runtime (v8 coverage doe
 
 - A package measures only its own source: `packages/core/src`, or `worker/` in each app.
   Core code exercised by the app and admin tests is not counted towards core.
-- The SPAs (`web/`, `packages/ui`) and `scripts/` are not measured.
+- The SPAs (`web/`, `packages/ui`) are not measured. `scripts/` is measured, report
+  only, by `pnpm test:scripts:coverage`, which prints a per-file table and writes
+  `scripts/coverage/lcov.info`. CI runs it and keeps the lcov file in the `coverage`
+  artifact.
 - There are no thresholds. Coverage is a map of untested code, not a gate.
 
 ## Writing a module test
