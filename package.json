@@ -19,6 +19,7 @@
     "guard": "node scripts/guard.mjs",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
+    "ci:local": "node scripts/ci-local.mjs",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
     "deploy": "node scripts/deploy.mjs",
