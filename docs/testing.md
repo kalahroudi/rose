@@ -16,6 +16,8 @@ pnpm ci:local --here          # run in this tree, uncommitted changes allowed
 and stops at the first failure. By default it checks out HEAD into a temporary git
 worktree (`$TMPDIR/rose-ci-<sha>`), so only commits are tested, the way CI sees them.
 It refuses to start when tracked files have uncommitted changes, unless you pass `--here`.
+A refusal records `ok: false` in `.rose/ci-local/last-run.json`, so a green summary from an
+earlier run cannot stand in for one that never started.
 
 The pentest job starts the local stack itself, waits up to 90 seconds for it, and always
 stops it. It refuses to run while something listens on ports 5173, 5174 or 8787, and never

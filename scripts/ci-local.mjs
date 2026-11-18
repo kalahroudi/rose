@@ -286,7 +286,9 @@ export async function main(argv = process.argv.slice(2)) {
     process.off("SIGTERM", onSignal);
   }
 
+  // An early refusal still writes last-run.json (that is the point of one path), but prints no step table.
   if (result.length) printSummary(result);
+  else console.log(yellow("! nothing ran; see the message above"));
   const clean = await git(["worktree", "list"]);
   const leftovers = worktrees.filter((w) => clean.out.includes(w));
   writeSummary(sha, result, ok, leftovers);
