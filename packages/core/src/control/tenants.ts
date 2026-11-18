@@ -110,7 +110,7 @@ export async function slugAvailable(db: D1Database, slug: string): Promise<boole
 }
 
 export interface TenantListFilter extends ListQuery {
-  status?: TenantStatus | "";
+  status?: TenantStatus | "" | undefined;
 }
 
 function tenantWhere(f: Pick<TenantListFilter, "q" | "status">): { sql: string; args: unknown[] } {
@@ -151,7 +151,7 @@ export async function listTenants(db: D1Database, f: TenantListFilter): Promise<
   };
 }
 
-export async function updateTenant(db: D1Database, id: string, patch: { name?: string; plan?: string }): Promise<TenantRow> {
+export async function updateTenant(db: D1Database, id: string, patch: { name?: string | undefined; plan?: string | undefined }): Promise<TenantRow> {
   const cur = await getTenant(db, id);
   if (!cur) throw notFound();
   const name = patch.name?.trim() ?? cur.name;

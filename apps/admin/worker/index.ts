@@ -127,7 +127,13 @@ app.use("/api/*", async (c, next) => {
 
 const listQ = (c: Ctx) => parse(listQuerySchema, c.req.query());
 const audit = (c: Ctx, action: string, target?: string | null, meta?: unknown) =>
-  writePlatformAudit(c.env.DB, { actor: c.get("operator").email, action, target, meta, ip: clientIp(c) });
+  writePlatformAudit(c.env.DB, {
+    actor: c.get("operator").email,
+    action,
+    ...(target !== undefined && { target }),
+    ...(meta !== undefined && { meta }),
+    ip: clientIp(c),
+  });
 const ownerOnly = (c: Ctx) => {
   if (c.get("operator").role !== "owner") throw forbidden("Only a platform owner can do that.");
 };
@@ -169,7 +175,7 @@ const statusFilter = (c: Ctx) => {
   const s = c.req.query("status");
   return s === "active" || s === "suspended" || s === "pending_deletion" || s === "deleting" ? s : "";
 };
-app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), status: statusFilter(c) })));
+app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), ...(statusFilter(c) !== undefined && { status: statusFilter(c) }) })));
 
 app.get("/api/tenants/:id", async (c) => c.json(await tenantOr404(c, c.req.param("id"))));
 
@@ -224,11 +230,15 @@ app.post("/api/tenants/:id/delete/cancel", async (c) => {
 
 app.get("/api/tenants/:id/members", async (c) => {
   await tenantOr404(c, c.req.param("id"));
-  return c.json(await listMembers(c.env.DB, c.req.param("id"), { ...listQ(c), role: c.req.query("role") }));
+  return c.json(await listMembers(c.env.DB, c.req.param("id"), { ...listQ(c), ...(c.req.query("role") !== undefined && { role: c.req.query("role") }) }));
 });
 
 // Custom domains (Cloudflare for SaaS)
-app.get("/api/domains", async (c) => c.json(await listDomains(c.env.DB, { ...listQ(c), status: c.req.query("status"), tenantId: c.req.query("tenantId") })));
+app.get("/api/domains", async (c) => c.json(await listDomains(c.env.DB, {
+    ...listQ(c),
+    ...(c.req.query("status") !== undefined && { status: c.req.query("status") }),
+    ...(c.req.query("tenantId") !== undefined && { tenantId: c.req.query("tenantId") }),
+  })));
 
 app.post("/api/tenants/:id/domains", async (c) => {
   const t = await tenantOr404(c, c.req.param("id"));
@@ -276,8 +286,8 @@ app.delete("/api/operators/:userId", async (c) => {
 });
 
 // Audit & activity
-app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), action: c.req.query("action") })));
-app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, null, { ...listQ(c), status: c.req.query("status") })));
+app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), ...(c.req.query("action") !== undefined && { action: c.req.query("action") }) })));
+app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, null, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
 app.post("/api/jobs/:id/retry", async (c) => {
   await retryJob(c.env, c.req.param("id"));
   await audit(c, "job.retry", c.req.param("id"));

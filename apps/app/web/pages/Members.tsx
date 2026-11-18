@@ -74,7 +74,9 @@ export function MembersPage() {
         { q: "Why can't I search by part of a name I don't see?", a: "Search matches the email address or display name. Names are set by each member in Settings." },
       ],
       tasks: [
-        { label: "Invite a member", run: manage ? () => (setTab("invitations"), setInviting(true)) : undefined, detail: manage ? undefined : "Ask an owner or admin." },
+        ...(manage
+          ? [{ label: "Invite a member", run: () => (setTab("invitations"), setInviting(true)) }]
+          : [{ label: "Invite a member", detail: "Ask an owner or admin." }]),
         { label: "Change someone's role", detail: "Use Change role on their row. Only owners can grant or remove owner access." },
       ],
     },
@@ -86,7 +88,7 @@ export function MembersPage() {
         { q: "Why is there no invitation link?", a: "A link can be forwarded, leaked or guessed. Tying the invitation to the email address means only someone who can read that mailbox can accept it." },
         { q: "Why do invitations expire?", a: "An open invitation is standing access for whoever controls that mailbox later. After 7 days it lapses; invite again if needed." },
       ],
-      tasks: [{ label: "Invite a member", run: manage ? () => setInviting(true) : undefined }],
+      tasks: manage ? [{ label: "Invite a member", run: () => setInviting(true) }] : [],
     },
   };
 
@@ -201,16 +203,14 @@ function MembersTab({ manage, selfId, onEdit, onRemove }: { manage: boolean; sel
               <option value="member">Members</option>
             </Select>
           }
-          rowActions={
-            manage
-              ? (m) => (
-                  <>
-                    <Button size="sm" variant="ghost" icon="edit" onClick={() => onEdit(m)}>Change role</Button>
-                    <Button size="sm" variant="ghost" icon="trash" onClick={() => onRemove(m)}>Remove</Button>
-                  </>
-                )
-              : undefined
-          }
+          {...(manage && {
+            rowActions: (m: Member) => (
+              <>
+                <Button size="sm" variant="ghost" icon="edit" onClick={() => onEdit(m)}>Change role</Button>
+                <Button size="sm" variant="ghost" icon="trash" onClick={() => onRemove(m)}>Remove</Button>
+              </>
+            ),
+          })}
           empty={{ icon: "users", title: "No members", body: "Invite someone to get started." }}
         />
       )}
@@ -240,11 +240,11 @@ function InvitationsTab({ manage, fresh, onRevoke, onInvite }: { manage: boolean
           freshKey={fresh}
           noun={["invitation", "invitations"]}
           searchPlaceholder="Search by email"
-          rowActions={manage ? (i) => <Button size="sm" variant="ghost" icon="x" onClick={() => onRevoke(i)}>Revoke</Button> : undefined}
+          {...(manage && { rowActions: (i: Invitation) => <Button size="sm" variant="ghost" icon="x" onClick={() => onRevoke(i)}>Revoke</Button> })}
           empty={{
             icon: "mail", title: "No pending invitations",
             body: "Invite someone by email. They join by signing in with that address.",
-            action: manage ? <Button variant="primary" icon="plus" onClick={onInvite}>Invite member</Button> : undefined,
+            action: manage ? <Button variant="primary" icon="plus" onClick={onInvite}>Invite member</Button> : null,
           }}
         />
       )}

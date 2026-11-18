@@ -16,8 +16,8 @@ export function contactsHelp(actions: { create?(): void; importCsv?(): void }): 
       { q: "Why can members edit but not delete?", a: "Deleting is permanent. It is limited to owners and admins; members can archive instead, which is reversible." },
     ],
     tasks: [
-      { label: "Add a contact", run: actions.create },
-      { label: "Import contacts from CSV", run: actions.importCsv, detail: "One contact per line: name,email,company." },
+      ...(actions.create ? [{ label: "Add a contact", run: actions.create }] : []),
+      ...(actions.importCsv ? [{ label: "Import contacts from CSV", run: actions.importCsv, detail: "One contact per line: name,email,company." }] : []),
       { label: "Act on many contacts at once", detail: "Tick rows, or tick the header box and choose “Select all matching” to include every page." },
     ],
   };

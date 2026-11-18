@@ -59,7 +59,7 @@ export function SettingsPage() {
         { q: "Who can rename the workspace?", a: "Owners and admins. The name is only a label; changing it affects nothing else." },
       ],
       tasks: [
-        { label: "Rename the workspace", run: can("workspace:update") ? () => setRenaming(true) : undefined },
+        ...(can("workspace:update") ? [{ label: "Rename the workspace", run: () => setRenaming(true) }] : []),
         { label: "Change your display name", run: () => setEditingProfile(true) },
       ],
     },
@@ -93,7 +93,7 @@ export function SettingsPage() {
         { q: "Why am I asked to sign in again?", a: "Deleting is irreversible, so a sign-in from the last 10 minutes is required (with your passkey, if you have one). A session left open on a shared computer can not delete the workspace." },
         { q: "Can deleted data be recovered after 48 hours?", a: "No. The workspace's data key is destroyed with its database, so even a stray copy of encrypted values could never be read again." },
       ],
-      tasks: [{ label: "Delete this workspace", run: canDelete ? () => void deleteWorkspace() : undefined }],
+      tasks: canDelete ? [{ label: "Delete this workspace", run: () => void deleteWorkspace() }] : [],
     },
   };
 

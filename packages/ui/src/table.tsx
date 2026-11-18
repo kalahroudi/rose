@@ -103,10 +103,10 @@ export interface DataTableProps<T> {
   toolbar?: ReactNode;
   /** Enables row checkboxes and renders the bulk-action bar. */
   bulkActions?(selection: Selection): ReactNode;
-  rowActions?(row: T): ReactNode;
-  empty: { icon?: IconName; title: string; body?: string; action?: ReactNode };
+  rowActions?(row: T): ReactNode | null;
+  empty: { icon?: IconName; title: string; body?: string; action?: ReactNode | undefined };
   /** Row to highlight briefly, e.g. the one just created. */
-  freshKey?: string | null;
+  freshKey?: string | null | undefined;
   noun?: [singular: string, plural: string];
 }
 

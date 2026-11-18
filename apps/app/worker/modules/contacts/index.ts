@@ -150,7 +150,8 @@ export const contacts = defineModule({
       method: "GET", path: "/", permission: "contacts:read",
       handler: async (ctx) => {
         const q = ctx.req.list();
-        const w = await where(ctx, { q: q.q, status: ctx.req.query("status") });
+        const status = ctx.req.query("status");
+        const w = await where(ctx, { q: q.q, ...(status !== undefined && { status }) });
         const order = orderBy(q.sort, { name: "name", company: "company", created: "created_at", status: "status" }, "created_at DESC");
         const [rows, count] = await ctx.db.batch([
           { sql: `SELECT * FROM contacts ${w.sql} ORDER BY ${order} LIMIT ? OFFSET ?`, params: [...w.args, q.pageSize, offsetOf(q)] },
