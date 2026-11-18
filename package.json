@@ -18,6 +18,7 @@
     "test:coverage": "pnpm -r --if-present test:coverage",
     "guard": "node scripts/guard.mjs",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
+    "test:scripts:coverage": "node -e \"require('fs').mkdirSync('scripts/coverage',{recursive:true})\" && node --test --experimental-test-coverage --test-coverage-include=\"scripts/**/*.mjs\" --test-coverage-include=\"examples/**/*.mjs\" --test-coverage-exclude=\"**/*.test.mjs\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=scripts/coverage/lcov.info \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",

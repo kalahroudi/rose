@@ -34,9 +34,10 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Guardrails (security invariants and protected-core lock)
         run: pnpm guard
-      - name: Guard self-tests
+      - name: Guard self-tests (with coverage)
         # File patterns, not directories: Node 22 does not accept a directory here.
-        run: pnpm test:scripts
+        # Report only: no coverage thresholds. Writes scripts/coverage/lcov.info.
+        run: pnpm test:scripts:coverage
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)
@@ -51,6 +52,7 @@ jobs:
             packages/core/coverage/
             apps/app/coverage/
             apps/admin/coverage/
+            scripts/coverage/
           if-no-files-found: ignore
       - name: Build
         run: pnpm build
