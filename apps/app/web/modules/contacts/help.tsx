@@ -2,7 +2,7 @@
 import { Flow, type HelpContent } from "@rose/ui";
 import { terms } from "../../help/glossary";
 
-export function contactsHelp(actions: { create?(): void; importCsv?(): void }): HelpContent {
+export function contactsHelp(actions: { create?: (() => void) | undefined; importCsv?: (() => void) | undefined }): HelpContent {
   return {
     what: "The people and companies this workspace keeps track of. Names and companies are stored as plain text so they can be searched; email addresses and notes are encrypted.",
     diagram: {
@@ -16,8 +16,8 @@ export function contactsHelp(actions: { create?(): void; importCsv?(): void }): 
       { q: "Why can members edit but not delete?", a: "Deleting is permanent. It is limited to owners and admins; members can archive instead, which is reversible." },
     ],
     tasks: [
-      ...(actions.create ? [{ label: "Add a contact", run: actions.create }] : []),
-      ...(actions.importCsv ? [{ label: "Import contacts from CSV", run: actions.importCsv, detail: "One contact per line: name,email,company." }] : []),
+      { label: "Add a contact", run: actions.create },
+      { label: "Import contacts from CSV", run: actions.importCsv, detail: "One contact per line: name,email,company." },
       { label: "Act on many contacts at once", detail: "Tick rows, or tick the header box and choose “Select all matching” to include every page." },
     ],
   };

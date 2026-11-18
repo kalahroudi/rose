@@ -273,7 +273,7 @@ export interface HelpContent {
   /** Why things work the way they do. */
   why?: { q: string; a: ReactNode }[];
   /** Short how-tos. `run` opens the relevant drawer. */
-  tasks?: { label: string; detail?: string | undefined; run?(): void }[];
+  tasks?: { label: string; detail?: string | undefined; run?: (() => void) | undefined }[];
   diagram?: { node: ReactNode; caption: string };
   /** Third-party references: open in a new tab or preview beside the page. */
   links?: { label: string; href: string }[];

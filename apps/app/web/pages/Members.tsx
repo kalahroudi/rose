@@ -88,7 +88,7 @@ export function MembersPage() {
         { q: "Why is there no invitation link?", a: "A link can be forwarded, leaked or guessed. Tying the invitation to the email address means only someone who can read that mailbox can accept it." },
         { q: "Why do invitations expire?", a: "An open invitation is standing access for whoever controls that mailbox later. After 7 days it lapses; invite again if needed." },
       ],
-      tasks: manage ? [{ label: "Invite a member", run: () => setInviting(true) }] : [],
+      tasks: [{ label: "Invite a member", run: manage ? () => setInviting(true) : undefined }],
     },
   };
 

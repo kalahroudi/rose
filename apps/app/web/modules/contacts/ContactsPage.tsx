@@ -138,9 +138,7 @@ export function ContactsPage() {
     { id: "created", header: "Added", sort: "created", cell: (c) => <Time at={c.createdAt} /> },
   ];
 
-  const help = contactsHelp({
-    ...(canWrite && { create: () => setCreating(true), importCsv: () => setImporting(true) }),
-  });
+  const help = contactsHelp({ create: canWrite ? () => setCreating(true) : undefined, importCsv: canWrite ? () => setImporting(true) : undefined });
   const s = stats.data;
 
   return (

@@ -64,8 +64,8 @@ export function OverviewPage() {
       { q: "Why am I asked to add a passkey?", a: "Email codes work everywhere but depend on your mailbox and can be phished. A passkey is bound to this address and your device, so it is both faster and safer." },
     ],
     tasks: [
-      { label: "Invite a teammate", detail: "They join by signing in with the invited email address.", ...(can("members:manage") && { run: () => navigate("/members?tab=invitations&new=1") }) },
-      ...(can("apikeys:manage") ? [{ label: "Create an API key for an agent or service", run: () => navigate("/api-keys?new=1") }] : []),
+      { label: "Invite a teammate", detail: "They join by signing in with the invited email address.", run: can("members:manage") ? () => navigate("/members?tab=invitations&new=1") : undefined },
+      { label: "Create an API key for an agent or service", run: can("apikeys:manage") ? () => navigate("/api-keys?new=1") : undefined },
     ],
     links: [{ label: "What is a passkey? (passkeys.dev)", href: "https://passkeys.dev/docs/intro/what-are-passkeys/" }],
   };
