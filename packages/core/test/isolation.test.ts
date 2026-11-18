@@ -122,14 +122,14 @@ describe("workspace deletion safeguards", () => {
     const inv = await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-owner@x.example", role: "owner" } });
     expect(inv.status).toBe(403);
     expect(await code(inv)).toBe("reauth_required");
-    expect((await a.fetch("/api/invitations", { cookie: freshCode, body: { email: "new-admin@x.example", role: "admin" } })).status).toBe(201);
+    expect((await a.fetch("/api/invitations", { cookie: await sessionCookie("passkey"), body: { email: "new-admin@x.example", role: "admin" } })).status).toBe(201);
     expect((await a.fetch("/api/invitations", { cookie: await sessionCookie("passkey"), body: { email: "new-owner@x.example", role: "owner" } })).status).toBe(201);
     // A session from the future is not fresh either.
     const { assertFreshSession } = await import("../src/control/sessions");
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() - 10 * 60_000 }, { passkey: true })).toThrow();
     // API keys never delete.
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" }, cookie: await sessionCookie("passkey") })).json()) as { key: string }).key;
     expect((await a.fetch("/api/workspace/delete", { cookie: null, headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } })).status).toBe(403);
     expect((await a.fetch("/api/workspace/delete", { cookie: await sessionCookie("passkey"), body: { confirm: a.slug } })).status).toBe(202);
   });
