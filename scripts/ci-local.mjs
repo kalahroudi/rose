@@ -196,9 +196,16 @@ async function report(sha, ok, result) {
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────
-function writeSummary(sha, result, ok, leftovers) {
+function writeSummary({ sha, ok, steps, error, leftovers }) {
   mkdirSync(LOG_DIR, { recursive: true });
-  writeFileSync(SUMMARY, `${JSON.stringify({ sha, ok, at: new Date().toISOString(), steps: result, leftoverWorktrees: leftovers }, null, 2)}\n`);
+  const run = { sha, ok, at: new Date().toISOString(), steps, ...(error ? { error } : {}), leftoverWorktrees: leftovers };
+  writeFileSync(SUMMARY, `${JSON.stringify(run, null, 2)}\n`);
+}
+
+/** The temp worktrees this run created that are still registered; a leftover means cleanup failed. */
+async function leftoverWorktrees(trees) {
+  const list = await git(["worktree", "list"]);
+  return trees.filter((tree) => list.out.includes(tree));
 }
 
 function printSummary(result) {
@@ -223,7 +230,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (!cwd) {
     const dirty = await git(["status", "--porcelain", "--untracked-files=no"]);
     if (dirty.code !== 0) throw new Error(`git status failed: ${dirty.err.trim()}`);
-    if (dirty.out.trim()) throw new Error("the tree has uncommitted tracked changes; commit them or pass --here. CI only sees commits, so a clean checkout is the default.");
+    if (dirty.out.trim()) return refuse(sha, "the tree has uncommitted tracked changes; commit them or pass --here. CI only sees commits, so a clean checkout is the default.");
   }
 
   const worktrees = [];
@@ -248,6 +255,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   const result = [];
   let ok = true;
+  let error = null;
   try {
     for (const job of jobs) {
       const steps = STEPS.filter((s) => s.job === job);
@@ -274,6 +282,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
   } catch (e) {
     ok = false;
+    error = e.message;
     console.log(red(`\n✗ ${e.message}`));
   } finally {
     await stopDevStack();
@@ -286,21 +295,25 @@ export async function main(argv = process.argv.slice(2)) {
     process.off("SIGTERM", onSignal);
   }
 
-  // An early refusal still writes last-run.json (that is the point of one path), but prints no step table.
+  // A run that refused to start writes last-run.json too, with no steps and the reason: one path,
+  // and a stale green summary from an earlier run cannot stand in for it.
+  writeSummary({ sha, ok, steps: result, error, leftovers: await leftoverWorktrees(worktrees) });
   if (result.length) printSummary(result);
-  else console.log(yellow("! nothing ran; see the message above"));
-  const clean = await git(["worktree", "list"]);
-  const leftovers = worktrees.filter((w) => clean.out.includes(w));
-  writeSummary(sha, result, ok, leftovers);
   console.log(`${ok ? green("ci:local passed") : red("ci:local failed")}  ${dim(`summary: ${SUMMARY}`)}`);
   if (opts.report) await report(sha, ok, result);
   return ok ? 0 : 1;
 }
 
+/** Stop before creating anything, and leave a last-run.json that says so. */
+async function refuse(sha, reason) {
+  console.log(red(`\n✗ ${reason}`));
+  writeSummary({ sha, ok: false, steps: [], error: reason, leftovers: [] });
+  return 1;
+}
+
 async function removeWorktrees(trees) {
   for (const tree of trees) await git(["worktree", "remove", "--force", tree]);
-  const list = await git(["worktree", "list"]);
-  return trees.every((tree) => !list.out.includes(tree));
+  return (await leftoverWorktrees(trees)).length === 0;
 }
 
 /** A thrown error from a native step is a failed step, not a crash. */
