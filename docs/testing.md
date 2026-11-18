@@ -4,6 +4,31 @@
 pnpm verify      # guard + typecheck + every suite. Run before every commit and PR.
 ```
 
+## Run CI locally
+
+```sh
+pnpm ci:local                 # both CI jobs, at HEAD, in a throwaway worktree
+pnpm ci:local --job verify    # just the verify job
+pnpm ci:local --here          # run in this tree, uncommitted changes allowed
+```
+
+`scripts/ci-local.mjs` runs every command in `.github/workflows/ci.yml`, in CI order,
+and stops at the first failure. By default it checks out HEAD into a temporary git
+worktree (`$TMPDIR/rose-ci-<sha>`), so only commits are tested, the way CI sees them.
+It refuses to start when tracked files have uncommitted changes, unless you pass `--here`.
+A refusal records `ok: false` in `.rose/ci-local/last-run.json`, so a green summary from an
+earlier run cannot stand in for one that never started.
+
+The pentest job starts the local stack itself, waits up to 90 seconds for it, and always
+stops it. It refuses to run while something listens on ports 5173, 5174 or 8787, and never
+kills a process it did not start. Output goes to the terminal, the dev-stack log to
+`.rose/ci-local/dev.log`, and the per-step summary to `.rose/ci-local/last-run.json`.
+
+`--keep` leaves the worktree in place for debugging. `--report` posts a `local-ci` commit
+status with `gh` (it needs an authenticated `gh`); without the flag nothing is posted.
+`scripts/ci-local.test.mjs` fails when `ci.yml` gains a `run:` command the local runner
+does not run.
+
 All worker tests run inside the real Workers runtime (workerd) through
 `@cloudflare/vitest-plugin`, with a real local D1 database and real Durable Objects.
 Nothing security-relevant is mocked.

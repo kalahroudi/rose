@@ -66,6 +66,7 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 | `pnpm verify` | **Definition of "works"**: guard + typecheck + all tests |
 | `pnpm guard` | Static guardrails only; also runs automatically after each edit |
 | `pnpm test` / `pnpm typecheck` | Individual steps |
+| `pnpm ci:local` | Run both CI jobs (`verify` + `pentest`) locally, at HEAD, in a throwaway worktree |
 | `pnpm --filter @rose/app test` | Just the tenant app's tests |
 
 Do not run `pnpm deploy`, `pnpm setup --production`, `wrangler secret`, or `git push`
