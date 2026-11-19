@@ -10,6 +10,13 @@ const actor = { type: "user", id: "u1", label: "u", role: "owner", sessionId: "s
 
 afterEach(() => vi.restoreAllMocks());
 
+/** The URL a captured fetch call targeted, whatever form fetch was given. */
+function urlOf(input: unknown): URL {
+  if (input instanceof Request) return new URL(input.url);
+  if (input instanceof URL || typeof input === "string") return new URL(input);
+  throw new Error("fetch was called with an unexpected target");
+}
+
 function captureFetch() {
   return vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(new Response("ok")));
 }
@@ -38,7 +45,7 @@ describe("gateway origin pinning", () => {
       const spy = captureFetch();
       await forwardToUpstream(env, new Request(`https://a.example.com${path}?q=1`), tenant, actor).catch(() => undefined);
       for (const call of spy.mock.calls) {
-        const u = new URL(String((call[0]) instanceof Request ? (call[0] as Request).url : call[0]));
+        const u = urlOf(call[0]);
         expect(u.origin).toBe(ORIGIN);
         expect(u.username).toBe("");
         expect(u.password).toBe("");
@@ -50,7 +57,7 @@ describe("gateway origin pinning", () => {
     const spy = captureFetch();
     await forwardToUpstream(env, new Request("https://a.example.com/svc//attacker.example/x?q=1"), tenant, actor);
     expect(spy).toHaveBeenCalledTimes(1);
-    const target = new URL(String(spy.mock.calls[0]![0]));
+    const target = urlOf(spy.mock.calls[0]![0]);
     expect(target.origin).toBe(ORIGIN);
     expect(target.pathname).toBe("/attacker.example/x");
     expect(target.search).toBe("?q=1");
@@ -60,7 +67,7 @@ describe("gateway origin pinning", () => {
     const spy = captureFetch();
     await forwardToUpstream(env, new Request("https://a.example.com/svc//attacker.example/x"), tenant, actor);
     const [target, init] = spy.mock.calls[0]!;
-    expect(new URL(String(target)).host).toBe("upstream.example");
+    expect(urlOf(target).host).toBe("upstream.example");
     expect(new Headers((init as RequestInit).headers).get("x-rose-tenant-token")).toBeTruthy();
   });
 
@@ -73,27 +80,27 @@ describe("gateway origin pinning", () => {
   it("still forwards ordinary paths with the query string", async () => {
     const spy = captureFetch();
     await forwardToUpstream(env, new Request("https://a.example.com/svc/api/items?q=1"), tenant, actor);
-    expect(String(spy.mock.calls[0]![0])).toBe("https://upstream.example/api/items?q=1");
+    expect(urlOf(spy.mock.calls[0]![0]).href).toBe("https://upstream.example/api/items?q=1");
   });
 
   it("maps /svc to the upstream root", async () => {
     const spy = captureFetch();
     await forwardToUpstream(env, new Request("https://a.example.com/svc"), tenant, actor);
-    expect(String(spy.mock.calls[0]![0])).toBe("https://upstream.example/");
+    expect(urlOf(spy.mock.calls[0]![0]).href).toBe("https://upstream.example/");
   });
 
   it("ignores any path component in UPSTREAM_ORIGIN and stays on the origin", async () => {
     const spy = captureFetch();
     const withPath = { ...(env as object), UPSTREAM_ORIGIN: "https://upstream.example/base/" } as never;
     await forwardToUpstream(withPath, new Request("https://a.example.com/svc/a"), tenant, actor);
-    expect(new URL(String(spy.mock.calls[0]![0])).origin).toBe(ORIGIN);
+    expect(urlOf(spy.mock.calls[0]![0]).origin).toBe(ORIGIN);
   });
 
   it("respects a non-default port on the configured origin", async () => {
     const spy = captureFetch();
     const withPort = { ...(env as object), UPSTREAM_ORIGIN: "http://127.0.0.1:8788" } as never;
     await forwardToUpstream(withPort, new Request("https://a.example.com/svc//evil.example/x"), tenant, actor);
-    expect(new URL(String(spy.mock.calls[0]![0])).origin).toBe("http://127.0.0.1:8788");
+    expect(urlOf(spy.mock.calls[0]![0]).origin).toBe("http://127.0.0.1:8788");
   });
 
   it("does not forward cookies or Authorization", async () => {

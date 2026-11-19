@@ -20,7 +20,7 @@ const rowByHash = (hash: string) =>
   env.DB.prepare("SELECT last_seen_at, expires_at, created_at, public_id FROM sessions WHERE id_hash = ?").bind(hash).first<{ last_seen_at: number; expires_at: number; created_at: number; public_id: string }>();
 const tokenOf = (t: TestTenant) => t.cookie.split("=")[1]!;
 const bootSession = async (t: TestTenant, cookie?: string) =>
-  ((await (await t.fetch("/api/bootstrap", cookie ? { cookie } : {})).json()) as { session: unknown }).session;
+  (await (await t.fetch("/api/bootstrap", cookie ? { cookie } : {})).json<{ session: unknown }>()).session;
 
 async function makeOperator() {
   const op = await ensureUser(env.DB, `adv-op-${crypto.randomUUID()}@example.com`);
@@ -111,7 +111,7 @@ describe("session list / revoke endpoints and the sweep", () => {
     const otherId = (await rowByHash(otherHash))!.public_id;
     const res = await a.fetch("/api/auth/sessions");
     expect(res.status).toBe(200);
-    const { items } = (await res.json()) as { items: { id: string; current: boolean }[] };
+    const { items } = await res.json<{ items: { id: string; current: boolean }[] }>();
     expect(items.map((i) => i.id)).not.toContain(otherId);
     expect(items.filter((i) => i.current).length).toBe(1);
   });
@@ -305,7 +305,7 @@ describe("host cache expiry and invalidation", () => {
 
   it("over HTTP: a suspension is visible on every request within TTL + margin, and authenticated access is refused immediately", async () => {
     const a = await createTestTenant(env, SELF);
-    const boot = async () => (await (await a.fetch("/api/bootstrap")).json()) as { tenant?: { status: string } };
+    const boot = async () => await (await a.fetch("/api/bootstrap")).json<{ tenant?: { status: string } }>();
     expect((await boot()).tenant?.status).toBe("active");
     await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
     // Session query re-checks status: no cache window for authenticated access.
@@ -316,7 +316,7 @@ describe("host cache expiry and invalidation", () => {
 
   it("over HTTP: a deleted tenant's host becomes unknown within TTL + margin", async () => {
     const a = await createTestTenant(env, SELF);
-    const boot = async () => (await (await a.fetch("/api/bootstrap")).json()) as { host: string };
+    const boot = async () => await (await a.fetch("/api/bootstrap")).json<{ host: string }>();
     expect((await boot()).host).toBe("tenant");
     await env.DB.prepare("DELETE FROM sessions WHERE scope = ?").bind(a.id).run();
     await env.DB.prepare("DELETE FROM memberships WHERE tenant_id = ?").bind(a.id).run();

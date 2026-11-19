@@ -48,7 +48,7 @@ describe("tenant resolution", () => {
 describe("tenant lifecycle", () => {
   it("suspension cuts off sessions and API keys immediately", async () => {
     const a = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "ci" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "ci" } })).json<{ key: string }>()).key;
     expect((await a.fetch("/api/m/notes", { cookie: null, headers: { Authorization: `Bearer ${key}` } })).status).toBe(200);
     await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
     // No cache invalidation on purpose: the host cache may still say "active".
@@ -97,7 +97,7 @@ describe("workspace deletion safeguards", () => {
       if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
       return `__Host-rose_session=${token}`;
     };
-    const code = async (r: Response) => ((await r.json()) as { error: { code: string } }).error.code;
+    const code = async (r: Response) => (await r.json<{ error: { code: string } }>()).error.code;
     // Stale session.
     const stale = await sessionCookie("code", 11 * 60_000);
     const r1 = await a.fetch("/api/workspace/delete", { cookie: stale, body: { confirm: a.slug } });
@@ -129,7 +129,7 @@ describe("workspace deletion safeguards", () => {
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() - 10 * 60_000 }, { passkey: true })).toThrow();
     // API keys never delete.
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json<{ key: string }>()).key;
     expect((await a.fetch("/api/workspace/delete", { cookie: null, headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } })).status).toBe(403);
     expect((await a.fetch("/api/workspace/delete", { cookie: await sessionCookie("passkey"), body: { confirm: a.slug } })).status).toBe(202);
   });
@@ -147,7 +147,7 @@ describe("roles and API keys", () => {
   it("an API key works only on the tenant that issued it", async () => {
     const a = await createTestTenant(env, SELF);
     const b = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "agent", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "agent", role: "admin" } })).json<{ key: string }>()).key;
     const h = { Authorization: `Bearer ${key}` };
     expect((await a.fetch("/api/m/notes", { cookie: null, headers: h, body: { title: "via-key" } })).status).toBe(201);
     expect((await b.fetch("/api/m/notes", { cookie: null, headers: h })).status).toBe(401);
@@ -164,9 +164,9 @@ describe("roles and API keys", () => {
     await tenantTick(env, modules);
     expect(await (await a.fetch("/api/m/notes")).text()).toContain("job:hello");
     expect(await (await b.fetch("/api/m/notes")).text()).not.toContain("job:hello");
-    const jobs = (await (await a.fetch("/api/jobs")).json()) as { items: { status: string }[] };
+    const jobs = await (await a.fetch("/api/jobs")).json<{ items: { status: string }[] }>();
     expect(jobs.items[0]!.status).toBe("succeeded");
-    expect(((await (await b.fetch("/api/jobs")).json()) as { items: unknown[] }).items).toHaveLength(0);
+    expect((await (await b.fetch("/api/jobs")).json<{ items: unknown[] }>()).items).toHaveLength(0);
   });
 });
 

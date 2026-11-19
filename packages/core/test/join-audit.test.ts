@@ -7,10 +7,10 @@ const post = (origin: string, path: string, body: unknown) =>
   SELF.fetch(origin + path, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body), redirect: "manual" });
 
 type Entry = { actor: string; action: string; target?: string; meta?: unknown };
-const joins = async (t: TestTenant) => ((await (await t.fetch("/api/audit?action=member.join&pageSize=100")).json()) as { items: Entry[] }).items;
+const joins = async (t: TestTenant) => (await (await t.fetch("/api/audit?action=member.join&pageSize=100")).json<{ items: Entry[] }>()).items;
 
 async function signInAs(t: TestTenant, email: string): Promise<Response> {
-  const { devCode } = (await (await post(t.origin, "/api/auth/code/request", { email })).json()) as { devCode: string };
+  const { devCode } = await (await post(t.origin, "/api/auth/code/request", { email })).json<{ devCode: string }>();
   return post(t.origin, "/api/auth/code/verify", { email, code: devCode });
 }
 
@@ -83,13 +83,13 @@ describe("member.join audit and owner notification", () => {
   it("self-serve signup records the founder's owner join in the new workspace's log", async () => {
     const root = `https://${env.APP_BASE_DOMAIN}`;
     const email = "founder-audit@example.com";
-    const { devCode } = (await (await post(root, "/api/root/code/request", { email })).json()) as { devCode: string };
-    const { ticket } = (await (await post(root, "/api/root/code/verify", { email, code: devCode })).json()) as { ticket: string };
+    const { devCode } = await (await post(root, "/api/root/code/request", { email })).json<{ devCode: string }>();
+    const { ticket } = await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>();
     const entered = await post(root, "/api/root/enter", { ticket, create: { name: "Audit Co", slug: "audit-co" } });
     expect(entered.status).toBe(200);
-    const { url } = (await entered.json()) as { url: string };
+    const { url } = await entered.json<{ url: string }>();
     const cookie = (((await SELF.fetch(url, { redirect: "manual" })).headers.get("Set-Cookie") ?? "").split(";")[0])!;
-    const log = (await (await SELF.fetch("https://audit-co.rose.test/api/audit?action=member.join", { headers: { Cookie: cookie } })).json()) as { items: Entry[] };
+    const log = await (await SELF.fetch("https://audit-co.rose.test/api/audit?action=member.join", { headers: { Cookie: cookie } })).json<{ items: Entry[] }>();
     expect(log.items).toHaveLength(1);
     expect(JSON.stringify(log.items[0]!.meta)).toContain("owner");
   });

@@ -57,15 +57,6 @@
       }
     },
     {
-      // Tests read untyped JSON and mock calls on purpose: an explicit cast is the readable form there,
-      // and stringifying a mock argument is how assertions print it.
-      "files": ["**/test/**/*.ts", "**/*.test.ts"],
-      "rules": {
-        "typescript/no-unnecessary-type-assertion": "off",
-        "typescript/no-base-to-string": "off"
-      }
-    },
-    {
       // Vitest config files are outside every tsconfig project, so imported types resolve to an error type.
       "files": ["**/vitest.config.ts"],
       "rules": {

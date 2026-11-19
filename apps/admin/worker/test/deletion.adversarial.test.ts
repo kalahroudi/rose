@@ -11,7 +11,7 @@ const call = (path: string, init: { method?: string; body?: unknown; cookie?: st
     headers: { Origin: ORIGIN, ...(init.cookie ? { Cookie: init.cookie } : {}), ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}) },
     ...(init.body !== undefined && { body: JSON.stringify(init.body) }),
   });
-const errCode = async (r: Response) => ((await r.clone().json()) as { error?: { code: string } }).error?.code;
+const errCode = async (r: Response) => (await r.clone().json<{ error?: { code: string } }>()).error?.code;
 let n = 0;
 const uniq = () => `${Date.now().toString(36)}${n++}`;
 
@@ -104,7 +104,7 @@ describe("operator tenant deletion (adversarial)", () => {
     const before = Date.now();
     const r1 = await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } });
     expect(r1.status).toBe(202);
-    const { deleteAfter } = (await r1.json()) as { deleteAfter: number };
+    const { deleteAfter } = await r1.json<{ deleteAfter: number }>();
     expect(deleteAfter).toBeGreaterThanOrEqual(before + 48 * 3_600_000);
     expect(deleteAfter).toBeLessThanOrEqual(Date.now() + 48 * 3_600_000);
     expect(await row(t.id)).toEqual({ status: "pending_deletion", delete_after: deleteAfter });
@@ -129,7 +129,7 @@ describe("operator tenant deletion (adversarial)", () => {
     const t = await seed();
     const o = await operator("owner", "passkey");
     expect((await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })).status).toBe(202);
-    const bulk = async (body: unknown) => ((await (await call("/api/tenants/bulk", { cookie: o.cookie, body })).json()) as { affected: number }).affected;
+    const bulk = async (body: unknown) => (await (await call("/api/tenants/bulk", { cookie: o.cookie, body })).json<{ affected: number }>()).affected;
     expect(await bulk({ action: "resume", ids: [t.id] })).toBe(0);
     expect(await bulk({ action: "resume", filter: { q: t.slug, status: "pending_deletion" } })).toBe(0);
     expect(await bulk({ action: "resume", filter: { q: t.slug, status: "" } })).toBe(0);

@@ -16,7 +16,7 @@ const cookieOf = (res: Response) => (res.headers.get("Set-Cookie") ?? "").split(
 describe("email sign-in codes", () => {
   it("signs a member in and sets a host-bound cookie", async () => {
     const a = await createTestTenant(env, SELF);
-    const req = (await (await post(a.origin, "/api/auth/code/request", { email: a.email.toUpperCase() })).json()) as { devCode: string };
+    const req = await (await post(a.origin, "/api/auth/code/request", { email: a.email.toUpperCase() })).json<{ devCode: string }>();
     expect(req.devCode).toMatch(/^\d{6}$/);
     const res = await post(a.origin, "/api/auth/code/verify", { email: a.email, code: req.devCode });
     expect(res.status).toBe(200);
@@ -26,7 +26,7 @@ describe("email sign-in codes", () => {
     expect(setCookie).toMatch(/Secure/);
     expect(setCookie).toMatch(/SameSite=Lax/);
     expect(setCookie).not.toMatch(/Domain=/i);
-    const boot = (await (await a.fetch("/api/bootstrap", { cookie: cookieOf(res) })).json()) as { session: { user: { email: string } } };
+    const boot = await (await a.fetch("/api/bootstrap", { cookie: cookieOf(res) })).json<{ session: { user: { email: string } } }>();
     expect(boot.session.user.email).toBe(a.email);
   });
 
@@ -43,7 +43,7 @@ describe("email sign-in codes", () => {
     const b = await createTestTenant(env, SELF);
     // Same person is a member of both workspaces.
     await env.DB.prepare("INSERT INTO memberships (tenant_id, user_id, role, created_at) VALUES (?, ?, 'member', 0)").bind(b.id, a.userId).run();
-    const { devCode } = (await (await post(a.origin, "/api/auth/code/request", { email: a.email })).json()) as { devCode: string };
+    const { devCode } = await (await post(a.origin, "/api/auth/code/request", { email: a.email })).json<{ devCode: string }>();
     expect((await post(b.origin, "/api/auth/code/verify", { email: a.email, code: devCode })).status).toBe(401);
     expect((await post(a.origin, "/api/auth/code/verify", { email: a.email, code: devCode })).status).toBe(200);
   });
@@ -164,14 +164,14 @@ describe("invitations", () => {
   it("invited address joins by proving the email; nobody else can", async () => {
     const a = await createTestTenant(env, SELF);
     expect((await a.fetch("/api/invitations", { body: { email: "new@example.com", role: "member" } })).status).toBe(201);
-    const { devCode } = (await (await post(a.origin, "/api/auth/code/request", { email: "new@example.com" })).json()) as { devCode: string };
+    const { devCode } = await (await post(a.origin, "/api/auth/code/request", { email: "new@example.com" })).json<{ devCode: string }>();
     const res = await post(a.origin, "/api/auth/code/verify", { email: "new@example.com", code: devCode });
     expect(res.status).toBe(200);
-    const members = (await (await a.fetch("/api/members?q=new@")).json()) as { items: { role: string }[]; total: number };
+    const members = await (await a.fetch("/api/members?q=new@")).json<{ items: { role: string }[]; total: number }>();
     expect(members.total).toBe(1);
     expect(members.items[0]!.role).toBe("member");
-    expect(((await (await a.fetch("/api/invitations")).json()) as { total: number }).total).toBe(0);
-    const audit = (await (await a.fetch("/api/audit?action=member.join")).json()) as { items: { actor: string; action: string }[] };
+    expect((await (await a.fetch("/api/invitations")).json<{ total: number }>()).total).toBe(0);
+    const audit = await (await a.fetch("/api/audit?action=member.join")).json<{ items: { actor: string; action: string }[] }>();
     expect(audit.items.some((e) => e.actor === "new@example.com" && e.action === "member.join")).toBe(true);
   });
 
@@ -230,17 +230,17 @@ describe("self-service signup on the root host", () => {
   const root = `https://${env.APP_BASE_DOMAIN}`;
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
-    const { devCode } = (await (await post(root, "/api/root/code/request", { email: "founder@example.com" })).json()) as { devCode: string };
-    const verified = (await (await post(root, "/api/root/code/verify", { email: "founder@example.com", code: devCode })).json()) as { ticket: string; workspaces: unknown[] };
+    const { devCode } = await (await post(root, "/api/root/code/request", { email: "founder@example.com" })).json<{ devCode: string }>();
+    const verified = await (await post(root, "/api/root/code/verify", { email: "founder@example.com", code: devCode })).json<{ ticket: string; workspaces: unknown[] }>();
     expect(verified.workspaces).toEqual([]);
     const entered = await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Acme Inc", slug: "acme-inc" } });
     expect(entered.status).toBe(200);
-    const { url } = (await entered.json()) as { url: string };
+    const { url } = await entered.json<{ url: string }>();
     expect(url).toMatch(/^https:\/\/acme-inc\.rose\.test\/auth\/handoff\?token=/);
     const landed = await SELF.fetch(url, { redirect: "manual" });
     const cookie = cookieOf(landed);
     expect(cookie).toMatch(/^__Host-rose_session=/);
-    const boot = (await (await SELF.fetch("https://acme-inc.rose.test/api/bootstrap", { headers: { Cookie: cookie } })).json()) as { session: { role: string } };
+    const boot = await (await SELF.fetch("https://acme-inc.rose.test/api/bootstrap", { headers: { Cookie: cookie } })).json<{ session: { role: string } }>();
     expect(boot.session.role).toBe("owner");
     // The ticket and the handoff are both spent.
     expect((await post(root, "/api/root/enter", { ticket: verified.ticket, slug: "acme-inc" })).status).toBe(401);
@@ -250,17 +250,17 @@ describe("self-service signup on the root host", () => {
   it("rejects reserved, malformed and taken addresses", async () => {
     await createTestTenant(env, SELF, { slug: "taken-co" });
     for (const slug of ["admin", "A B", "-x-", "a", "taken-co", "x.y"]) {
-      const { devCode } = (await (await post(root, "/api/root/code/request", { email: `s${Math.random()}@example.com` })).json()) as { devCode: string };
+      const { devCode } = await (await post(root, "/api/root/code/request", { email: `s${Math.random()}@example.com` })).json<{ devCode: string }>();
       void devCode;
-      const r = (await (await SELF.fetch(`${root}/api/root/slug?slug=${encodeURIComponent(slug)}`)).json()) as { available: boolean };
+      const r = await (await SELF.fetch(`${root}/api/root/slug?slug=${encodeURIComponent(slug)}`)).json<{ available: boolean }>();
       expect(r.available, slug).toBe(false);
     }
   });
 
   describe("workspace cap per verified email", () => {
     const verify = async (email: string) => {
-      const { devCode } = (await (await post(root, "/api/root/code/request", { email })).json()) as { devCode: string };
-      return ((await (await post(root, "/api/root/code/verify", { email, code: devCode })).json()) as { ticket: string }).ticket;
+      const { devCode } = await (await post(root, "/api/root/code/request", { email })).json<{ devCode: string }>();
+      return (await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>()).ticket;
     };
     const own = async (email: string, n: number, status?: string) => {
       const user = await ensureUser(env.DB, email);
@@ -389,7 +389,7 @@ describe("abuse limits", () => {
   it("a NUL byte in a search term can not turn it into match-everything", async () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/invitations", { body: { email: "nul@example.com", role: "member" } });
-    const r = (await (await a.fetch("/api/invitations?q=zzz%00")).json()) as { total: number };
+    const r = await (await a.fetch("/api/invitations?q=zzz%00")).json<{ total: number }>();
     expect(r.total).toBe(0);
   });
 });

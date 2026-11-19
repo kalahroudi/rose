@@ -21,7 +21,7 @@ const post = (origin: string, path: string, body: unknown, ip?: string) =>
   });
 const request = async (origin: string, email: string, ip?: string) => {
   const res = await post(origin, "/api/auth/code/request", { email }, ip);
-  return { status: res.status, body: (await res.json()) as { ok?: boolean; devCode?: string } };
+  return { status: res.status, body: await res.json<{ ok?: boolean; devCode?: string }>() };
 };
 const verify = async (origin: string, email: string, code: string, ip?: string) => (await post(origin, "/api/auth/code/verify", { email, code }, ip)).status;
 const wrongOf = (code: string) => (code === "000000" ? "111111" : "000000");
@@ -253,7 +253,7 @@ describe("adversarial: RL_AUTH key order and scoping", () => {
     const before = rl.seen.length;
     const res = await viaWorker(e, a.origin, "/api/auth/code/request", { email: a.email }, "198.51.100.51");
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { devCode?: string }).devCode).toMatch(/^\d{6}$/);
+    expect((await res.json<{ devCode?: string }>()).devCode).toMatch(/^\d{6}$/);
     expect(rl.seen.slice(before).every((k) => k.includes("198.51.100.51"))).toBe(true);
   });
 

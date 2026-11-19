@@ -49,7 +49,7 @@ async function call(e: unknown, origin: string, path: string, body: unknown, ip?
 }
 const requestCode = async (e: unknown, origin: string, email: string, ip?: string) => {
   const res = await call(e, origin, "/api/auth/code/request", { email }, ip);
-  return { status: res.status, devCode: ((await res.json()) as { devCode?: string }).devCode };
+  return { status: res.status, devCode: (await res.json<{ devCode?: string }>()).devCode };
 };
 const verify = async (e: unknown, origin: string, email: string, code: string, ip?: string) =>
   (await call(e, origin, "/api/auth/code/verify", { email, code }, ip)).status;

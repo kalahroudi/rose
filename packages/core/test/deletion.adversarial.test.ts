@@ -10,7 +10,7 @@ import { invalidateHostCache } from "../src/tenancy/resolve";
 import { modules } from "./worker";
 
 const tenantRow = (id: string) => env.DB.prepare("SELECT status, delete_after FROM tenants WHERE id = ?").bind(id).first<{ status: string; delete_after: number | null }>();
-const code = async (r: Response) => ((await r.clone().json()) as { error?: { code: string } }).error?.code;
+const code = async (r: Response) => (await r.clone().json<{ error?: { code: string } }>()).error?.code;
 const cookieFor = async (a: TestTenant, method: string, ageMs = 0) => {
   const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method });
   if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
@@ -109,7 +109,7 @@ describe("tenant-side /api/workspace/delete (adversarial)", () => {
 
   it("an API key is refused even if a fresh owner cookie is also sent", async () => {
     const a = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json<{ key: string }>()).key;
     const r = await a.fetch("/api/workspace/delete", { cookie: await cookieFor(a, "passkey"), headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } });
     expect(r.status).toBe(403);
     expect((await tenantRow(a.id))!.status).toBe("active");
@@ -129,7 +129,7 @@ describe("tenant-side /api/workspace/delete (adversarial)", () => {
     const a = await createTestTenant(env, SELF);
     const r = await a.fetch("/api/workspace/delete", { body: { confirm: a.slug } });
     expect(r.status).toBe(202);
-    const { deleteAfter } = (await r.json()) as { deleteAfter: number };
+    const { deleteAfter } = await r.json<{ deleteAfter: number }>();
     expect(deleteAfter).toBeGreaterThan(Date.now() + 47.9 * 3_600_000);
     expect(deleteAfter).toBeLessThanOrEqual(Date.now() + 48 * 3_600_000);
     expect((await tenantRow(a.id))).toEqual({ status: "pending_deletion", delete_after: deleteAfter });
@@ -142,7 +142,7 @@ describe("tenant-side /api/workspace/delete (adversarial)", () => {
 describe("pending tenants are unreachable and restorable (adversarial)", () => {
   it("existing sessions and API keys stop working as soon as deletion is requested", async () => {
     const a = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json<{ key: string }>()).key;
     const other = await cookieFor(a, "passkey");
     expect((await a.fetch("/api/workspace/delete", { body: { confirm: a.slug } })).status).toBe(202);
     expect((await a.fetch("/api/m/notes", { cookie: other })).status).toBeGreaterThanOrEqual(401);
@@ -155,7 +155,7 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
     await requestTenantDeletion(env.DB, a.id);
     const c = await cookieFor(a, "passkey");
     expect((await a.fetch("/api/m/notes", { cookie: c })).status).toBeGreaterThanOrEqual(401);
-    const boot = (await (await a.fetch("/api/bootstrap", { cookie: c })).json()) as { session: unknown };
+    const boot = await (await a.fetch("/api/bootstrap", { cookie: c })).json<{ session: unknown }>();
     expect(boot.session).toBeNull();
   });
 
@@ -174,7 +174,7 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
     // Deletion requested from elsewhere (the operator console is a different worker; it can not clear this cache).
     await requestTenantDeletion(env.DB, a.id);
     const req = await a.fetch("/api/auth/code/request", { cookie: null, body: { email: a.email } });
-    const devCode = req.ok ? ((await req.json()) as { devCode?: string }).devCode : undefined;
+    const devCode = req.ok ? (await req.json<{ devCode?: string }>()).devCode : undefined;
     let verifyStatus = req.status;
     let sessionCreated = false;
     if (devCode) {

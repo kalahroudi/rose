@@ -14,7 +14,7 @@ describe("/api/jobs authorisation", () => {
       const t = await createTestTenant(env, SELF, { role });
       const r = await t.fetch("/api/jobs");
       expect(r.status, role).toBe(200);
-      expect(((await r.json()) as { items: unknown[] }).items).toEqual([]);
+      expect((await r.json<{ items: unknown[] }>()).items).toEqual([]);
     }
   });
 

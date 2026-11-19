@@ -159,7 +159,7 @@ describe("adversarial: production disables every dev behaviour", () => {
     const res = await worker.fetch(new Request(`${a.origin}/api/bootstrap`), withEnv("production", { RL_AUTH: allow }), ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { dev: boolean }).dev).toBe(false);
+    expect((await res.json<{ dev: boolean }>()).dev).toBe(false);
   });
 
   it("/__dev/tick is not available in production", async () => {
@@ -180,14 +180,14 @@ describe("adversarial: development still works", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { devCode?: string }).devCode).toMatch(/^\d{6}$/);
+    expect((await res.json<{ devCode?: string }>()).devCode).toMatch(/^\d{6}$/);
 
     const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method: "test" });
     const ctx2 = createExecutionContext();
     const res2 = await worker.fetch(new Request(`http://${a.host}/api/bootstrap`, { headers: { Cookie: `rose_session=${token}` } }), withEnv("development"), ctx2);
     await waitOnExecutionContext(ctx2);
     expect(res2.status).toBe(200);
-    const boot = (await res2.json()) as { dev: boolean; session: { user: { email: string } } | null };
+    const boot = await res2.json<{ dev: boolean; session: { user: { email: string } } | null }>();
     expect(boot.dev).toBe(true);
     expect(boot.session?.user.email).toBe(a.email);
   });
