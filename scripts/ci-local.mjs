@@ -25,11 +25,6 @@ export const ALLOWED_SKIPS = ["ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01",
 /** ci.yml's `pnpm pentest`, run with the ids above so that an unexpected skip fails the job. */
 export const PENTEST_COMMAND = `pnpm pentest --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
 
-/**
- * The environment that makes the local stack and the pentest harness share one control-plane
- * database. Both default to `.wrangler/state`, but ci:local keeps its throwaway state under
- * `.rose/ci-local/state` so a run never touches the developer's local data.
- */
 export const pentestEnv = (logDir) => {
   const stateDir = join(logDir, "state");
   return { ROSE_PERSIST_TO: stateDir, ROSE_PENTEST_STATE: stateDir };
@@ -134,8 +129,6 @@ function startDevStack(cwd, logDir, persistTo) {
   const devLog = join(logDir, "dev.log");
   console.log(dim(`\n$ node scripts/dev.mjs > ${devLog} 2>&1 &`));
   rmSync(devLog, { force: true });
-  // A fresh control-plane database each run: leftovers from an earlier run would otherwise count as
-  // real tenants in INT-03 (or leak into the "not ours" snapshot).
   rmSync(persistTo, { recursive: true, force: true });
   mkdirSync(logDir, { recursive: true });
   devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ROSE_PERSIST_TO: persistTo } });
@@ -304,7 +297,7 @@ export async function main(argv = process.argv.slice(2), { steps = STEPS, logDir
         }
         if (interrupted) throw new Error("interrupted");
         const started = Date.now();
-        const code = await runStepOrNative(step, dir, logDir, env);
+        const code = await runStepOrNative(step, dir, logDir, job === "pentest" ? env : {});
         const seconds = (Date.now() - started) / 1000;
         const passed = code === 0;
         result.push({ job, name: step.name, status: passed ? "passed" : "failed", seconds: Math.round(seconds * 10) / 10 });
