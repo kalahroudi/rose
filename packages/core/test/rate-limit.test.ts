@@ -389,4 +389,163 @@ describe("HTTP end-to-end durable rate limit with pass-through RL_AUTH", () => {
     );
     expect(unaffected.status).toBe(401);
   });
+
+  it("buckets two IPv6 addresses in the same /64 into one budget on passkey login options, root slug lookup, and failed API key auth", async () => {
+    const a = await createTestTenant(env, SELF);
+
+    const pkAddr1 = "2001:db8:1001:1::1";
+    const pkAddr2 = "2001:db8:1001:1::2";
+    const pkOtherPrefix = "2001:db8:1001:2::1";
+    for (let i = 0; i < 10; i++) {
+      const r1 = await fetchWorker(
+        new Request(`${a.origin}/api/auth/passkey/login/options`, {
+          method: "POST",
+          headers: { Origin: a.origin, "CF-Connecting-IP": pkAddr1 },
+        }),
+        prodEnv(),
+      );
+      expect(r1.status).toBe(200);
+      const r2 = await fetchWorker(
+        new Request(`${a.origin}/api/auth/passkey/login/options`, {
+          method: "POST",
+          headers: { Origin: a.origin, "CF-Connecting-IP": pkAddr2 },
+        }),
+        prodEnv(),
+      );
+      expect(r2.status).toBe(200);
+    }
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/auth/passkey/login/options`, {
+            method: "POST",
+            headers: { Origin: a.origin, "CF-Connecting-IP": pkAddr1 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/auth/passkey/login/options`, {
+            method: "POST",
+            headers: { Origin: a.origin, "CF-Connecting-IP": pkAddr2 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/auth/passkey/login/options`, {
+            method: "POST",
+            headers: { Origin: a.origin, "CF-Connecting-IP": pkOtherPrefix },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(200);
+
+    const slugAddr1 = "2001:db8:1002:1::1";
+    const slugAddr2 = "2001:db8:1002:1::2";
+    const slugOtherPrefix = "2001:db8:1002:2::1";
+    for (let i = 0; i < 10; i++) {
+      const r1 = await fetchWorker(
+        new Request(`${rootOrigin}/api/root/slug?slug=v6-a-${i}`, {
+          headers: { "CF-Connecting-IP": slugAddr1 },
+        }),
+        prodEnv(),
+      );
+      expect(r1.status).toBe(200);
+      const r2 = await fetchWorker(
+        new Request(`${rootOrigin}/api/root/slug?slug=v6-b-${i}`, {
+          headers: { "CF-Connecting-IP": slugAddr2 },
+        }),
+        prodEnv(),
+      );
+      expect(r2.status).toBe(200);
+    }
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${rootOrigin}/api/root/slug?slug=v6-over-1`, {
+            headers: { "CF-Connecting-IP": slugAddr1 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${rootOrigin}/api/root/slug?slug=v6-over-2`, {
+            headers: { "CF-Connecting-IP": slugAddr2 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${rootOrigin}/api/root/slug?slug=v6-other`, {
+            headers: { "CF-Connecting-IP": slugOtherPrefix },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(200);
+
+    const keyAddr1 = "2001:db8:1003:1::1";
+    const keyAddr2 = "2001:db8:1003:1::2";
+    const keyOtherPrefix = "2001:db8:1003:2::1";
+    for (let i = 0; i < 10; i++) {
+      const r1 = await fetchWorker(
+        new Request(`${a.origin}/api/m/notes`, {
+          headers: { Authorization: "Bearer bad", "CF-Connecting-IP": keyAddr1 },
+        }),
+        prodEnv(),
+      );
+      expect(r1.status).toBe(401);
+      const r2 = await fetchWorker(
+        new Request(`${a.origin}/api/m/notes`, {
+          headers: { Authorization: "Bearer bad", "CF-Connecting-IP": keyAddr2 },
+        }),
+        prodEnv(),
+      );
+      expect(r2.status).toBe(401);
+    }
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/m/notes`, {
+            headers: { Authorization: "Bearer bad", "CF-Connecting-IP": keyAddr1 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/m/notes`, {
+            headers: { Authorization: "Bearer bad", "CF-Connecting-IP": keyAddr2 },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await fetchWorker(
+          new Request(`${a.origin}/api/m/notes`, {
+            headers: { Authorization: "Bearer bad", "CF-Connecting-IP": keyOtherPrefix },
+          }),
+          prodEnv(),
+        )
+      ).status,
+    ).toBe(401);
+  });
 });

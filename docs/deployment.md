@@ -58,7 +58,7 @@ privately. Wrangler commands for production take `-c wrangler.production.jsonc`.
 | **Back up the tenant worker's `ROSE_MASTER_KEY`** | Cloudflare never shows a secret again. To hold a copy, set it yourself *before* running setup: `openssl rand -base64 32`, store it in your secret manager, then `wrangler secret put ROSE_MASTER_KEY` in `apps/app`. Setup keeps an existing key |
 | Verify your sending domain with the email provider | Done in the provider's dashboard |
 | Cloudflare Access on the admin hostname (recommended) | See below |
-| Cloudflare zone WAF rate-limiting rule on `/api/*/code/*` and `/api/auth/passkey/*` (recommended) | See below |
+| Cloudflare zone WAF rate-limiting rule on `/api/*/code/*`, `/api/auth/passkey/*` and `/api/root/slug` (recommended) | See below |
 | Cloudflare for SaaS (only for customer-owned domains) | See [multi-tenanting-a-service.md](multi-tenanting-a-service.md#custom-domains-cloudflare-for-saas) |
 
 ## First sign-in
@@ -83,10 +83,13 @@ rate-limit binding as a cheap per-server first filter, followed by a strongly co
 global counter in D1 (`rate_limits`). Add a Cloudflare zone WAF rate-limiting rule in
 front of those paths as defence in depth:
 
-- **Paths**: `/api/*/code/*` and `/api/auth/passkey/*` (covers tenant, root and operator
-  email-code request/verify and passkey routes).
+- **Paths**: `/api/*/code/*`, `/api/auth/passkey/*` and `/api/root/slug` (covers tenant,
+  root and operator email-code request/verify, passkey routes and root slug lookup).
 - **Key**: client IP.
 - **Action**: block with HTTP `429`.
+
+Failed API-key attempts on tenant `/api/*` are also rate-limited inside the worker (only
+failed attempts spend budget, so valid API traffic is not throttled).
 
 A zone WAF rule drops abusive bursts at the edge before a Worker is invoked or D1 is
 written to, protecting Worker invocations and D1 write quota while `RL_AUTH` and the
@@ -132,7 +135,7 @@ migrations the next time it starts after a deploy.
 - [ ] Email provider configured and the sending domain verified (SPF/DKIM).
 - [ ] At least two platform owners, each with a passkey.
 - [ ] Cloudflare Access in front of the console.
-- [ ] Cloudflare zone WAF rate-limiting rule on `/api/*/code/*` and `/api/auth/passkey/*` (keyed by client IP, returning 429).
+- [ ] Cloudflare zone WAF rate-limiting rule on `/api/*/code/*`, `/api/auth/passkey/*` and `/api/root/slug` (keyed by client IP, returning 429; failed API-key attempts on tenant `/api/*` are also rate-limited inside the worker).
 - [ ] The tenant worker's master key is backed up in a secret manager.
 - [ ] Branch protection on `main` that requires CODEOWNERS review. Nothing else makes the security core review real ([docs/agents.md](agents.md#5-the-security-core)).
 - [ ] You have read the limits in [architecture.md](architecture.md#known-limits).

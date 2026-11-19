@@ -111,7 +111,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
 
   app.post("/passkey/login/options", async (c) => {
     const realm = await getRealm(c);
-    await rateLimit(c, `pk-ip:${clientIp(c) ?? "unknown"}`);
+    await rateLimit(c, `pk-ip:${requesterKey(clientIp(c))}`);
     return c.json(await beginLogin(c.env.DB, site(c, realm)));
   });
 

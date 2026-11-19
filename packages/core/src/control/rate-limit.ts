@@ -9,10 +9,9 @@ export async function consumeRateLimit(
   db: D1Database,
   masterKey: string,
   key: string,
-  opts?: { limit?: number; windowMs?: number },
+  opts?: { limit?: number },
 ): Promise<boolean> {
   const limit = opts?.limit ?? RATE_LIMIT_MAX;
-  const windowMs = opts?.windowMs ?? RATE_LIMIT_WINDOW_MS;
   if (limit <= 0) return false;
   const keyHash = await hmacHex(await deriveHmacKey(masterKey, "rate-limit/v1"), key);
   const t = now();
@@ -26,7 +25,7 @@ export async function consumeRateLimit(
        WHERE excluded.window_start - rate_limits.window_start >= ? OR rate_limits.count < ?
        RETURNING count`,
     )
-    .bind(keyHash, t, windowMs, windowMs, windowMs, limit)
+    .bind(keyHash, t, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_WINDOW_MS, limit)
     .first<{ count: number }>();
   return row !== null;
 }
