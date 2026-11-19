@@ -147,9 +147,14 @@ either way.
   `listPasskeys`, `deletePasskey`, the `excludeCredentials` query in `beginRegistration`
   and the `codeDisabled` check. They act on a row that is already the caller's or the
   address's in this scope, and the ceremony that created it was RP-ID checked at
-  registration. A tenant that moves to a custom domain must re-register; the old host's
-  passkeys do not carry over ([Authentication](../authentication.md#passkeys)). Covered
-  by the design of `finishLogin`, which filters on all three values.
+  registration. A tenant that moves to a custom domain keeps the old host's rows: the
+  browser no longer offers them (wrong RP ID) and `finishLogin` no longer matches them,
+  so they can not sign anyone in on the new host, and because `assertFreshForPasskeys`
+  counts passkeys by user id and scope only, the stale rows still demand a passkey
+  sign-in that the new host can not provide. Passkeys therefore can not be added or
+  removed there ([Authentication](../authentication.md#passkeys), and the known bug in
+  [Known limits](#known-limits)). Covered by the design of `finishLogin`, which filters
+  on all three values.
 - **Discoverable credentials with required user verification.** Registration asks for a
   resident key and user verification, and both registration and login verification pass
   `requireUserVerification: true`. The passkey, not a password plus a second step, is the
@@ -196,9 +201,18 @@ either way.
 
 ## Known limits
 
-- The full browser ceremony is not automated. The tests cover challenge handling,
-  rejection paths and the realm rules around passkeys; a real authenticator is needed for
-  end-to-end proof. This is stated in [Authentication](../authentication.md#passkeys).
+- The full browser ceremony is not automated. Only the realm and freshness rules are
+  tested; challenge single use, challenge expiry, the challenge-to-user binding on
+  registration, and the `finishLogin` / `finishRegistration` rejections have no test
+  yet. A real authenticator is needed for end-to-end proof, which the pentest harness
+  supplies outside this suite. This is stated in
+  [Authentication](../authentication.md#passkeys).
+- **Known bug: a host change locks passkeys.** After a tenant moves to a new host, the
+  old host's passkey no longer signs in there (its row keeps the old RP ID), but
+  `assertFreshForPasskeys` counts it because it looks up passkeys by user id and scope
+  only, so every passkey change on the new host is refused for lack of a passkey
+  sign-in. The workarounds are to delete the old passkey while still on the old host, or
+  to have an operator delete the row. Tracked separately.
 - An operator who loses every passkey is recovered by hand: delete that user's rows in
   `passkeys` for scope `platform`. There is deliberately no self-service recovery, since
   it would put mailbox control back in the loop.

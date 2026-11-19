@@ -47,10 +47,15 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
   by the browser on `globex.example.com`, and the server would reject it anyway.
 - Discoverable credentials with user verification required; challenges are single-use
   rows that expire after 5 minutes.
-- If a tenant moves to a custom domain, passkeys registered on the old host do not carry
-  over. People sign in with an email code and add a passkey on the new host.
-- Passkey verification in this repository is covered for challenge handling and
-  rejection paths; the full browser ceremony is not automated in the test suite.
+- If a tenant moves to a custom domain, passkeys registered on the old host can not sign
+  in on the new host. The old rows still exist, and the freshness check counts them, so
+  the new host asks for a passkey sign-in it can not accept and adding or removing a
+  passkey there is refused. Delete the old passkey while still on the old host, or have
+  an operator delete the row. This is a known bug, tracked separately.
+- Passkey verification in this repository has tests only for the realm and freshness
+  rules. Challenge single use, challenge expiry, the challenge-to-user binding on
+  registration, and the `finishLogin` / `finishRegistration` rejections have no test
+  yet; the full browser ceremony is not automated in the test suite.
 
 ## Sessions
 
