@@ -24,11 +24,14 @@ const NATIVE = new Map([
   ],
 ]);
 
-/** Every command ci.yml runs, in file order: `run: <cmd>` and `run: |` blocks. No YAML dependency. */
-function ciCommands(text = read(CI)) {
+/** Every command ci.yml runs, in file order, with the job that runs it. No YAML dependency. */
+function ciRecords(text = read(CI)) {
   const lines = text.split("\n");
-  const commands = [];
+  const records = [];
+  let job = null;
   for (let i = 0; i < lines.length; i++) {
+    const header = /^ {2}([A-Za-z][\w-]*):\s*$/.exec(lines[i]);
+    if (header) job = header[1];
     const m = /^\s*-?\s*run:\s*(.*)$/.exec(lines[i]);
     if (!m) continue;
     if (m[1] === "|" || m[1] === ">") {
@@ -42,13 +45,15 @@ function ciCommands(text = read(CI)) {
         }
         if (line.trim()) block.push(line.trim());
       }
-      commands.push(block.join(" ").replace(/\s+/g, " "));
+      records.push({ job, command: block.join(" ").replace(/\s+/g, " ") });
     } else {
-      commands.push(m[1].trim());
+      records.push({ job, command: m[1].trim() });
     }
   }
-  return commands;
+  return records;
 }
+
+const ciCommands = (text = read(CI)) => ciRecords(text).map((r) => r.command);
 
 const shellCommands = (commands) => commands.filter((c) => !NATIVE.has(c));
 
@@ -65,6 +70,14 @@ test("ci.yml parses to commands, both single-line and a `run: |` block", () => {
 test("drift: every ci.yml command runs in ci:local", () => {
   const local = STEPS.filter((s) => s.run).map((s) => s.run);
   for (const command of shellCommands(ciCommands())) assert.ok(local.includes(command), `ci.yml runs a command ci:local does not: ${command}`);
+});
+
+test("drift: every ci.yml command runs in the same ci:local job", () => {
+  const local = (job) => STEPS.filter((s) => s.job === job && s.run).map((s) => s.run);
+  for (const { job, command } of ciRecords()) {
+    if (NATIVE.has(command)) continue;
+    assert.ok(local(job).includes(command), `ci.yml's ${job} job runs "${command}"; ci:local does not run it in that job`);
+  }
 });
 
 test("reverse drift: every ci:local command exists in ci.yml", () => {
