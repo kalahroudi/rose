@@ -82,11 +82,16 @@ export function parseCsvLine(line: string): string[] {
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]!;
     if (quoted) {
-      if (ch === '"' && line[i + 1] === '"') (cur += '"'), i++;
-      else if (ch === '"') quoted = false;
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
       else cur += ch;
     } else if (ch === '"') quoted = true;
-    else if (ch === ",") (out.push(cur.trim()), (cur = ""));
+    else if (ch === ",") {
+      out.push(cur.trim());
+      cur = "";
+    }
     else cur += ch;
   }
   out.push(cur.trim());

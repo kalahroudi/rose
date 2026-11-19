@@ -20,6 +20,9 @@ type the value instead of `any`. Do not disable a rule to get green. A rule that
 more than fifteen violations, or that would need a behaviour change to satisfy, stays
 `"off"` in the config with its reason recorded in a follow-up issue.
 
+`react/refs` and `react/set-state-in-effect` are off. Satisfying either would change
+behaviour, so they are tracked as follow-up task Q15.
+
 `no-undef` needs the environment's globals. The config makes Node globals global
 (`process`, `Buffer`), which covers the build scripts and the Node test runner. The
 worker and web code is left with browser globals enabled so `Request`, `Response`,

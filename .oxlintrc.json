@@ -14,8 +14,7 @@
     "no-debugger": "error",
     "eqeqeq": ["error", "smart"],
     "react/set-state-in-effect": "off",
-    "react/refs": "off",
-    "no-unused-expressions": "off"
+    "react/refs": "off"
   },
   "ignorePatterns": [
     "**/node_modules/**",

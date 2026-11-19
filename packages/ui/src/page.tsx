@@ -121,8 +121,14 @@ function JobsBell({ path, href }: { path: string; href: string }) {
     for (const j of q.data.items) {
       const before = prev.get(j.id);
       const wasActive = before === "queued" || before === "running" || (before === undefined && Date.now() - j.createdAt < 60_000);
-      if (wasActive && j.status === "succeeded") (toast.success(`${j.title}: done`), (settled = true));
-      if (wasActive && j.status === "failed") (toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`), (settled = true));
+      if (wasActive && j.status === "succeeded") {
+        toast.success(`${j.title}: done`);
+        settled = true;
+      }
+      if (wasActive && j.status === "failed") {
+        toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`);
+        settled = true;
+      }
     }
     if (settled) {
       setUnread(true);
