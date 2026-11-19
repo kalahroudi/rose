@@ -16,8 +16,8 @@ export default defineConfig({
       provider: "istanbul",
       include: ["src/**/*.ts"],
       reporter: ["text-summary", "html", "lcov", "json-summary"],
-      // Ratchet floors (2026-11-18, measured pct - 1). Raise only; see docs/testing.md.
-      thresholds: { lines: 79, statements: 76, functions: 77, branches: 64 },
+      // Ratchet floors (2026-11-19, measured pct - 1). Raise only; see docs/testing.md.
+      thresholds: { lines: 89, statements: 86, functions: 87, branches: 75 },
     },
   },
 });
