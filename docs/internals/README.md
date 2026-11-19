@@ -7,3 +7,4 @@ comments. Each page references files and symbols, not line numbers.
 | Page | Area |
 |---|---|
 | [Core auth](core-auth.md) | `packages/core/src/auth`: realms, email codes, passkeys, sessions |
+| [Core control](core-control.md) | `packages/core/src/control`: tenants, domains, users, sessions, codes, jobs |
