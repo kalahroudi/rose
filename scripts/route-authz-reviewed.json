@@ -9,7 +9,7 @@
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
-    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "packages/core/src/tenancy/tenant-do.ts": "eb97ebbc845775d8395aad40eab88377",
     "cloudflare:workers": "builtin",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
   },
@@ -23,7 +23,7 @@
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
-    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "packages/core/src/tenancy/tenant-do.ts": "eb97ebbc845775d8395aad40eab88377",
     "cloudflare:workers": "builtin",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
   },
@@ -35,12 +35,12 @@
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
-    "packages/core/src/tenancy/tenant-do.ts": "e5e7d209c5148bcd9224ab5a805e44e6",
+    "packages/core/src/tenancy/tenant-do.ts": "eb97ebbc845775d8395aad40eab88377",
     "cloudflare:workers": "builtin",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
   },
   "./tenancy/resolve:hostnameOf": {
-    "packages/core/src/tenancy/resolve.ts": "f37fdc3cb45a784db42adaea56f1df5c",
+    "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
     "packages/core/src/control/tenants.ts": "a2dcbe583844c0102dc3c3abab2e107f",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
@@ -49,7 +49,7 @@
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59"
   },
   "./tenancy/resolve:resolveHost": {
-    "packages/core/src/tenancy/resolve.ts": "f37fdc3cb45a784db42adaea56f1df5c",
+    "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
     "packages/core/src/control/tenants.ts": "a2dcbe583844c0102dc3c3abab2e107f",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
