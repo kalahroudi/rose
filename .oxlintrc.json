@@ -55,16 +55,6 @@
         "typescript/restrict-template-expressions": "off",
         "typescript/no-base-to-string": "off"
       }
-    },
-    {
-      // Vitest config files are outside every tsconfig project, so imported types resolve to an error type.
-      "files": ["**/vitest.config.ts"],
-      "rules": {
-        "typescript/no-unsafe-call": "off",
-        "typescript/no-unsafe-argument": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/no-unsafe-member-access": "off"
-      }
     }
   ]
 }
