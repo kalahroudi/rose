@@ -18,9 +18,12 @@ import { pathToFileURL } from "node:url";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const LOG_DIR = join(ROOT, ".rose", "ci-local");
-const SUMMARY = join(LOG_DIR, "last-run.json");
-const DEV_LOG = join(LOG_DIR, "dev.log");
 export const PORTS = [5173, 5174, 8787];
+
+/** Checks that still skip on the local dev stack. Each Q22 change removes its ids from this list. */
+export const ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+/** ci.yml's `pnpm pentest`, run with the ids above so that an unexpected skip fails the job. */
+export const PENTEST_COMMAND = `pnpm pentest --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
 
 /** One entry per `run:` command in ci.yml, in ci.yml order. `native` steps are implemented here. */
 export const STEPS = [
@@ -33,7 +36,7 @@ export const STEPS = [
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },
   { job: "verify", name: "Build", run: "pnpm build" },
   { job: "pentest", name: "Start the local stack", native: "dev-stack" },
-  { job: "pentest", name: "Attack it", run: "pnpm pentest" },
+  { job: "pentest", name: "Attack it", run: PENTEST_COMMAND },
   { job: "pentest", name: "Stop the local stack", native: "dev-stack-stop" },
 ];
 
@@ -117,12 +120,13 @@ async function assertPortsFree() {
 // ── Dev stack (native form of ci.yml's "Start the local stack") ───────────────
 let devStack = null;
 
-function startDevStack(cwd) {
-  console.log(dim(`\n$ node scripts/dev.mjs > ${DEV_LOG} 2>&1 &`));
-  rmSync(DEV_LOG, { force: true });
-  mkdirSync(LOG_DIR, { recursive: true });
+function startDevStack(cwd, logDir) {
+  const devLog = join(logDir, "dev.log");
+  console.log(dim(`\n$ node scripts/dev.mjs > ${devLog} 2>&1 &`));
+  rmSync(devLog, { force: true });
+  mkdirSync(logDir, { recursive: true });
   devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-  const log = (d) => appendFileSync(DEV_LOG, d);
+  const log = (d) => appendFileSync(devLog, d);
   devStack.stdout.on("data", log);
   devStack.stderr.on("data", log);
   devStack.on("exit", () => (devStack = null));
@@ -144,7 +148,7 @@ async function stopDevStack() {
 }
 
 /** ci.yml's readiness check: the tenant app serves `"root"` and the console answers 2xx. */
-async function waitForStack() {
+async function waitForStack(logDir) {
   const deadline = Date.now() + 90_000;
   const get = async (url) => {
     try {
@@ -155,7 +159,7 @@ async function waitForStack() {
     }
   };
   while (Date.now() < deadline) {
-    if (!devStack) throw new Error(`the local stack exited early:\n${readLog()}`);
+    if (!devStack) throw new Error(`the local stack exited early:\n${readLog(logDir)}`);
     const app = await get("http://localhost:5174/api/bootstrap");
     if (app && app.body.includes('"root"')) {
       const admin = await get("http://localhost:5173/api/bootstrap");
@@ -166,12 +170,12 @@ async function waitForStack() {
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new Error(`the local stack did not come up within 90s:\n${readLog()}`);
+  throw new Error(`the local stack did not come up within 90s:\n${readLog(logDir)}`);
 }
 
-function readLog() {
+function readLog(logDir) {
   try {
-    return readFileSync(DEV_LOG, "utf8").slice(-2000);
+    return readFileSync(join(logDir, "dev.log"), "utf8").slice(-2000);
   } catch {
     return "(no log)";
   }
@@ -199,10 +203,12 @@ async function report(sha, ok, result) {
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────
-function writeSummary({ sha, ok, steps, error, leftovers }) {
-  mkdirSync(LOG_DIR, { recursive: true });
+function writeSummary({ sha, ok, steps, error, leftovers }, logDir) {
+  mkdirSync(logDir, { recursive: true });
   const run = { sha, ok, at: new Date().toISOString(), steps, ...(error ? { error } : {}), leftoverWorktrees: leftovers };
-  writeFileSync(SUMMARY, `${JSON.stringify(run, null, 2)}\n`);
+  const summary = join(logDir, "last-run.json");
+  writeFileSync(summary, `${JSON.stringify(run, null, 2)}\n`);
+  return summary;
 }
 
 /** The temp worktrees this run created that are still registered; a leftover means cleanup failed. */
@@ -224,7 +230,21 @@ function printSummary(result) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
-export async function main(argv = process.argv.slice(2)) {
+async function runStepOrNative(step, dir, logDir) {
+  if (!step.native) return runStep(step.run, dir);
+  if (step.native === "dev-stack") {
+    return nativeStep(async () => {
+      startDevStack(dir, logDir);
+      await waitForStack(logDir);
+    });
+  }
+  if (step.native === "dev-stack-stop") return nativeStep(stopDevStack);
+  return nativeStep(() => {
+    throw new Error(`unknown native step: ${step.native}`);
+  });
+}
+
+export async function main(argv = process.argv.slice(2), { steps = STEPS, logDir = LOG_DIR } = {}) {
   const opts = parseArgs(argv);
   const sha = await headSha();
   const jobs = opts.job ? [opts.job] : ["verify", "pentest"];
@@ -233,7 +253,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (!cwd) {
     const dirty = await git(["status", "--porcelain", "--untracked-files=no"]);
     if (dirty.code !== 0) throw new Error(`git status failed: ${dirty.err.trim()}`);
-    if (dirty.out.trim()) return refuse(sha, "the tree has uncommitted tracked changes; commit them or pass --here. CI only sees commits, so a clean checkout is the default.");
+    if (dirty.out.trim()) return refuse(sha, "the tree has uncommitted tracked changes; commit them or pass --here. CI only sees commits, so a clean checkout is the default.", logDir);
   }
 
   const worktrees = [];
@@ -261,19 +281,16 @@ export async function main(argv = process.argv.slice(2)) {
   let error = null;
   try {
     for (const job of jobs) {
-      const steps = STEPS.filter((s) => s.job === job);
+      const jobSteps = steps.filter((s) => s.job === job);
       if (job === "pentest") await assertPortsFree();
-      for (const step of steps) {
+      for (const step of jobSteps) {
         if (!ok) {
           result.push({ job, name: step.name, status: "skipped", seconds: 0 });
           continue;
         }
         if (interrupted) throw new Error("interrupted");
         const started = Date.now();
-        const code = await (step.native === "dev-stack" ? nativeStep(async () => {
-          startDevStack(dir);
-          await waitForStack();
-        }) : step.native === "dev-stack-stop" ? nativeStep(stopDevStack) : runStep(step.run, dir));
+        const code = await runStepOrNative(step, dir, logDir);
         const seconds = (Date.now() - started) / 1000;
         const passed = code === 0;
         result.push({ job, name: step.name, status: passed ? "passed" : "failed", seconds: Math.round(seconds * 10) / 10 });
@@ -300,17 +317,17 @@ export async function main(argv = process.argv.slice(2)) {
 
   // A run that refused to start writes last-run.json too, with no steps and the reason: one path,
   // and a stale green summary from an earlier run cannot stand in for it.
-  writeSummary({ sha, ok, steps: result, error, leftovers: await leftoverWorktrees(worktrees) });
+  const summary = writeSummary({ sha, ok, steps: result, error, leftovers: await leftoverWorktrees(worktrees) }, logDir);
   if (result.length) printSummary(result);
-  console.log(`${ok ? green("ci:local passed") : red("ci:local failed")}  ${dim(`summary: ${SUMMARY}`)}`);
+  console.log(`${ok ? green("ci:local passed") : red("ci:local failed")}  ${dim(`summary: ${summary}`)}`);
   if (opts.report) await report(sha, ok, result);
   return ok ? 0 : 1;
 }
 
 /** Stop before creating anything, and leave a last-run.json that says so. */
-async function refuse(sha, reason) {
+async function refuse(sha, reason, logDir) {
   console.log(red(`\n✗ ${reason}`));
-  writeSummary({ sha, ok: false, steps: [], error: reason, leftovers: [] });
+  writeSummary({ sha, ok: false, steps: [], error: reason, leftovers: [] }, logDir);
   return 1;
 }
 
@@ -330,7 +347,7 @@ async function nativeStep(fn) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .then((code) => process.exit(code))
     .catch((e) => {
