@@ -122,8 +122,15 @@ export function ensureDistDirs() {
   for (const d of [APP_DIR, ADMIN_DIR]) mkdirSync(join(d, "dist/client"), { recursive: true });
 }
 
+/**
+ * Where `pnpm dev` persists the local control-plane D1 database. `pnpm dev` writes it and the
+ * pentest harness reads it, so both must agree. Overridable (ROSE_PERSIST_TO) so ci:local can
+ * keep its throwaway state under .rose/ instead of touching the developer's .wrangler/state.
+ */
+export const localPersistTo = () => resolve(ROOT, process.env.ROSE_PERSIST_TO ?? ".wrangler/state");
+
 export function applyLocalMigrations() {
-  const r = run(bin(APP_DIR, "wrangler"), ["d1", "migrations", "apply", DB_NAME, "--local", "--persist-to", "../../.wrangler/state"], { cwd: APP_DIR, capture: true, env: { CI: "1" } });
+  const r = run(bin(APP_DIR, "wrangler"), ["d1", "migrations", "apply", DB_NAME, "--local", "--persist-to", localPersistTo()], { cwd: APP_DIR, capture: true, env: { CI: "1" } });
   if (r.status !== 0) fail(`Applying local migrations failed:\n${r.stdout}\n${r.stderr}`);
 }
 

@@ -21,9 +21,19 @@ const LOG_DIR = join(ROOT, ".rose", "ci-local");
 export const PORTS = [5173, 5174, 8787];
 
 /** Checks that still skip on the local dev stack. Each Q22 change removes its ids from this list. */
-export const ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+export const ALLOWED_SKIPS = ["ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "AUTH-09"];
 /** ci.yml's `pnpm pentest`, run with the ids above so that an unexpected skip fails the job. */
 export const PENTEST_COMMAND = `pnpm pentest --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
+
+/**
+ * The environment that makes the local stack and the pentest harness share one control-plane
+ * database. Both default to `.wrangler/state`, but ci:local keeps its throwaway state under
+ * `.rose/ci-local/state` so a run never touches the developer's local data.
+ */
+export const pentestEnv = (logDir) => {
+  const stateDir = join(logDir, "state");
+  return { ROSE_PERSIST_TO: stateDir, ROSE_PENTEST_STATE: stateDir };
+};
 
 /** One entry per `run:` command in ci.yml, in ci.yml order. `native` steps are implemented here. */
 export const STEPS = [
@@ -66,10 +76,10 @@ function parseArgs(argv) {
 }
 
 /** Run a command with inherited output; resolves to its exit code. */
-function runStep(command, cwd) {
+function runStep(command, cwd, extraEnv = {}) {
   console.log(dim(`\n$ ${command}`));
   return new Promise((done) => {
-    const child = spawn(command, { cwd, shell: true, stdio: "inherit", env: { ...process.env, FORCE_COLOR: tty ? "1" : "0" } });
+    const child = spawn(command, { cwd, shell: true, stdio: "inherit", env: { ...process.env, FORCE_COLOR: tty ? "1" : "0", ...extraEnv } });
     child.on("error", () => done(1));
     child.on("exit", (code, signal) => done(code ?? (signal ? 1 : 0)));
   });
@@ -120,12 +130,15 @@ async function assertPortsFree() {
 // ── Dev stack (native form of ci.yml's "Start the local stack") ───────────────
 let devStack = null;
 
-function startDevStack(cwd, logDir) {
+function startDevStack(cwd, logDir, persistTo) {
   const devLog = join(logDir, "dev.log");
   console.log(dim(`\n$ node scripts/dev.mjs > ${devLog} 2>&1 &`));
   rmSync(devLog, { force: true });
+  // A fresh control-plane database each run: leftovers from an earlier run would otherwise count as
+  // real tenants in INT-03 (or leak into the "not ours" snapshot).
+  rmSync(persistTo, { recursive: true, force: true });
   mkdirSync(logDir, { recursive: true });
-  devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  devStack = spawn(process.execPath, ["scripts/dev.mjs"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ROSE_PERSIST_TO: persistTo } });
   const log = (d) => appendFileSync(devLog, d);
   devStack.stdout.on("data", log);
   devStack.stderr.on("data", log);
@@ -230,11 +243,11 @@ function printSummary(result) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
-async function runStepOrNative(step, dir, logDir) {
-  if (!step.native) return runStep(step.run, dir);
+async function runStepOrNative(step, dir, logDir, env) {
+  if (!step.native) return runStep(step.run, dir, env);
   if (step.native === "dev-stack") {
     return nativeStep(async () => {
-      startDevStack(dir, logDir);
+      startDevStack(dir, logDir, env.ROSE_PERSIST_TO);
       await waitForStack(logDir);
     });
   }
@@ -268,6 +281,7 @@ export async function main(argv = process.argv.slice(2), { steps = STEPS, logDir
     console.log(`Running at HEAD ${sha.slice(0, 7)} in ${cwd} (--here)`);
   }
   const dir = cwd ?? worktrees[0];
+  const env = pentestEnv(logDir);
 
   let interrupted = false;
   const onSignal = () => {
@@ -290,7 +304,7 @@ export async function main(argv = process.argv.slice(2), { steps = STEPS, logDir
         }
         if (interrupted) throw new Error("interrupted");
         const started = Date.now();
-        const code = await runStepOrNative(step, dir, logDir);
+        const code = await runStepOrNative(step, dir, logDir, env);
         const seconds = (Date.now() - started) / 1000;
         const passed = code === 0;
         result.push({ job, name: step.name, status: passed ? "passed" : "failed", seconds: Math.round(seconds * 10) / 10 });

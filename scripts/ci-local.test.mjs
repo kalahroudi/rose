@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ALLOWED_SKIPS, PENTEST_COMMAND, STEPS } from "./ci-local.mjs";
+import { ALLOWED_SKIPS, PENTEST_COMMAND, STEPS, pentestEnv } from "./ci-local.mjs";
 
 const CI = ".github/workflows/ci.yml";
 const SUMMARY = ".rose/ci-local/last-run.json";
@@ -53,7 +53,7 @@ function ciCommands(text = read(CI)) {
 const shellCommands = (commands) => commands.filter((c) => !NATIVE.has(c));
 
 /** The literal list CI and ci-local share. A change here must change the commands in both files. */
-const EXPECTED_ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+const EXPECTED_ALLOWED_SKIPS = ["ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "AUTH-09"];
 
 test("ci.yml parses to commands, both single-line and a `run: |` block", () => {
   const commands = ciCommands();
@@ -86,6 +86,14 @@ test("pentest runs strict and allows exactly today's skips", () => {
   assert.equal(PENTEST_COMMAND, `pnpm pentest --strict${EXPECTED_ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`);
   assert.ok(ciCommands().includes(PENTEST_COMMAND), "ci.yml runs the same strict command");
   assert.ok(EXPECTED_ALLOWED_SKIPS.includes("AUTH-09"), "AUTH-09 is a known skip until --slow reaches ci:local");
+  assert.ok(!ALLOWED_SKIPS.includes("AUTH-08") && !ALLOWED_SKIPS.includes("INT-03"), "AUTH-08 and INT-03 must run (not skip) against the local stack");
+});
+
+test("pentestEnv points the dev stack and the harness at one state dir under .rose/ci-local", () => {
+  assert.deepEqual(pentestEnv("/repo/.rose/ci-local"), {
+    ROSE_PERSIST_TO: "/repo/.rose/ci-local/state",
+    ROSE_PENTEST_STATE: "/repo/.rose/ci-local/state",
+  });
 });
 
 test("a failing step exits non-zero and skips the rest", () => {
