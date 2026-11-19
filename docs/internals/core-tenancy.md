@@ -168,9 +168,14 @@ prefix.
 
 `meta` is JSON-encoded, and only when a value was given: passing `undefined` stores `NULL`
 rather than the string `"undefined"`. Callers pass structured context such as an id, a role
-or a name. Secret values never belong in `meta`; `AGENTS.md` makes that a rule, and the
-audit entries the app writes (member changes, invitations, API-key create and revoke) carry
-an id or email target plus a name and role in `meta`.
+or a name. Secret values never belong in `meta`; `AGENTS.md` makes that a rule.
+
+The built-in entries use `meta` unevenly, and that is the real shape: `member.join`,
+`member.role` and `invitation.create` pass `{ role }`; `apikey.create` passes
+`{ name, role }`; `member.remove`, `invitation.revoke` and `apikey.revoke` pass no `meta`
+at all, so it is stored as `NULL`. The target is a user id for member changes, an
+invitation id for `invitation.revoke`, an API-key id for API-key create and revoke, and
+the invitee's email for `invitation.create`.
 
 `actor` is the person's label for user actions (their email) and a `job:` prefix plus the
 queuing actor's label for background work. `target` is usually an id, but an invitation
@@ -178,11 +183,13 @@ entry puts the invitee's email there. Neither column is encrypted and the audit 
 readable by owners and admins (`audit:read`), so the rule that keeps personal free text out
 of audit metadata is a rule about what callers pass, not something the table enforces.
 
-Both list functions build their `WHERE` clause from fixed fragments and bound values.
-`q` is escaped and wrapped to a "contains" pattern, `action` to a "starts with" pattern,
-and both use `ESCAPE '\'`. The list is a `batch` of the page query and its matching count,
-so the two see the same data. Ordering is a fixed `at DESC`; no client-supplied sort key
-reaches this SQL.
+Both list functions build their `WHERE` clause from fixed fragments and bound values, but
+they do not share a filter set. `listTenantAudit` filters by `q` (matched as a "contains"
+pattern against `actor`, `target` and `action`) and by an optional `action` prefix
+("starts with" pattern); both use `ESCAPE '\'`, and the rows come back in a fixed `at DESC`
+order. `listApiKeys` filters only by `q`, matched against `name` with `ESCAPE '\'`, and
+orders by a fixed `created_at DESC`. Each is a `batch` of the page query and its matching
+count, so the two see the same data, and no client-supplied sort key reaches either SQL.
 
 ### API keys
 
