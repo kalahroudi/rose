@@ -24,9 +24,11 @@
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
     "deploy": "node scripts/deploy.mjs",
+    "knip": "knip",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
+    "knip": "6.45.1",
     "typescript": "^7.0.2"
   }
 }

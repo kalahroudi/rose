@@ -1,0 +1,46 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.mjs",
+        "scripts/dev.mjs",
+        "scripts/dev/router.js",
+        "scripts/*.test.mjs",
+        "examples/**/*.test.mjs",
+        ".claude/hooks/*.mjs"
+      ],
+      "project": ["scripts/**/*.{mjs,js}", "examples/**/*.{js,mjs}", ".claude/hooks/*.mjs"]
+    },
+    "packages/core": {
+      "entry": ["src/index.ts", "src/platform.ts", "src/testing/index.ts", "test/worker.ts", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+    },
+    "packages/ui": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "apps/app": {
+      "entry": ["worker/index.ts", "web/main.tsx", "worker/**/*.test.ts", "vite.config.ts", "vitest.config.ts"],
+      "project": ["worker/**/*.ts", "web/**/*.{ts,tsx}"]
+    },
+    "apps/admin": {
+      "entry": ["worker/index.ts", "web/main.tsx", "worker/**/*.test.ts", "vite.config.ts", "vitest.config.ts"],
+      "project": ["worker/**/*.ts", "web/**/*.{ts,tsx}"]
+    },
+    "examples/upstream-service": {
+      "entry": ["worker.js", "worker.test.mjs"],
+      "project": ["**/*.{js,mjs}"]
+    }
+  },
+  "ignoreDependencies": ["@cloudflare/workers-types"],
+  "ignoreBinaries": ["qlmanage"],
+  "ignore": [
+    "**/migrations/**",
+    ".wrangler/**",
+    ".rose/**",
+    ".bug-hunter/**",
+    ".ai-ship-worktrees/**",
+    "brand/**"
+  ]
+}
