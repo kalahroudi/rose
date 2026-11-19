@@ -213,7 +213,6 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
   }, [toggle]);
 
   const isActive = (href: string) => (href === "/" ? location === "/" : location === href || location.startsWith(`${href}/`));
-  let lastSection: string | undefined;
 
   return (
     <div className="shell" data-collapsed={collapsed}>
@@ -226,9 +225,8 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
           </span>
         </Link>
         <div className="nav-list">
-          {nav.map((item) => {
-            const head = item.section && item.section !== lastSection ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
-            lastSection = item.section;
+          {nav.map((item, i) => {
+            const head = item.section && item.section !== nav[i - 1]?.section ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
             return (
               <div key={item.href} style={{ display: "contents" }}>
                 {head}

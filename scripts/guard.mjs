@@ -448,7 +448,7 @@ export function checkStructure(files, readFile = read) {
     if (!/\bdefineModule\s*\(/.test(code)) v.push({ rule: "module-structure", file: index, line: 1, message: "Module must be created with defineModule()." });
     if (!/\bisolationProbe\s*:/.test(code)) v.push({ rule: "module-structure", file: index, line: 1, message: "Module must declare an isolationProbe." });
     if (!new RegExp(`from\\s+["']\\./${id}(/index)?["']`).test(manifestCode)) v.push({ rule: "module-structure", file: index, line: 1, message: `Module "${id}" is not registered in ${manifest}.` });
-    if (!files.some((f) => f.startsWith(`${base}/`) && /\.test\.ts$/.test(f))) v.push({ rule: "module-structure", file: index, line: 1, message: "Module has no test file next to it." });
+    if (!files.some((f) => f.startsWith(`${base}/`) && f.endsWith(".test.ts"))) v.push({ rule: "module-structure", file: index, line: 1, message: "Module has no test file next to it." });
   }
   // Tests anywhere must not be silently disabled in the security suites.
   for (const f of files.filter((x) => /^packages\/core\/test\/.*\.test\.ts$/.test(x))) {
@@ -462,7 +462,7 @@ export function checkStructure(files, readFile = read) {
 function trackedSecretsFiles() {
   try {
     const out = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" });
-    return out.split("\0").filter((f) => /(^|\/)(\.dev\.vars(\..*)?|\.env(\..*)?)$/.test(f) && !/\.example$/.test(f));
+    return out.split("\0").filter((f) => /(^|\/)(\.dev\.vars(\..*)?|\.env(\..*)?)$/.test(f) && !f.endsWith(".example"));
   } catch {
     return [];
   }

@@ -19,6 +19,7 @@ export const searchTermSchema = z
   .string()
   // Control characters are dropped: SQLite ends a bound string at a NUL byte, which would
   // turn "%\0%" into a match-everything pattern.
+  // oxlint-disable-next-line no-control-regex -- matching C0 controls and DEL on purpose: they are the characters this filter must drop.
   .transform((v) => v.replace(/[\u0000-\u001f\u007f]/g, "").trim())
   .pipe(z.string().max(MAX_SEARCH_LENGTH, `Search for at most ${MAX_SEARCH_LENGTH} characters.`))
   .default("");

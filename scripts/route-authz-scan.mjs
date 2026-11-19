@@ -616,9 +616,9 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
       }
     }
   }
-  const inHole = new Array(toks.length);
+  const inHole = Array.from({ length: toks.length });
   { let h = 0; toks.forEach((t, i) => { if (t.type === "tmplOpen") h++; inHole[i] = h > 0; if (t.type === "tmplClose") h--; }); }
-  const dep = new Array(toks.length);
+  const dep = Array.from({ length: toks.length });
   { let cur = 0; toks.forEach((t, i) => { if (t.type === "punct" && OPEN.has(t.value)) { dep[i] = cur++; } else if (t.type === "punct" && CLOSE.has(t.value)) { dep[i] = --cur; } else dep[i] = cur; }); }
   const base = lo >= 0 ? dep[lo] + 1 : 0;
   // A statement that starts directly in the factory body (not nested in a function, block or expression).

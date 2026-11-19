@@ -54,6 +54,7 @@ describe("operator console", () => {
   });
 
   it("a tenant session is not an operator session", async () => {
+    await root();
     const t = await seed("acme", "Acme");
     // Forge the best case for an attacker: a real, valid session for a tenant, presented under the admin cookie name.
     const { createSession } = await import("../../../../packages/core/src/control/sessions");
