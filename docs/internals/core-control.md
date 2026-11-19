@@ -12,11 +12,13 @@ here (invariant 2 in `AGENTS.md`). Jobs whose payload belongs to a tenant are se
 the caller before they are enqueued; this area stores the sealed string and passes it to
 the handler without inspecting it.
 
-Every count, list and state change in this area is written to be safe under concurrency.
-Cloudflare runs many isolates against one D1 database, so a check followed by a write
-would be a race unless both happen in one statement. That is why the caps and claims
-here are conditional `INSERT ... SELECT` and conditional `UPDATE ... WHERE` statements
-rather than read-then-write code.
+Most caps and claims in this area come from one conditional statement, so a check and its
+write cannot interleave. Cloudflare runs many isolates against one D1 database, and a
+check followed by a separate write is a race. That is why the login-code caps, the
+workspace cap and the job claim are conditional `INSERT ... SELECT` and conditional
+`UPDATE ... WHERE` statements rather than read-then-write code. Some paths still read and
+then write in separate statements: the deletion request and cancel, and the last-owner
+checks. The Known limits section lists the races they leave open.
 
 ## `audit.ts`
 
@@ -147,11 +149,13 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
 
 - `DELETE_GRACE_MS` is 48 hours. `delete_after` is the epoch-ms deadline; `prior_status`
   records what to restore if the deletion is cancelled.
-- `requestTenantDeletion` refuses a missing tenant or one already `deleting`. Asking
-  again while `pending_deletion` returns the original deadline and writes nothing, so a
-  retry cannot extend or shorten the grace period. The first request moves the tenant to
-  `pending_deletion`, stores the previous status, deletes every session for the scope and
-  deletes the tenant's queued jobs (their `scope` is the tenant id). Work a tenant queued
+- `requestTenantDeletion` refuses a missing tenant or one already `deleting`. For requests
+  that arrive one after the other, a second request while `pending_deletion` returns the
+  original deadline and writes nothing, so a retry cannot extend or shorten the grace
+  period. Two requests that arrive at the same time are not covered; see Known limits. The
+  first request moves the tenant to `pending_deletion`, stores the previous status, deletes
+  every session for the scope and deletes the tenant's queued jobs (their `scope` is the
+  tenant id). Work a tenant queued
   must not outlive it; the purge job itself has scope `"platform"`, so it survives.
 - The tenant stops serving authenticated requests immediately: the session query joins
   the tenant and requires `status = 'active'`. Host-level routing can lag by the host
@@ -410,11 +414,14 @@ acked" (`apps/admin/worker/test/environment.adversarial.test.ts`).
 ### Delivery, claims and ownership
 
 Delivery is at least once: a queue message, a redelivery and the sweep can all race for
-the same row. Two things make that safe.
+the same row. Two things have to hold for that to be safe.
 
-Every registered handler must be safe to run again. `idempotent()` marks a handler as
-declaring that property, and "every registered tenant handler declares itself idempotent"
-(`packages/core/test/jobs-stale-reclaim.test.ts`) keeps the tenant registry honest.
+A handler body has to be safe to run again, and that is the module author's job. The
+framework cannot check it: `tenantJobHandlers` wraps `tenant.purge` and every module job in
+`idempotent()`, which only sets a flag on the wrapper. "every registered tenant handler
+declares itself idempotent" (`packages/core/test/jobs-stale-reclaim.test.ts`) pins the
+wrapper and `tenant.purge`. It runs a stub module job that returns at once, so it proves
+the flag is set, not that a module's own work can be repeated.
 
 `runOne` claims with an atomic compare-and-set on the row's current `status` and
 `updated_at`, setting `status = 'running'`, incrementing `attempts` and writing a fresh
@@ -428,9 +435,10 @@ overwrite a newer run after an operator retry reset the attempt counter" and "an
 uncontended run still records every outcome (the guard is not over-strict)".
 
 `STALE_RUNNING` is 5 minutes. The sweep also selects rows stuck in `running` whose
-`updated_at` is older than that. A slow worker can therefore overlap its reclaimer. That
-is allowed only because handlers are idempotent and because the claim token stops the
-older run from writing.
+`updated_at` is older than that. A slow worker can therefore overlap its reclaimer. The
+claim token stops the older run from writing its outcome. The overlap is safe only if the
+handler body survives a second concurrent run, and the module author gives that guarantee
+when the job is written. The framework does not enforce it.
 
 ### Outcomes and retries
 
@@ -478,6 +486,23 @@ used for ownership.
   the workspace (or the platform) with no owner. The race needs two simultaneous owner
   actions and is not reachable by one person through the UI, but the inline comment "a
   workspace always keeps at least one owner" is stronger than the code guarantees.
+- **A cancel can strip a delete request's purge job.** `cancelTenantDeletion` restores the
+  tenant status in one statement and deletes the queued `tenant.purge` job in a second.
+  Neither step reads the other's result. A delete request that lands between them sets the
+  tenant back to `pending_deletion` and enqueues a job. The cancel's cleanup deletes that
+  job if it runs afterwards. The tenant is then pending with no job. A later delete
+  request on a pending tenant returns the stored deadline and adds no job. No sweep creates
+  one either, so the tenant stays pending until someone cancels the deletion and requests
+  it again. Tracked as Noty bug 17887EA7.
+- **Two delete requests at once make two purge jobs.** Both delete routes read the tenant
+  status to decide whether to enqueue, then call `requestTenantDeletion`. Two concurrent
+  requests can both read `active` before either writes. One guarded `UPDATE` sets
+  `pending_deletion`; the other changes no row but still returns its own `deleteAfter`,
+  computed as `now + DELETE_GRACE_MS`, so that response carries a deadline that does not
+  match the stored one. Each request then enqueues a `tenant.purge` job and writes a
+  `tenant.delete.requested` audit row. The duplicate does no harm: `beginTenantPurge` moves
+  the tenant to `deleting` once, and a purge that runs twice only deletes storage and rows
+  that are already gone. Tracked as Noty bug E55E9FFF.
 - **Host routing lags on other isolates.** A pending or suspended tenant is refused
   immediately by `readSession`, but another isolate may route its host from a cached
   lookup until the host cache TTL expires. The deletion and suspension callers invalidate
@@ -496,5 +521,9 @@ used for ownership.
 - `requestTenantDeletion`'s "the tenant stops serving" is true for authenticated access
   at once and for host resolution only after the cache TTL on other isolates; see Known
   limits.
+- `apps/admin/worker/index.ts` line 214, "Already pending: report the existing state; no
+  second job, no second audit row", holds only for a request that arrives after the tenant
+  is already pending. Two requests that read the tenant at the same moment both see
+  `active`, so both enqueue and both audit; see Known limits.
 - No other comment in this area was found stale. The claim that `beginTenantPurge` is the
   only path into `deleting` was checked against every write to that column.
