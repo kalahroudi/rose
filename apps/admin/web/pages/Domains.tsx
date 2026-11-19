@@ -21,7 +21,7 @@ const parseDetail = (raw: string | null): DomainDetail => {
 };
 
 /** Search-as-you-type tenant picker. Loads at most eight matches; never the whole list. */
-function TenantPicker({ value, onChange, inputProps }: { value: { id: string; name: string } | null; onChange(t: { id: string; name: string } | null): void; inputProps: object }) {
+function TenantPicker({ value, onChange, inputProps }: { value: { id: string; name: string } | null; onChange: (t: { id: string; name: string } | null) => void; inputProps: object }) {
   const [text, setText] = useState("");
   const [term, setTerm] = useState("");
   useEffect(() => {
@@ -52,7 +52,7 @@ function TenantPicker({ value, onChange, inputProps }: { value: { id: string; na
   );
 }
 
-export function AddDomainDrawer({ open, onClose, tenant }: { open: boolean; onClose(): void; tenant: { id: string; name: string } | null | undefined }) {
+export function AddDomainDrawer({ open, onClose, tenant }: { open: boolean; onClose: () => void; tenant: { id: string; name: string } | null | undefined }) {
   const boot = useSession();
   const toast = useToast();
   const invalidate = useInvalidate();
@@ -84,7 +84,7 @@ export function AddDomainDrawer({ open, onClose, tenant }: { open: boolean; onCl
   );
 }
 
-function DomainDrawer({ domain, onClose }: { domain: Domain | null; onClose(): void }) {
+function DomainDrawer({ domain, onClose }: { domain: Domain | null; onClose: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const invalidate = useInvalidate();

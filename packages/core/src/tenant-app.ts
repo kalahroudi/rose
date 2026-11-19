@@ -55,7 +55,7 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
     // Destroys the tenant's private database (and with it the only copy of its wrapped
     // data key), then removes its identity records. Idempotent, so retries are safe.
     "tenant.purge": idempotent(async (env, _job, payload) => {
-      const tenantId = String(payload.tenantId ?? "");
+      const tenantId = typeof payload.tenantId === "string" ? payload.tenantId : "";
       const row = await getTenant(env.DB, tenantId);
       if (row) {
         // Never purge early: the job and the hourly sweep both come through here, so this
@@ -225,7 +225,7 @@ export function createTenantApp(options: TenantAppOptions) {
   app.post("/api/root/code/request", async (c) => {
     rootOnly(c);
     const email = normalizeEmail((await readJson(c, z.object({ email: z.string().max(254) }))).email);
-    return c.json(await requestCode(c, { scope: ROOT_SCOPE, label: c.env.APP_NAME, email, eligible: async () => true }));
+    return c.json(await requestCode(c, { scope: ROOT_SCOPE, label: c.env.APP_NAME, email, eligible: () => Promise.resolve(true) }));
   });
 
   app.post("/api/root/code/verify", async (c) => {
@@ -288,7 +288,7 @@ export function createTenantApp(options: TenantAppOptions) {
     return c.redirect("/", 302);
   });
 
-  app.route("/api/auth", createAuthRoutes(async (c) => realmFor(c as unknown as Ctx, activeTenant(c as unknown as Ctx))) as never);
+  app.route("/api/auth", createAuthRoutes((c) => Promise.resolve(realmFor(c as unknown as Ctx, activeTenant(c as unknown as Ctx)))) as never);
 
   // ── Everything below requires an actor that belongs to this host's tenant ─────
   const authenticate = async (c: Ctx, next: () => Promise<void>) => {

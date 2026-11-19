@@ -85,13 +85,13 @@ export function FormDrawer<V extends Record<string, unknown>>({
 }: Pick<DrawerProps, "open" | "onClose" | "title" | "subtitle" | "size"> & {
   initial: V;
   submitLabel: string;
-  onSubmit(values: V): Promise<unknown>;
-  validate?(values: V): Partial<Record<keyof V & string, string>>;
+  onSubmit: (values: V) => Promise<unknown>;
+  validate?: (values: V) => Partial<Record<keyof V & string, string>>;
   /** True while the record being edited is still loading: the drawer shows a skeleton instead of empty fields. */
   loading?: boolean;
   /** Secondary actions shown at the left of the footer, e.g. Delete. */
   extraActions?: ReactNode;
-  children(form: FormApi<V>): ReactNode;
+  children: (form: FormApi<V>) => ReactNode;
 }) {
   const [values, setValues] = useState<V>(initial);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
@@ -149,7 +149,7 @@ export function FormDrawer<V extends Record<string, unknown>>({
 
   const form: FormApi<V> = {
     values,
-    errors: errors as FormApi<V>["errors"],
+    errors,
     submitting,
     set: (key, value) => {
       setValues((v) => ({ ...v, [key]: value }));

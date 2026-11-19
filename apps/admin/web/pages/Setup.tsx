@@ -20,7 +20,7 @@ const CF_TOKEN_DOCS = "https://developers.cloudflare.com/fundamentals/api/get-st
 const CF_SAAS_DOCS = "https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/getting-started/";
 const WFP_DOCS = "https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/";
 
-function ConnectionCard({ icon, title, connected, summary, children, onConnect, onDisconnect, canEdit }: { icon: IconName; title: string; connected: boolean; summary: React.ReactNode; children?: React.ReactNode; onConnect(): void; onDisconnect(): void; canEdit: boolean }) {
+function ConnectionCard({ icon, title, connected, summary, children, onConnect, onDisconnect, canEdit }: { icon: IconName; title: string; connected: boolean; summary: React.ReactNode; children?: React.ReactNode; onConnect: () => void; onDisconnect: () => void; canEdit: boolean }) {
   return (
     <section className="card">
       <div className="card-head">

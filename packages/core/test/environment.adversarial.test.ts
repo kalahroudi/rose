@@ -100,10 +100,10 @@ describe("adversarial: tenant worker ENVIRONMENT fails closed", () => {
 
   it("guardFetch never calls the inner handler for an odd value", async () => {
     let called = 0;
-    const f = guardFetch(async () => { called++; return new Response("inner"); });
+    const f = guardFetch(() => { called++; return Promise.resolve(new Response("inner")); });
     for (const v of odd) {
-      const res = await f(new Request("https://x.rose.test/"), withEnv(v) as { ENVIRONMENT: "production" });
-      expect((res as Response).status).toBe(500);
+      const res = await f(new Request("https://x.rose.test/"), withEnv(v));
+      expect(res.status).toBe(500);
     }
     expect(called).toBe(0);
   });
@@ -111,7 +111,7 @@ describe("adversarial: tenant worker ENVIRONMENT fails closed", () => {
 
 describe("adversarial: production disables every dev behaviour", () => {
   const prodNoRl = (extra: Record<string, unknown> = {}) => withEnv("production", { RL_AUTH: undefined, ...extra });
-  const allow = { limit: async () => ({ success: true }) };
+  const allow = { limit: () => Promise.resolve({ success: true }) };
 
   it("missing RL_AUTH fails closed on code request and verify, with no devCode", async () => {
     const a = await createTestTenant(env, SELF);

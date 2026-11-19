@@ -9,7 +9,7 @@ import type { Invitation, Member, Role } from "../types";
 
 const TABS = ["members", "invitations"] as const;
 
-const roleTone = (r: Role) => (r === "owner" ? "info" : "neutral") as "info" | "neutral";
+const roleTone = (r: Role): "info" | "neutral" => (r === "owner" ? "info" : "neutral");
 
 function RoleOptions({ allowOwner }: { allowOwner: boolean }) {
   return (
@@ -108,12 +108,12 @@ export function MembersPage() {
         <InvitationsTab manage={manage} fresh={fresh} onRevoke={(i) => void revoke(i)} onInvite={() => setInviting(true)} />
       )}
 
-      <FormDrawer
+      <FormDrawer<{ email: string; role: Role }>
         open={inviting}
         onClose={() => setInviting(false)}
         title="Invite member"
         subtitle="They join by signing in with this email address."
-        initial={{ email: "", role: "member" as Role }}
+        initial={{ email: "", role: "member" }}
         submitLabel="Send invitation"
         validate={(v) => (v.email.includes("@") ? {} : { email: "Enter a valid email address." })}
         onSubmit={async (v) => {
@@ -140,12 +140,12 @@ export function MembersPage() {
         )}
       </FormDrawer>
 
-      <FormDrawer
+      <FormDrawer<{ role: Role }>
         open={!!editing}
         onClose={() => setEditing(null)}
         title="Change role"
         subtitle={editing?.email}
-        initial={{ role: (editing?.role ?? "member") as Role }}
+        initial={{ role: editing?.role ?? "member" }}
         submitLabel="Save role"
         onSubmit={async (v) => {
           await api(`/api/members/${editing!.user_id}`, { method: "PATCH", body: v });
@@ -167,7 +167,7 @@ export function MembersPage() {
   );
 }
 
-function MembersTab({ manage, selfId, onEdit, onRemove }: { manage: boolean; selfId: string; onEdit(m: Member): void; onRemove(m: Member): void }) {
+function MembersTab({ manage, selfId, onEdit, onRemove }: { manage: boolean; selfId: string; onEdit: (m: Member) => void; onRemove: (m: Member) => void }) {
   const list = useListState(["role"]);
   const members = useQuery({ queryKey: ["members", list.query], queryFn: () => api<PageData<Member>>(`/api/members?${list.query}`), placeholderData: keepPreviousData });
   const columns: Column<Member>[] = [
@@ -218,7 +218,7 @@ function MembersTab({ manage, selfId, onEdit, onRemove }: { manage: boolean; sel
   );
 }
 
-function InvitationsTab({ manage, fresh, onRevoke, onInvite }: { manage: boolean; fresh: string | null; onRevoke(i: Invitation): void; onInvite(): void }) {
+function InvitationsTab({ manage, fresh, onRevoke, onInvite }: { manage: boolean; fresh: string | null; onRevoke: (i: Invitation) => void; onInvite: () => void }) {
   const list = useListState();
   const invitations = useQuery({ queryKey: ["invitations", list.query], queryFn: () => api<PageData<Invitation>>(`/api/invitations?${list.query}`), placeholderData: keepPreviousData });
   const columns: Column<Invitation>[] = [

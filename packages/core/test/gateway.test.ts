@@ -11,7 +11,7 @@ const actor = { type: "user", id: "u1", label: "u", role: "owner", sessionId: "s
 afterEach(() => vi.restoreAllMocks());
 
 function captureFetch() {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("ok"));
+  return vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(new Response("ok")));
 }
 
 // Paths as the client sends them on the wire (already percent-encoded where a browser would).
@@ -38,7 +38,7 @@ describe("gateway origin pinning", () => {
       const spy = captureFetch();
       await forwardToUpstream(env, new Request(`https://a.example.com${path}?q=1`), tenant, actor).catch(() => undefined);
       for (const call of spy.mock.calls) {
-        const u = new URL(String((call[0] as URL | string | Request) instanceof Request ? (call[0] as Request).url : call[0]));
+        const u = new URL(String((call[0]) instanceof Request ? (call[0] as Request).url : call[0]));
         expect(u.origin).toBe(ORIGIN);
         expect(u.username).toBe("");
         expect(u.password).toBe("");
@@ -124,7 +124,7 @@ describe("gateway origin pinning", () => {
     const dispatchEnv = {
       ...(env as object),
       UPSTREAM_MODE: "dispatch",
-      DISPATCHER: { get: () => ({ fetch: async (r: Request) => (seen.push(r.url), new Response("ok")) }) },
+      DISPATCHER: { get: () => ({ fetch: (r: Request) => Promise.resolve((seen.push(r.url), new Response("ok"))) }) },
     } as never;
     const spy = captureFetch();
     for (const p of HOSTILE) {

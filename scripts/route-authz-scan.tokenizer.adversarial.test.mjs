@@ -16,6 +16,7 @@ const real = () => readFileSync(join(ROOT, "packages", "core", "src", "tenant-ap
 /** Run the snippet as strict JS and return the paths it registers with app.get. */
 function jsRegisters(snippet) {
   const seen = [];
+  // oxlint-disable-next-line typescript/no-implied-eval -- the test executes a fixture snippet to learn which routes it registers
   new Function("app", '"use strict";\n' + snippet)({ get: (p) => seen.push(p) });
   return seen;
 }

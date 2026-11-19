@@ -63,7 +63,7 @@ export interface NavItem {
   icon: IconName;
   section?: string;
   /** Warm the cache when the pointer rests on the item. */
-  prefetch?(): void;
+  prefetch?: () => void;
 }
 
 export interface JobView {
@@ -81,7 +81,7 @@ export interface ShellProps {
   brand: { name: string; sub?: string };
   nav: NavItem[];
   user: { email: string; name?: string };
-  onSignOut(): void;
+  onSignOut: () => void;
   /** Background-task feed for the notification bell. */
   jobs?: { path: string; href: string };
   children: ReactNode;
@@ -283,7 +283,7 @@ export interface HelpContent {
   links?: { label: string; href: string }[];
 }
 
-function HelpDrawer({ title, help, open, onClose }: { title: string; help: HelpContent; open: boolean; onClose(): void }) {
+function HelpDrawer({ title, help, open, onClose }: { title: string; help: HelpContent; open: boolean; onClose: () => void }) {
   const [preview, setPreview] = useState<string | null>(null);
   return (
     <>
@@ -367,7 +367,7 @@ export interface TabDef {
   id: string;
   label: string;
   count?: number | undefined;
-  prefetch?(): void;
+  prefetch?: () => void;
 }
 
 /** Active tab, mirrored in `?tab=` so it is linkable and survives reload. */
@@ -390,7 +390,7 @@ export interface PageProps {
   actions?: ReactNode;
   tabs?: TabDef[];
   tab?: string;
-  onTab?(id: string): void;
+  onTab?: (id: string) => void;
   children: ReactNode;
 }
 
@@ -479,7 +479,7 @@ type AnyQuery = Pick<UseQueryResult<unknown, Error>, "isPending" | "error" | "re
  * half-loaded. Fast responses show nothing at all; after 150ms a layout-matched skeleton
  * appears. Failures get a plain message, a Retry button and a copyable reference.
  */
-export function Gate({ queries, skeleton, children }: { queries: AnyQuery[]; skeleton?: "table" | "cards" | "form" | "detail"; children(): ReactNode }) {
+export function Gate({ queries, skeleton, children }: { queries: AnyQuery[]; skeleton?: "table" | "cards" | "form" | "detail"; children: () => ReactNode }) {
   const pending = queries.some((q) => q.isPending);
   const failed = queries.find((q) => q.error && q.data === undefined);
   const [slow, setSlow] = useState(false);

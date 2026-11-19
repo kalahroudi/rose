@@ -12,13 +12,13 @@ const odd: unknown[] = [
 ];
 const withEnv = (v: unknown, extra: Record<string, unknown> = {}) => ({ ...env, ENVIRONMENT: v, ...extra }) as never;
 const label = (v: unknown) => (typeof v === "string" ? JSON.stringify(v) : String(v));
-const allow = { limit: async () => ({ success: true }) };
+const allow = { limit: () => Promise.resolve({ success: true }) };
 
 async function fetchWith(e: never, path: string, init: RequestInit = {}, origin = ORIGIN): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(origin + path, init), e, ctx);
   await waitOnExecutionContext(ctx);
-  return res as Response;
+  return res;
 }
 const codeReq = (email = "root@example.com"): RequestInit => ({ method: "POST", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
 
@@ -49,7 +49,7 @@ describe("adversarial: operator console ENVIRONMENT fails closed", () => {
         ["/api/bootstrap", {}, "http://admin.rose.test"],
         ["/", {}, ORIGIN],
       ] as const) {
-        const res = await fetchWith(withEnv(v), path, init as RequestInit, origin);
+        const res = await fetchWith(withEnv(v), path, init, origin);
         const text = await res.text();
         expect(res.status, `${label(v)} ${path}`).toBe(500);
         expect(res.headers.get("Set-Cookie")).toBeNull();
