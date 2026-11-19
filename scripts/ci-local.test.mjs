@@ -2,12 +2,17 @@
 // Drift between .github/workflows/ci.yml and `pnpm ci:local`. If CI gains a command the local
 // runner does not run, these tests fail and name it.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { STEPS } from "./ci-local.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { ALLOWED_SKIPS, PENTEST_COMMAND, STEPS } from "./ci-local.mjs";
 
 const CI = ".github/workflows/ci.yml";
 const SUMMARY = ".rose/ci-local/last-run.json";
+const ROOT = resolve(import.meta.dirname, "..");
+const CI_LOCAL = fileURLToPath(new URL("./ci-local.mjs", import.meta.url));
 const read = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 
 /** Commands ci.yml runs that the runner implements itself instead of shelling out to. */
@@ -15,6 +20,10 @@ const NATIVE = new Map([
   [
     "nohup node scripts/dev.mjs > dev.log 2>&1 & for i in $(seq 1 90); do curl -sf http://localhost:5174/api/bootstrap | grep -q '\"root\"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0 sleep 1 done cat dev.log; exit 1",
     "Start the local stack: ci.yml backgrounds scripts/dev.mjs and polls it with curl; ci-local.mjs does that natively (fetch) and stops the process group afterwards, so there is no `run:` for it.",
+  ],
+  [
+    "pnpm pentest",
+    "Attack it: ci-local runs the same harness in strict mode with today's allowed skips instead of shelling out to the bare command.",
   ],
 ]);
 
@@ -68,6 +77,31 @@ test("order: verify steps keep ci.yml's relative order", () => {
   const positions = local.map((command) => ciCommands().indexOf(command));
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b), "a verify step is out of ci.yml order");
   assert.equal(positions.length, new Set(positions).size, "a verify command runs twice in ci.yml");
+});
+
+test("pentest runs strict and allows exactly today's skips", () => {
+  const step = STEPS.find((s) => s.job === "pentest" && s.name === "Attack it");
+  assert.equal(step.native, "pentest");
+  assert.match(PENTEST_COMMAND, /^node scripts\/pentest\.mjs --strict( --allow-skip \S+)+$/);
+  for (const id of ALLOWED_SKIPS) assert.ok(PENTEST_COMMAND.includes(`--allow-skip ${id}`), id);
+  assert.ok(ALLOWED_SKIPS.includes("AUTH-09"), "AUTH-09 is a known skip until --slow reaches ci:local");
+});
+
+test("a failing step exits non-zero and skips the rest", () => {
+  const steps = [
+    { job: "verify", name: "Passes", run: 'node -e "process.exit(0)"' },
+    { job: "verify", name: "Fails", run: 'node -e "process.exit(1)"' },
+    { job: "verify", name: "After", run: 'node -e "process.exit(0)"' },
+  ];
+  const source = `import { main } from ${JSON.stringify(pathToFileURL(CI_LOCAL).href)};
+const code = await main(["--here", "--job", "verify"], { steps: ${JSON.stringify(steps)} });
+process.exit(code);`;
+  const r = spawnSync(process.execPath, ["--input-type=module", "--eval", source], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.match(`${r.stdout}${r.stderr}`, /Fails/);
+  const summary = JSON.parse(readFileSync(join(ROOT, SUMMARY), "utf8"));
+  assert.deepEqual(summary.steps.map((s) => [s.name, s.status]), [["Passes", "passed"], ["Fails", "failed"], ["After", "skipped"]]);
+  assert.equal(summary.ok, false);
 });
 
 test("STEPS mirror both jobs, verify first", () => {

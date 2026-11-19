@@ -22,6 +22,11 @@ const SUMMARY = join(LOG_DIR, "last-run.json");
 const DEV_LOG = join(LOG_DIR, "dev.log");
 export const PORTS = [5173, 5174, 8787];
 
+/** Checks that still skip on the local dev stack. Each Q22 change removes its ids from this list. */
+export const ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+/** ci.yml's `pnpm pentest`, run so that a skip fails unless it is listed above. */
+export const PENTEST_COMMAND = `node scripts/pentest.mjs --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
+
 /** One entry per `run:` command in ci.yml, in ci.yml order. `native` steps are implemented here. */
 export const STEPS = [
   { job: "verify", name: "Install", run: "pnpm install --frozen-lockfile" },
@@ -33,7 +38,7 @@ export const STEPS = [
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },
   { job: "verify", name: "Build", run: "pnpm build" },
   { job: "pentest", name: "Start the local stack", native: "dev-stack" },
-  { job: "pentest", name: "Attack it", run: "pnpm pentest" },
+  { job: "pentest", name: "Attack it", native: "pentest" },
   { job: "pentest", name: "Stop the local stack", native: "dev-stack-stop" },
 ];
 
@@ -224,7 +229,22 @@ function printSummary(result) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
-export async function main(argv = process.argv.slice(2)) {
+async function runStepOrNative(step, dir) {
+  if (!step.native) return runStep(step.run, dir);
+  if (step.native === "dev-stack") {
+    return nativeStep(async () => {
+      startDevStack(dir);
+      await waitForStack();
+    });
+  }
+  if (step.native === "dev-stack-stop") return nativeStep(stopDevStack);
+  if (step.native === "pentest") return runStep(PENTEST_COMMAND, dir);
+  return nativeStep(() => {
+    throw new Error(`unknown native step: ${step.native}`);
+  });
+}
+
+export async function main(argv = process.argv.slice(2), { steps = STEPS } = {}) {
   const opts = parseArgs(argv);
   const sha = await headSha();
   const jobs = opts.job ? [opts.job] : ["verify", "pentest"];
@@ -261,19 +281,16 @@ export async function main(argv = process.argv.slice(2)) {
   let error = null;
   try {
     for (const job of jobs) {
-      const steps = STEPS.filter((s) => s.job === job);
+      const jobSteps = steps.filter((s) => s.job === job);
       if (job === "pentest") await assertPortsFree();
-      for (const step of steps) {
+      for (const step of jobSteps) {
         if (!ok) {
           result.push({ job, name: step.name, status: "skipped", seconds: 0 });
           continue;
         }
         if (interrupted) throw new Error("interrupted");
         const started = Date.now();
-        const code = await (step.native === "dev-stack" ? nativeStep(async () => {
-          startDevStack(dir);
-          await waitForStack();
-        }) : step.native === "dev-stack-stop" ? nativeStep(stopDevStack) : runStep(step.run, dir));
+        const code = await runStepOrNative(step, dir);
         const seconds = (Date.now() - started) / 1000;
         const passed = code === 0;
         result.push({ job, name: step.name, status: passed ? "passed" : "failed", seconds: Math.round(seconds * 10) / 10 });
@@ -330,7 +347,7 @@ async function nativeStep(fn) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .then((code) => process.exit(code))
     .catch((e) => {
