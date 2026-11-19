@@ -130,6 +130,7 @@ Already have a service? → [docs/multi-tenanting-a-service.md](docs/multi-tenan
 | [Architecture](docs/architecture.md) | The two planes, request lifecycle, where data lives |
 | [Tenancy and isolation](docs/tenancy-and-isolation.md) | Threat model: every threat, its control, and the test that proves it |
 | [Authentication](docs/authentication.md) | Passkeys, email codes, sessions, signup, operators |
+| [Internals](docs/internals/README.md) | Why the security core is built the way it is, area by area |
 | [Encryption](docs/encryption.md) | Key hierarchy, field encryption, rotation |
 | [Adding a module](docs/adding-a-module.md) | Build your product on the kit |
 | [Building UI](docs/ui.md) | Page template, tables, drawers, help |

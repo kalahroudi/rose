@@ -104,7 +104,10 @@ Setup. Domains inside your own base domain, and domains already attached to anot
 tenant, are rejected.
 
 When a tenant moves to a custom domain, sessions and passkeys are per host: people sign
-in again with an email code and re-add a passkey there.
+in again with an email code. A passkey from the old host can not sign in on the new one
+and, because of a known bug, blocks adding or removing passkeys there; delete it on the
+old host first, or have an operator delete the row
+([Authentication](authentication.md#passkeys)).
 
 ## Module or gateway?
 
