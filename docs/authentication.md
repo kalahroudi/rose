@@ -52,10 +52,10 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
   the new host asks for a passkey sign-in it can not accept and adding or removing a
   passkey there is refused. Delete the old passkey while still on the old host, or have
   an operator delete the row. This is a known bug, tracked separately.
-- Passkey verification in this repository has tests only for the realm and freshness
-  rules. Challenge single use, challenge expiry, the challenge-to-user binding on
-  registration, and the `finishLogin` / `finishRegistration` rejections have no test
-  yet; the full browser ceremony is not automated in the test suite.
+- The vitest suite tests only the realm and freshness rules for passkeys. The full
+  ceremony is exercised by `pnpm pentest` (PK-01 to PK-03) with a software authenticator:
+  replay of a used challenge, forged and cross-site assertions, cross-tenant challenges
+  and the challenge-to-user binding on registration. Challenge expiry has no test.
 
 ## Sessions
 

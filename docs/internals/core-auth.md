@@ -201,11 +201,11 @@ either way.
 
 ## Known limits
 
-- The full browser ceremony is not automated. Only the realm and freshness rules are
-  tested; challenge single use, challenge expiry, the challenge-to-user binding on
-  registration, and the `finishLogin` / `finishRegistration` rejections have no test
-  yet. A real authenticator is needed for end-to-end proof, which the pentest harness
-  supplies outside this suite. This is stated in
+- The vitest suite covers only the realm and freshness rules. `pnpm pentest` (PK-01 to
+  PK-03, in `scripts/pentest/passkeys.mjs`) drives the ceremony with a software
+  authenticator and covers challenge replay, the `finishLogin` / `finishRegistration`
+  rejections, cross-tenant challenges and the challenge-to-user binding on registration.
+  Challenge expiry is the one rule with no test. See
   [Authentication](../authentication.md#passkeys).
 - **Known bug: a host change locks passkeys.** After a tenant moves to a new host, the
   old host's passkey no longer signs in there (its row keeps the old RP ID), but
