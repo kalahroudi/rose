@@ -13,13 +13,14 @@
     "setup": "node scripts/setup.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "pnpm -r --filter './apps/*' build",
+    "lint": "oxlint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:coverage": "pnpm -r --if-present test:coverage",
     "guard": "node scripts/guard.mjs",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "test:scripts:coverage": "node -e \"require('fs').mkdirSync('scripts/coverage',{recursive:true})\" && node --test --experimental-test-coverage --test-coverage-include=\"scripts/**/*.mjs\" --test-coverage-include=\"examples/**/*.mjs\" --test-coverage-exclude=\"**/*.test.mjs\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=scripts/coverage/lcov.info \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
-    "verify": "pnpm guard && pnpm test:scripts && pnpm typecheck && pnpm test",
+    "verify": "pnpm guard && pnpm lint && pnpm test:scripts && pnpm typecheck && pnpm test",
     "ci:local": "node scripts/ci-local.mjs",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
@@ -27,6 +28,7 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
+    "oxlint": "1.94.0",
     "typescript": "^7.0.2"
   }
 }

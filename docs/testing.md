@@ -1,8 +1,33 @@
 # Testing
 
 ```sh
-pnpm verify      # guard + typecheck + every suite. Run before every commit and PR.
+pnpm verify      # guard + lint + typecheck + every suite. Run before every commit and PR.
 ```
+
+## Lint
+
+```sh
+pnpm lint        # oxlint over the whole repo; under a second
+```
+
+`pnpm lint` runs [oxlint](https://oxc.rs/docs/guide/usage/linter) with `.oxlintrc.json`:
+the `correctness` category plus `typescript/no-explicit-any`, `no-unused-vars`,
+`no-debugger`, `eqeqeq` and `no-undef`. It runs in `pnpm verify` before the typecheck
+(it is the fastest gate), in CI right after the guardrails, and in the pre-commit hook.
+
+Fix the cause: remove the unused import or variable, rename an unused parameter to `_x`,
+type the value instead of `any`. Do not disable a rule to get green. A rule that finds
+more than fifteen violations, or that would need a behaviour change to satisfy, stays
+`"off"` in the config with its reason recorded in a follow-up issue.
+
+`react/refs` and `react/set-state-in-effect` are off. Satisfying either would change
+behaviour, so they are tracked as follow-up task Q15.
+
+`no-undef` needs the environment's globals. The config makes Node globals global
+(`process`, `Buffer`), which covers the build scripts and the Node test runner. The
+worker and web code is left with browser globals enabled so `Request`, `Response`,
+`fetch`, `crypto`, `URL`, `Headers`, `console` and timers resolve in one shared set,
+matching the Workers runtime they run on.
 
 ## Run CI locally
 

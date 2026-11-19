@@ -26,6 +26,7 @@ export const PORTS = [5173, 5174, 8787];
 export const STEPS = [
   { job: "verify", name: "Install", run: "pnpm install --frozen-lockfile" },
   { job: "verify", name: "Guardrails", run: "pnpm guard" },
+  { job: "verify", name: "Lint", run: "pnpm lint" },
   { job: "verify", name: "Guard self-tests (with coverage)", run: "pnpm test:scripts:coverage" },
   { job: "verify", name: "Typecheck", run: "pnpm typecheck" },
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },

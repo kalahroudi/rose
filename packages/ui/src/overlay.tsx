@@ -26,8 +26,13 @@ function useLayer(open: boolean, onClose: () => void) {
         if (items.length === 0) return;
         const a = items[0]!;
         const z = items[items.length - 1]!;
-        if (e.shiftKey && document.activeElement === a) (e.preventDefault(), z.focus());
-        else if (!e.shiftKey && document.activeElement === z) (e.preventDefault(), a.focus());
+        if (e.shiftKey && document.activeElement === a) {
+          e.preventDefault();
+          z.focus();
+        } else if (!e.shiftKey && document.activeElement === z) {
+          e.preventDefault();
+          a.focus();
+        }
       }
     };
     el?.addEventListener("keydown", onKey);

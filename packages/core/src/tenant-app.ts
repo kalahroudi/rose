@@ -9,7 +9,7 @@ import { enqueueJob, listJobs, runDueJobs, runJobMessages, type JobHandler } fro
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
-  addMembership, changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
+  changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
 } from "./control/users";
 import { now } from "./ids";

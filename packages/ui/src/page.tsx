@@ -121,8 +121,14 @@ function JobsBell({ path, href }: { path: string; href: string }) {
     for (const j of q.data.items) {
       const before = prev.get(j.id);
       const wasActive = before === "queued" || before === "running" || (before === undefined && Date.now() - j.createdAt < 60_000);
-      if (wasActive && j.status === "succeeded") (toast.success(`${j.title}: done`), (settled = true));
-      if (wasActive && j.status === "failed") (toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`), (settled = true));
+      if (wasActive && j.status === "succeeded") {
+        toast.success(`${j.title}: done`);
+        settled = true;
+      }
+      if (wasActive && j.status === "failed") {
+        toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`);
+        settled = true;
+      }
     }
     if (settled) {
       setUnread(true);
@@ -213,7 +219,6 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
   }, [toggle]);
 
   const isActive = (href: string) => (href === "/" ? location === "/" : location === href || location.startsWith(`${href}/`));
-  let lastSection: string | undefined;
 
   return (
     <div className="shell" data-collapsed={collapsed}>
@@ -226,9 +231,8 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
           </span>
         </Link>
         <div className="nav-list">
-          {nav.map((item) => {
-            const head = item.section && item.section !== lastSection ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
-            lastSection = item.section;
+          {nav.map((item, i) => {
+            const head = item.section && item.section !== nav[i - 1]?.section ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
             return (
               <div key={item.href} style={{ display: "contents" }}>
                 {head}

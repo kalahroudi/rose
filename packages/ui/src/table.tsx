@@ -137,7 +137,7 @@ export function DataTable<T>({ list, data, fetching, columns, rowKey, onRowClick
   const [allMatching, setAllMatching] = useState(false);
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pageKeys = useMemo(() => rows.map(rowKey), [rows, rowKey]);
+  const pageKeys = useMemo(() => (data?.items ?? []).map(rowKey), [data?.items, rowKey]);
   const clear = useCallback(() => (setIds(new Set()), setAllMatching(false)), []);
   // Selection never silently carries over to a different result set.
   useEffect(clear, [list.query, clear]);

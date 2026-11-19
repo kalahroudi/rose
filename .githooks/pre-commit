@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Fast checks before every commit: project guardrails, then types.
+# Fast checks before every commit: project guardrails, lint, then types.
 set -e
 cd "$(git rev-parse --show-toplevel)"
 node scripts/guard.mjs
+pnpm lint
 pnpm -s typecheck
