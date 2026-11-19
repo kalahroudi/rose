@@ -88,12 +88,12 @@ export function ApiKeysPage() {
         )}
       </Gate>
 
-      <FormDrawer
+      <FormDrawer<{ name: string; role: "member" | "admin"; expiry: string }>
         open={creating}
         onClose={() => setCreating(false)}
         title="Create API key"
         subtitle="The key works for this workspace only."
-        initial={{ name: "", role: "member" as "member" | "admin", expiry: "" }}
+        initial={{ name: "", role: "member", expiry: "" }}
         submitLabel="Create key"
         validate={(v) => (v.name.trim() ? {} : { name: "Give the key a name." })}
         onSubmit={async (v) => {

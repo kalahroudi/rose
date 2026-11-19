@@ -7,9 +7,9 @@ export interface Workspace {
   tenant: TenantView;
   session: SessionView;
   /** UI hint only: the server enforces every permission again. */
-  can(permission: string): boolean;
+  can: (permission: string) => boolean;
   /** Called after the workspace has been scheduled for deletion. */
-  markDeleted(deleteAfter: number | null): void;
+  markDeleted: (deleteAfter: number | null) => void;
 }
 
 export const WorkspaceContext = createContext<Workspace | null>(null);

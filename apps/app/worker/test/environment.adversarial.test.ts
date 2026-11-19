@@ -26,6 +26,6 @@ describe("adversarial: the shipped tenant app worker fails closed on ENVIRONMENT
     const res = await worker.fetch(new Request("https://rose.test/api/bootstrap"), withEnv("development"), ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { dev: boolean }).dev).toBe(true);
+    expect((await res.json<{ dev: boolean }>()).dev).toBe(true);
   });
 });

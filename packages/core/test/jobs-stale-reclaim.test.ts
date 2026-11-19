@@ -43,8 +43,8 @@ describe("stale-run reclaim", () => {
   });
 
   it("every registered tenant handler declares itself idempotent", () => {
-    const mod = { id: "x", migrations: [], jobs: { go: async () => null } } as never;
+    const mod = { id: "x", migrations: [], jobs: { go: () => Promise.resolve(null) } } as never;
     for (const [name, h] of Object.entries(tenantJobHandlers([mod]))) expect(h.idempotent, name).toBe(true);
-    expect(idempotent(async () => ({ done: true }) as JobOutcome).idempotent).toBe(true);
+    expect(idempotent(() => Promise.resolve({ done: true } as JobOutcome)).idempotent).toBe(true);
   });
 });

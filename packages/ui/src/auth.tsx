@@ -66,7 +66,7 @@ export interface SignInProps<R> {
   base: string;
   /** Offer "Sign in with a passkey" (the API must expose `/passkey/login/*` under `base`). */
   passkeys?: boolean;
-  onDone(result: R, email: string): void;
+  onDone: (result: R, email: string) => void;
 }
 
 /**

@@ -12,13 +12,13 @@ const odd: unknown[] = [
 ];
 const withEnv = (v: unknown, extra: Record<string, unknown> = {}) => ({ ...env, ENVIRONMENT: v, ...extra }) as never;
 const label = (v: unknown) => (typeof v === "string" ? JSON.stringify(v) : String(v));
-const allow = { limit: async () => ({ success: true }) };
+const allow = { limit: () => Promise.resolve({ success: true }) };
 
 async function fetchWith(e: never, path: string, init: RequestInit = {}, origin = ORIGIN): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(origin + path, init), e, ctx);
   await waitOnExecutionContext(ctx);
-  return res as Response;
+  return res;
 }
 const codeReq = (email = "root@example.com"): RequestInit => ({ method: "POST", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
 
@@ -49,7 +49,7 @@ describe("adversarial: operator console ENVIRONMENT fails closed", () => {
         ["/api/bootstrap", {}, "http://admin.rose.test"],
         ["/", {}, ORIGIN],
       ] as const) {
-        const res = await fetchWith(withEnv(v), path, init as RequestInit, origin);
+        const res = await fetchWith(withEnv(v), path, init, origin);
         const text = await res.text();
         expect(res.status, `${label(v)} ${path}`).toBe(500);
         expect(res.headers.get("Set-Cookie")).toBeNull();
@@ -121,7 +121,7 @@ describe("adversarial: operator console in production", () => {
   it("refuses a session over plain HTTP", async () => {
     // Obtain a real operator session through development sign-in, then replay it over HTTP in production.
     const dev = withEnv("development");
-    const { devCode } = (await (await fetchWith(dev, "/api/auth/code/request", codeReq())).json()) as { devCode: string };
+    const { devCode } = await (await fetchWith(dev, "/api/auth/code/request", codeReq())).json<{ devCode: string }>();
     const v = await fetchWith(dev, "/api/auth/code/verify", { method: "POST", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify({ email: "root@example.com", code: devCode }) });
     expect(v.status).toBe(200);
     const token = (v.headers.get("Set-Cookie") ?? "").split(";")[0]!.split("=")[1]!;
@@ -136,7 +136,7 @@ describe("adversarial: operator console in development still works", () => {
   it("devCode is returned, missing RL_AUTH tolerated, domain auto-activates without Cloudflare", async () => {
     const res = await fetchWith(withEnv("development", { RL_AUTH: undefined }), "/api/auth/code/request", codeReq("root@example.com"));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { devCode?: string }).devCode).toMatch(/^\d{6}$/);
+    expect((await res.json<{ devCode?: string }>()).devCode).toMatch(/^\d{6}$/);
 
     const { hostname, jobId } = await pendingDomain();
     await worker.queue({ messages: [{ body: { jobId }, ack() {} }] }, withEnv("development"));

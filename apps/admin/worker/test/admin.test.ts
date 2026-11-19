@@ -43,7 +43,7 @@ describe("operator console", () => {
     expect(await signIn("stranger@example.com")).toBeNull();
     const cookie = await root();
     expect(cookie).toMatch(/^__Host-rose_admin=/);
-    const boot = await json<{ session: { role: string } }>(call("/api/bootstrap", { cookie: cookie! }));
+    const boot = await json<{ session: { role: string } }>(call("/api/bootstrap", { cookie }));
     expect(boot.session.role).toBe("owner");
   });
 

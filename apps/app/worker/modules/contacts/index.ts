@@ -128,7 +128,7 @@ export const contacts = defineModule({
   jobs: {
     // Imports are a job so a large paste never blocks the request or the UI.
     import: async (ctx, payload) => {
-      const lines = String(payload.csv ?? "").split(/\r?\n/).filter((l) => l.trim());
+      const lines = (typeof payload.csv === "string" ? payload.csv : "").split(/\r?\n/).filter((l) => l.trim());
       let imported = 0;
       let skipped = 0;
       for (const [i, line] of lines.entries()) {

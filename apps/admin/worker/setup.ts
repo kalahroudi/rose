@@ -31,7 +31,7 @@ async function latestCi(repo: string, token: string | null): Promise<{ status: s
       headers: { "User-Agent": "rose-starter-kit", Accept: "application/vnd.github+json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
     if (!res.ok) return null;
-    const run = ((await res.json()) as { workflow_runs?: { status: string; conclusion: string | null; html_url: string }[] }).workflow_runs?.[0];
+    const run = (await res.json<{ workflow_runs?: { status: string; conclusion: string | null; html_url: string }[] }>()).workflow_runs?.[0];
     return run ? { status: run.conclusion ?? run.status, url: run.html_url } : null;
   } catch {
     return null;

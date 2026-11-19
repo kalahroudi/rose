@@ -14,8 +14,8 @@ const rnd = () => Math.random().toString(36).slice(2, 10);
 const freshEmail = (p: string) => `${p}-${rnd()}@example.com`;
 
 const verify = async (email: string) => {
-  const { devCode } = (await (await post("/api/root/code/request", { email })).json()) as { devCode: string };
-  return ((await (await post("/api/root/code/verify", { email, code: devCode })).json()) as { ticket: string }).ticket;
+  const { devCode } = await (await post("/api/root/code/request", { email })).json<{ devCode: string }>();
+  return (await (await post("/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>()).ticket;
 };
 const own = async (email: string, n: number, opts: { status?: string; role?: "owner" | "admin" | "member" } = {}) => {
   const user = await ensureUser(env.DB, email);
@@ -95,7 +95,7 @@ describe("workspace cap on POST /api/root/enter (adversarial)", () => {
     const slug = `blocked-${rnd()}`;
     const res = await create(ticket, slug);
     expect(res.status).toBe(403);
-    const body = (await res.json()) as Record<string, unknown>;
+    const body = await res.json<Record<string, unknown>>();
     expect(JSON.stringify(body)).toMatch(/limit/i);
     expect(await counts()).toEqual(before);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE slug = ?").bind(slug).first()).toBeNull();
@@ -161,7 +161,7 @@ describe("workspace cap on POST /api/root/enter (adversarial)", () => {
     for (const s of [slugs[0], slugs[7]]) {
       const res = await post("/api/root/enter", { ticket: await verify(email), slug: s });
       expect(res.status).toBe(200);
-      expect(((await res.json()) as { url: string }).url).toContain("/auth/handoff?token=");
+      expect((await res.json<{ url: string }>()).url).toContain("/auth/handoff?token=");
     }
   });
 

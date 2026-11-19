@@ -13,8 +13,8 @@ export interface ListState {
   filters: Record<string, string>;
   /** Query string for the API call, and a stable cache key. */
   query: string;
-  set(patch: Partial<{ page: number; pageSize: number; q: string; sort: string }> & { filters?: Record<string, string> }): void;
-  reset(): void;
+  set: (patch: Partial<{ page: number; pageSize: number; q: string; sort: string }> & { filters?: Record<string, string> }) => void;
+  reset: () => void;
   active: boolean;
 }
 
@@ -92,8 +92,8 @@ export interface DataTableProps<T> {
   data: Page<T> | undefined;
   fetching?: boolean;
   columns: Column<T>[];
-  rowKey(row: T): string;
-  onRowClick?(row: T): void;
+  rowKey: (row: T) => string;
+  onRowClick?: (row: T) => void;
   searchPlaceholder?: string;
   /** Set false when the endpoint has no text search; the box is then not shown. */
   searchable?: boolean;
@@ -102,15 +102,15 @@ export interface DataTableProps<T> {
   /** Buttons at the right of the toolbar. */
   toolbar?: ReactNode;
   /** Enables row checkboxes and renders the bulk-action bar. */
-  bulkActions?(selection: Selection): ReactNode;
-  rowActions?(row: T): ReactNode | null;
+  bulkActions?: (selection: Selection) => ReactNode;
+  rowActions?: (row: T) => ReactNode | null;
   empty: { icon?: IconName; title: string; body?: string; action?: ReactNode | undefined };
   /** Row to highlight briefly, e.g. the one just created. */
   freshKey?: string | null | undefined;
   noun?: [singular: string, plural: string];
 }
 
-function SearchBox({ value, onChange, placeholder }: { value: string; onChange(v: string): void; placeholder: string }) {
+function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
   const [text, setText] = useState(value);
   const latest = useRef(onChange);
   latest.current = onChange;

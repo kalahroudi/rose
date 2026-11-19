@@ -46,7 +46,7 @@ function useLayer(open: boolean, onClose: () => void) {
 
 export interface DrawerProps {
   open: boolean;
-  onClose(): void;
+  onClose: () => void;
   title: ReactNode;
   subtitle?: ReactNode;
   size?: "md" | "lg" | "xl" | undefined;
@@ -80,7 +80,7 @@ export function Drawer({ open, onClose, title, subtitle, size = "md", footer, ch
 }
 
 /** Preview a third-party page beside your work. Some sites refuse to be embedded; the header link is the fallback. */
-export function PreviewDrawer({ url, onClose }: { url: string | null; onClose(): void }) {
+export function PreviewDrawer({ url, onClose }: { url: string | null; onClose: () => void }) {
   return (
     <Drawer open={!!url} onClose={onClose} size="xl" bare title="Reference preview" subtitle={url ? <a className="link" href={url} target="_blank" rel="noopener noreferrer">Open in a new tab if the preview stays blank<Icon name="external" /></a> : null}>
       {url ? <iframe className="drawer-frame" src={url} title="Reference preview" sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : null}
@@ -121,7 +121,7 @@ export function useConfirm(): ConfirmApi {
   return ctx;
 }
 
-function ConfirmDialog({ pending, done }: { pending: Pending; done(result: boolean): void }) {
+function ConfirmDialog({ pending, done }: { pending: Pending; done: (result: boolean) => void }) {
   const ref = useLayer(true, () => done(false));
   const [typed, setTyped] = useState("");
   const ready = pending.kind === "confirm" || typed === pending.name;

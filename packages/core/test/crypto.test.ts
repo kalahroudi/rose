@@ -67,8 +67,8 @@ describe("envelope keys", () => {
 
   it("stores module secrets encrypted, readable only through the owning tenant", async () => {
     const a = await createTestTenant(env, SELF);
-    const created = (await (await a.fetch("/api/m/notes", { body: { title: "t", secret: "p@ss" } })).json()) as { id: string };
-    const read = (await (await a.fetch(`/api/m/notes/${created.id}`)).json()) as { secret: string; raw: string };
+    const created = await (await a.fetch("/api/m/notes", { body: { title: "t", secret: "p@ss" } })).json<{ id: string }>();
+    const read = await (await a.fetch(`/api/m/notes/${created.id}`)).json<{ secret: string; raw: string }>();
     expect(read.secret).toBe("p@ss");
     expect(read.raw).toMatch(/^v1\./);
     expect(read.raw).not.toContain("p@ss");
@@ -91,10 +91,10 @@ describe("upstream gateway", () => {
     const a = await createTestTenant(env, SELF);
     let seen: Request | undefined;
     const original = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      seen = new Request(input as RequestInfo, init);
-      return new Response("upstream-ok", { headers: { "Set-Cookie": "evil=1", "X-Kept": "yes" } });
-    }) as typeof fetch;
+    globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      seen = new Request(input, init);
+      return Promise.resolve(new Response("upstream-ok", { headers: { "Set-Cookie": "evil=1", "X-Kept": "yes" } }));
+    };
     try {
       const res = await a.fetch("/svc/orders?x=1", { headers: { "X-Rose-Tenant-Id": "tn_forged" } });
       expect(res.status).toBe(200);

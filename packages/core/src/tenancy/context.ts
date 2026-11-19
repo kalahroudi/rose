@@ -32,7 +32,7 @@ export class TenantDb {
   }
 
   async all<T = Record<string, SqlValue>>(sql: string, params: SqlValue[] = []): Promise<T[]> {
-    return ((await this.stub.exec(this.tenant.id, { sql, params })) as SqlResult).rows as T[];
+    return (await this.stub.exec(this.tenant.id, { sql, params })).rows as T[];
   }
 
   async first<T = Record<string, SqlValue>>(sql: string, params: SqlValue[] = []): Promise<T | null> {
@@ -41,12 +41,12 @@ export class TenantDb {
 
   /** Returns the number of rows inserted, updated or deleted. */
   async run(sql: string, params: SqlValue[] = []): Promise<number> {
-    return ((await this.stub.exec(this.tenant.id, { sql, params })) as SqlResult).changes;
+    return (await this.stub.exec(this.tenant.id, { sql, params })).changes;
   }
 
   /** All statements commit together or not at all. */
   async batch(statements: SqlStatement[]): Promise<SqlResult[]> {
-    return (await this.stub.batch(this.tenant.id, statements)) as SqlResult[];
+    return this.stub.batch(this.tenant.id, statements);
   }
 }
 
@@ -59,7 +59,7 @@ export async function tenantCrypto(env: Pick<TenantWorkerEnv, "TENANT_DO">, tena
   const hit = keyCache.get(tenant.id);
   if (hit && hit.expires > Date.now()) return hit.crypto;
   const stub = env.TENANT_DO.get(env.TENANT_DO.idFromName(tenant.id));
-  const dek = new Uint8Array((await stub.dataKey(tenant.id)) as ArrayBuffer);
+  const dek = new Uint8Array(await stub.dataKey(tenant.id));
   const crypto = await TenantCrypto.fromDek(tenant.id, dek);
   if (keyCache.size >= MAX_KEYS) keyCache.delete(keyCache.keys().next().value!);
   keyCache.set(tenant.id, { crypto, expires: Date.now() + KEY_TTL });

@@ -147,10 +147,10 @@ describe("sign-in code verify rate limits", () => {
   const limiter = (limit: number) => {
     const counts = new Map<string, number>();
     return {
-      async limit({ key }: { key: string }) {
+      limit({ key }: { key: string }) {
         const n = (counts.get(key) ?? 0) + 1;
         counts.set(key, n);
-        return { success: n <= limit };
+        return Promise.resolve({ success: n <= limit });
       },
     };
   };

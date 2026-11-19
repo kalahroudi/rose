@@ -452,7 +452,7 @@ function parseFn(toks, from, to) {
  */
 export function middlewareFingerprint(handlerToks, bindings = []) {
   const code = handlerToks.map((t) => [t.type, t.value ?? null, t.text ?? null]);
-  return createHash("sha256").update(JSON.stringify([code, [...bindings].sort()])).digest("hex").slice(0, 16);
+  return createHash("sha256").update(JSON.stringify([code, [...bindings].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))])).digest("hex").slice(0, 16);
 }
 
 /** Built-ins an inline pre-auth middleware may use without an import. */

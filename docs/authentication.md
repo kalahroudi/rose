@@ -47,10 +47,15 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
   by the browser on `globex.example.com`, and the server would reject it anyway.
 - Discoverable credentials with user verification required; challenges are single-use
   rows that expire after 5 minutes.
-- If a tenant moves to a custom domain, passkeys registered on the old host do not carry
-  over. People sign in with an email code and add a passkey on the new host.
-- Passkey verification in this repository is covered for challenge handling and
-  rejection paths; the full browser ceremony is not automated in the test suite.
+- If a tenant moves to a custom domain, passkeys registered on the old host can not sign
+  in on the new host. The old rows still exist, and the freshness check counts them, so
+  the new host asks for a passkey sign-in it can not accept and adding or removing a
+  passkey there is refused. Delete the old passkey while still on the old host, or have
+  an operator delete the row. This is a known bug, tracked separately.
+- The vitest suite tests only the realm and freshness rules for passkeys. The full
+  ceremony is exercised by `pnpm pentest` (PK-01 to PK-03) with a software authenticator:
+  replay of a used challenge, forged and cross-site assertions, cross-tenant challenges
+  and the challenge-to-user binding on registration. Challenge expiry has no test.
 
 ## Sessions
 

@@ -10,7 +10,7 @@ describe("operators with a passkey can not sign in by emailed code", () => {
   it("refuses codes once a passkey is registered, even a valid one", async () => {
     const email = "root@example.com";
     // First sign-in (bootstrap or existing operator) by code works while there is no passkey.
-    const first = (await (await post("/api/auth/code/request", { email })).json()) as { devCode?: string };
+    const first = await (await post("/api/auth/code/request", { email })).json<{ devCode?: string }>();
     const staleCode = first.devCode;
     expect(staleCode).toBeTruthy();
     const ok = await post("/api/auth/code/verify", { email, code: staleCode });
@@ -21,7 +21,7 @@ describe("operators with a passkey can not sign in by emailed code", () => {
       .bind("cred-op-1", user!.id, "admin.rose.test", Date.now()).run();
 
     // No code is issued any more.
-    const again = (await (await post("/api/auth/code/request", { email })).json()) as { devCode?: string };
+    const again = await (await post("/api/auth/code/request", { email })).json<{ devCode?: string }>();
     expect(again.devCode).toBeUndefined();
     // A code issued before the passkey existed is refused too.
     const late = await post("/api/auth/code/verify", { email, code: staleCode });

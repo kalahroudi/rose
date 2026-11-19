@@ -100,10 +100,10 @@ describe("adversarial: tenant worker ENVIRONMENT fails closed", () => {
 
   it("guardFetch never calls the inner handler for an odd value", async () => {
     let called = 0;
-    const f = guardFetch(async () => { called++; return new Response("inner"); });
+    const f = guardFetch(() => { called++; return Promise.resolve(new Response("inner")); });
     for (const v of odd) {
-      const res = await f(new Request("https://x.rose.test/"), withEnv(v) as { ENVIRONMENT: "production" });
-      expect((res as Response).status).toBe(500);
+      const res = await f(new Request("https://x.rose.test/"), withEnv(v));
+      expect(res.status).toBe(500);
     }
     expect(called).toBe(0);
   });
@@ -111,7 +111,7 @@ describe("adversarial: tenant worker ENVIRONMENT fails closed", () => {
 
 describe("adversarial: production disables every dev behaviour", () => {
   const prodNoRl = (extra: Record<string, unknown> = {}) => withEnv("production", { RL_AUTH: undefined, ...extra });
-  const allow = { limit: async () => ({ success: true }) };
+  const allow = { limit: () => Promise.resolve({ success: true }) };
 
   it("missing RL_AUTH fails closed on code request and verify, with no devCode", async () => {
     const a = await createTestTenant(env, SELF);
@@ -159,7 +159,7 @@ describe("adversarial: production disables every dev behaviour", () => {
     const res = await worker.fetch(new Request(`${a.origin}/api/bootstrap`), withEnv("production", { RL_AUTH: allow }), ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { dev: boolean }).dev).toBe(false);
+    expect((await res.json<{ dev: boolean }>()).dev).toBe(false);
   });
 
   it("/__dev/tick is not available in production", async () => {
@@ -180,14 +180,14 @@ describe("adversarial: development still works", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { devCode?: string }).devCode).toMatch(/^\d{6}$/);
+    expect((await res.json<{ devCode?: string }>()).devCode).toMatch(/^\d{6}$/);
 
     const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method: "test" });
     const ctx2 = createExecutionContext();
     const res2 = await worker.fetch(new Request(`http://${a.host}/api/bootstrap`, { headers: { Cookie: `rose_session=${token}` } }), withEnv("development"), ctx2);
     await waitOnExecutionContext(ctx2);
     expect(res2.status).toBe(200);
-    const boot = (await res2.json()) as { dev: boolean; session: { user: { email: string } } | null };
+    const boot = await res2.json<{ dev: boolean; session: { user: { email: string } } | null }>();
     expect(boot.dev).toBe(true);
     expect(boot.session?.user.email).toBe(a.email);
   });

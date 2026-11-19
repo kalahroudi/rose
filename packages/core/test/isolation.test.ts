@@ -48,7 +48,7 @@ describe("tenant resolution", () => {
 describe("tenant lifecycle", () => {
   it("suspension cuts off sessions and API keys immediately", async () => {
     const a = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "ci" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "ci" } })).json<{ key: string }>()).key;
     expect((await a.fetch("/api/m/notes", { cookie: null, headers: { Authorization: `Bearer ${key}` } })).status).toBe(200);
     await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
     // No cache invalidation on purpose: the host cache may still say "active".
@@ -97,7 +97,7 @@ describe("workspace deletion safeguards", () => {
       if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
       return `__Host-rose_session=${token}`;
     };
-    const code = async (r: Response) => ((await r.json()) as { error: { code: string } }).error.code;
+    const code = async (r: Response) => (await r.json<{ error: { code: string } }>()).error.code;
     // Stale session.
     const stale = await sessionCookie("code", 11 * 60_000);
     const r1 = await a.fetch("/api/workspace/delete", { cookie: stale, body: { confirm: a.slug } });
@@ -129,7 +129,7 @@ describe("workspace deletion safeguards", () => {
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() + 60_000 }, { passkey: true })).toThrow();
     expect(() => assertFreshSession({ method: "passkey", createdAt: Date.now() - 10 * 60_000 }, { passkey: true })).toThrow();
     // API keys never delete.
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "k", role: "admin" } })).json<{ key: string }>()).key;
     expect((await a.fetch("/api/workspace/delete", { cookie: null, headers: { Authorization: `Bearer ${key}` }, body: { confirm: a.slug } })).status).toBe(403);
     expect((await a.fetch("/api/workspace/delete", { cookie: await sessionCookie("passkey"), body: { confirm: a.slug } })).status).toBe(202);
   });
@@ -147,7 +147,7 @@ describe("roles and API keys", () => {
   it("an API key works only on the tenant that issued it", async () => {
     const a = await createTestTenant(env, SELF);
     const b = await createTestTenant(env, SELF);
-    const key = ((await (await a.fetch("/api/api-keys", { body: { name: "agent", role: "admin" } })).json()) as { key: string }).key;
+    const key = (await (await a.fetch("/api/api-keys", { body: { name: "agent", role: "admin" } })).json<{ key: string }>()).key;
     const h = { Authorization: `Bearer ${key}` };
     expect((await a.fetch("/api/m/notes", { cookie: null, headers: h, body: { title: "via-key" } })).status).toBe(201);
     expect((await b.fetch("/api/m/notes", { cookie: null, headers: h })).status).toBe(401);
@@ -164,9 +164,9 @@ describe("roles and API keys", () => {
     await tenantTick(env, modules);
     expect(await (await a.fetch("/api/m/notes")).text()).toContain("job:hello");
     expect(await (await b.fetch("/api/m/notes")).text()).not.toContain("job:hello");
-    const jobs = (await (await a.fetch("/api/jobs")).json()) as { items: { status: string }[] };
+    const jobs = await (await a.fetch("/api/jobs")).json<{ items: { status: string }[] }>();
     expect(jobs.items[0]!.status).toBe("succeeded");
-    expect(((await (await b.fetch("/api/jobs")).json()) as { items: unknown[] }).items).toHaveLength(0);
+    expect((await (await b.fetch("/api/jobs")).json<{ items: unknown[] }>()).items).toHaveLength(0);
   });
 });
 
@@ -185,7 +185,7 @@ describe("queued work and deletion", () => {
 describe("job queue", () => {
   const fakeQueue = () => {
     const sent: { body: { jobId: string }; delaySeconds?: number }[] = [];
-    return { sent, send: async (body: { jobId: string }, o?: { delaySeconds?: number }) => void sent.push(o?.delaySeconds === undefined ? { body } : { body, delaySeconds: o.delaySeconds }) };
+    return { sent, send: (body: { jobId: string }, o?: { delaySeconds?: number }) => { sent.push(o?.delaySeconds === undefined ? { body } : { body, delaySeconds: o.delaySeconds }); return Promise.resolve(); } };
   };
   const batchOf = (ids: unknown[]) => {
     const acked: number[] = [];
@@ -203,7 +203,7 @@ describe("job queue", () => {
     expect(admin.sent).toEqual([{ body: { jobId: d.id }, delaySeconds: 30 }]);
 
     let runs = 0;
-    const handlers = { "t.app": async () => (runs++, { done: true as const }) };
+    const handlers = { "t.app": () => Promise.resolve((runs++, { done: true as const })) };
     // The same message delivered twice, plus junk: one run, everything acknowledged.
     const batch = batchOf([a.id, a.id, "job_missing", null, { $ne: 1 }]);
     await runJobMessages(qenv, handlers, batch);
@@ -211,7 +211,7 @@ describe("job queue", () => {
     expect(batch.acked).toHaveLength(5);
     expect(await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(a.id).first()).toEqual({ status: "succeeded" });
     // A message for a job that is not due yet does nothing.
-    await runJobMessages(qenv, { "domain.verify": async () => (runs++, { done: true as const }) }, batchOf([d.id]));
+    await runJobMessages(qenv, { "domain.verify": () => Promise.resolve((runs++, { done: true as const })) }, batchOf([d.id]));
     expect(runs).toBe(1);
   });
 
@@ -220,11 +220,11 @@ describe("job queue", () => {
     const app = fakeQueue();
     const qenv = { DB: env.DB, APP_JOBS: app };
     const wait = await enqueueJob(qenv, { type: "t.wait", scope: "platform", title: "waits" });
-    await runJobMessages(qenv, { "t.wait": async () => ({ done: false as const, retryInMs: 45_000 }) }, batchOf([wait.id]));
+    await runJobMessages(qenv, { "t.wait": () => Promise.resolve({ done: false as const, retryInMs: 45_000 }) }, batchOf([wait.id]));
     expect(app.sent.at(-1)).toEqual({ body: { jobId: wait.id }, delaySeconds: 45 });
 
     const bad = await enqueueJob(qenv, { type: "t.bad", scope: "platform", title: "fails" });
-    const boom = { "t.bad": async () => { throw new Error("boom"); } };
+    const boom = { "t.bad": () => Promise.reject(new Error("boom")) };
     for (let i = 0; i < 5; i++) {
       await env.DB.prepare("UPDATE jobs SET run_after = 0 WHERE id = ?").bind(bad.id).run();
       await runJobMessages(qenv, boom, batchOf([bad.id]));
@@ -239,9 +239,9 @@ describe("job queue", () => {
 
   it("a failing queue never loses the job: the sweep still runs it", async () => {
     const { enqueueJob, runDueJobs } = await import("../src/control/jobs");
-    const qenv = { DB: env.DB, APP_JOBS: { send: async () => { throw new Error("queue down"); } } };
+    const qenv = { DB: env.DB, APP_JOBS: { send: () => Promise.reject(new Error("queue down")) } };
     const j = await enqueueJob(qenv, { type: "t.sweep", scope: "platform", title: "swept" });
-    expect(await runDueJobs(qenv, { "t.sweep": async () => ({ done: true as const }) })).toBe(1);
+    expect(await runDueJobs(qenv, { "t.sweep": () => Promise.resolve({ done: true as const }) })).toBe(1);
     expect(await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(j.id).first()).toEqual({ status: "succeeded" });
   });
 });

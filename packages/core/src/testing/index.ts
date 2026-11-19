@@ -65,7 +65,7 @@ export function describeTenantIsolation(env: TenantWorkerEnv, worker: Fetcher, m
       const req = mod.isolationProbe.create(marker);
       const res = await a.fetch(base + (req.path === "/" ? "" : req.path), { body: req.body });
       expect(res.status, `probe create failed: ${await res.clone().text()}`).toBeLessThan(300);
-      const created = (await res.json()) as Record<string, unknown>;
+      const created: Record<string, unknown> = await res.json();
       const item = base + mod.isolationProbe.itemPath(created);
       const list = base + (mod.isolationProbe.listPath === "/" ? "" : mod.isolationProbe.listPath);
       return { a, b, marker, item, list };
