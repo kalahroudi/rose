@@ -122,8 +122,11 @@ The log line itself and the `fields` envelope are not asserted.
 - A body that is not valid JSON is a 400.
 
 The declared-length gate exists so an oversized upload is refused without spending time
-reading it. `parse` then runs the zod schema. Unknown object keys are dropped, because a
-zod object strips keys it does not declare by default, so the route never sees them. A
+reading it. The gate covers only a length the client declares. A chunked body carries no
+`Content-Length`, so the gate does not apply and `readJson` reads the whole body before
+the 100,000-character cap runs. `parse` then runs the zod schema. Unknown object keys are
+dropped, because a zod object strips keys it does not declare by default, so the route
+never sees them. A
 failed parse becomes `invalid("Some fields need attention.", fields)`, a 422. `fields`
 maps each dotted issue path, or `_` for a root issue, to the first message for that path.
 
@@ -149,8 +152,10 @@ and rate-limit keys use it. Cloudflare sets the header; the browser does not.
 - A missing or blank address is `unknown`. The zone suffix (`%eth0`) is removed and the
   text is lower-cased first.
 - A value with no colon is returned as a key without IPv4 validation.
-- An IPv6 address with an embedded IPv4 tail (`::ffff:198.51.100.7`) becomes the IPv4
-  address it carries. An octet above 255 leaves the raw value as the key.
+- An IPv6 address whose embedded IPv4 tail sits under the IPv4-mapped prefix
+  `::ffff:0:0/96` (`::ffff:198.51.100.7`) becomes the IPv4 address it carries. Other
+  embedded-IPv4 forms, such as `64:ff9b::198.51.100.7` and `::198.51.100.7`, fold to their
+  `/64` like any other IPv6 address. An octet above 255 leaves the raw value as the key.
 - Any other IPv6 address is folded to its first four groups followed by `::/64`, for
   example `2001:db8:1:2::/64`. Hexadecimal groups accept one to four digits. A `::` may
   compress at least one group, and a bare address must have exactly eight groups.
@@ -281,13 +286,17 @@ Tests: "inherited object properties are not valid sort columns"
   has no test. The malformed-origin branch does, through `Origin: null`.
 - `errorHandler`'s log line is not asserted; the test only checks that the response body
   leaks nothing.
-- The exact `readJson` thresholds are not asserted. The 2,000,000-byte test accepts any
-  client error from 400 to 422.
+- The exact `readJson` thresholds are not asserted. The 2,000,000-byte test accepts any of
+  400, 404, 405, 413 or 422.
 - `fitBytes` can split a surrogate pair when it trims, as described above. No test covers
   a search term that ends this way.
+- A chunked request body has no `Content-Length`, so the declared-length gate does not
+  apply to it. `readJson` buffers the whole body and only then applies the
+  100,000-character cap. The code fix is tracked as Noty bug 0ADE07EA.
 - `listQuerySchema` accepts `page` up to 100,000, so `offsetOf` can ask SQLite to skip
-  about ten million rows at the maximum page size of 100. The code fix is tracked as Noty
-  bug FDC4A6BB.
+  about ten million rows at the maximum page size of 100. Every list also runs an uncapped
+  `COUNT(*)` for its total, so the cap limits the rows returned, not the rows scanned. The
+  code fix is tracked as Noty bug FDC4A6BB.
 
 ## Corrections to the comments
 
