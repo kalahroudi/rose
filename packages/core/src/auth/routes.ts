@@ -210,5 +210,3 @@ async function assertFreshForPasskeys(c: Context, realm: AuthRealm, s: SessionIn
   const has = (await listPasskeys((c.env as CoreEnv).DB, s.userId, realm.scope)).length > 0;
   assertFreshSession(s, { passkey: has });
 }
-
-export { getUserByEmail };

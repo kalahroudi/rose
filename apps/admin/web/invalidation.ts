@@ -3,7 +3,7 @@
 // this is what lets a drawer close and the result appear without a reload.
 import { createInvalidator } from "@rose/ui";
 
-export const touches = {
+const touches = {
   "tenant.update": [["tenants"], ["tenant"]],
   "tenant.status": [["tenants"], ["tenant"], ["overview"]],
   "tenant.delete": [["tenants"], ["tenant"], ["overview"], ["jobs"]],

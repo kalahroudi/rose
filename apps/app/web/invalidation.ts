@@ -3,7 +3,7 @@
 // After a mutation: `await invalidate("contact.create")`. Add a line here for every new action.
 import { createInvalidator } from "@rose/ui";
 
-export const touches = {
+const touches = {
   "contact.create": [["contacts"], ["overview"]],
   "contact.update": [["contacts"]],
   "contact.delete": [["contacts"], ["overview"]],

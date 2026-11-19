@@ -11,8 +11,8 @@ import { useInvalidate } from "../invalidation";
 import type { Domain, Member, Tenant, TenantStatus } from "../types";
 import { AddDomainDrawer, domainTone } from "./Domains";
 
-export const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", pending_deletion: "warn", deleting: "bad" };
-export const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", pending_deletion: "Pending deletion", deleting: "Deleting" };
+const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", pending_deletion: "warn", deleting: "bad" };
+const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", pending_deletion: "Pending deletion", deleting: "Deleting" };
 
 function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
   const boot = useSession();
