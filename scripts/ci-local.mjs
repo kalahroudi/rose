@@ -22,8 +22,8 @@ export const PORTS = [5173, 5174, 8787];
 
 /** Checks that still skip on the local dev stack. Each Q22 change removes its ids from this list. */
 export const ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
-/** ci.yml's `pnpm pentest`, run so that a skip fails unless it is listed above. */
-export const PENTEST_COMMAND = `node scripts/pentest.mjs --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
+/** ci.yml's `pnpm pentest`, run with the ids above so that an unexpected skip fails the job. */
+export const PENTEST_COMMAND = `pnpm pentest --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;
 
 /** One entry per `run:` command in ci.yml, in ci.yml order. `native` steps are implemented here. */
 export const STEPS = [
@@ -36,7 +36,7 @@ export const STEPS = [
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },
   { job: "verify", name: "Build", run: "pnpm build" },
   { job: "pentest", name: "Start the local stack", native: "dev-stack" },
-  { job: "pentest", name: "Attack it", native: "pentest" },
+  { job: "pentest", name: "Attack it", run: PENTEST_COMMAND },
   { job: "pentest", name: "Stop the local stack", native: "dev-stack-stop" },
 ];
 
@@ -239,7 +239,6 @@ async function runStepOrNative(step, dir, logDir) {
     });
   }
   if (step.native === "dev-stack-stop") return nativeStep(stopDevStack);
-  if (step.native === "pentest") return runStep(PENTEST_COMMAND, dir);
   return nativeStep(() => {
     throw new Error(`unknown native step: ${step.native}`);
   });

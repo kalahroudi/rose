@@ -22,10 +22,6 @@ const NATIVE = new Map([
     "nohup node scripts/dev.mjs > dev.log 2>&1 & for i in $(seq 1 90); do curl -sf http://localhost:5174/api/bootstrap | grep -q '\"root\"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0 sleep 1 done cat dev.log; exit 1",
     "Start the local stack: ci.yml backgrounds scripts/dev.mjs and polls it with curl; ci-local.mjs does that natively (fetch) and stops the process group afterwards, so there is no `run:` for it.",
   ],
-  [
-    "pnpm pentest",
-    "Attack it: ci-local runs the same harness in strict mode with today's allowed skips instead of shelling out to the bare command.",
-  ],
 ]);
 
 /** Every command ci.yml runs, in file order: `run: <cmd>` and `run: |` blocks. No YAML dependency. */
@@ -56,11 +52,14 @@ function ciCommands(text = read(CI)) {
 
 const shellCommands = (commands) => commands.filter((c) => !NATIVE.has(c));
 
+/** The literal list CI and ci-local share. A change here must change the commands in both files. */
+const EXPECTED_ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+
 test("ci.yml parses to commands, both single-line and a `run: |` block", () => {
   const commands = ciCommands();
   assert.ok(commands.includes("pnpm guard"));
   assert.ok(NATIVE.has(commands.at(-2)), "the start-the-stack block keeps its shape");
-  assert.equal(commands.at(-1), "pnpm pentest");
+  assert.equal(commands.at(-1), PENTEST_COMMAND);
 });
 
 test("drift: every ci.yml command runs in ci:local", () => {
@@ -82,10 +81,11 @@ test("order: verify steps keep ci.yml's relative order", () => {
 
 test("pentest runs strict and allows exactly today's skips", () => {
   const step = STEPS.find((s) => s.job === "pentest" && s.name === "Attack it");
-  assert.equal(step.native, "pentest");
-  assert.match(PENTEST_COMMAND, /^node scripts\/pentest\.mjs --strict( --allow-skip \S+)+$/);
-  for (const id of ALLOWED_SKIPS) assert.ok(PENTEST_COMMAND.includes(`--allow-skip ${id}`), id);
-  assert.ok(ALLOWED_SKIPS.includes("AUTH-09"), "AUTH-09 is a known skip until --slow reaches ci:local");
+  assert.equal(step.run, PENTEST_COMMAND);
+  assert.deepEqual(ALLOWED_SKIPS, EXPECTED_ALLOWED_SKIPS, "ALLOWED_SKIPS changed; update this literal and both pentest commands");
+  assert.equal(PENTEST_COMMAND, `pnpm pentest --strict${EXPECTED_ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`);
+  assert.ok(ciCommands().includes(PENTEST_COMMAND), "ci.yml runs the same strict command");
+  assert.ok(EXPECTED_ALLOWED_SKIPS.includes("AUTH-09"), "AUTH-09 is a known skip until --slow reaches ci:local");
 });
 
 test("a failing step exits non-zero and skips the rest", () => {
