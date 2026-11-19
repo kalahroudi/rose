@@ -66,7 +66,10 @@ the fixed `"platform"` scope of the console worker (`SCOPE` in
   `otp-*.test.ts` files for their numbers.
 - **Order of checks on verify.** The route validates the body, calls `checkCode`, then
   re-checks `codeDisabled`, then `ensureUser`, then `realm.admit`, and only then starts a
-  session. A refusal at any of these steps returns the same 401 with no cookie.
+  session. A refusal at `checkCode`, `codeDisabled` or `admit` is the same uniform 401
+  `BAD_CODE` with no cookie. The earlier steps answer differently: body validation answers
+  400 (not JSON or missing `Content-Type`), 413 (body over the size cap) or 422 (a field
+  that fails the schema), and the rate limits in `checkCode` answer 429.
 - The request and verify bodies are bounded before parsing (`email` at most 254
   characters, `code` must be exactly six digits after trimming), so oversized input never
   reaches the code store.
@@ -137,11 +140,16 @@ either way.
 - **One passkey, one scope, one RP ID.** A credential is registered for exactly one realm
   scope and one RP ID, which is the exact hostname taken from the request URL in the
   route's `site()` helper (not from a header or a body field). The browser refuses to
-  offer it on any other host, and the server re-checks scope and RP ID on every lookup,
-  so a forged or replayed response for another host fails. A tenant that moves to a custom
-  domain must re-register; the old host's passkeys do not carry over
-  ([Authentication](../authentication.md#passkeys)). Covered by the design of
-  `finishLogin`, which filters on all three values.
+  offer it on any other host, and the server re-checks the RP ID on the one lookup that
+  proves a pending login: `finishLogin` selects the credential by credential id, realm
+  scope and RP ID, and also passes `expectedRPID`, so a forged or replayed response for
+  another host fails. The other lookups filter by user id and realm scope only:
+  `listPasskeys`, `deletePasskey`, the `excludeCredentials` query in `beginRegistration`
+  and the `codeDisabled` check. They act on a row that is already the caller's or the
+  address's in this scope, and the ceremony that created it was RP-ID checked at
+  registration. A tenant that moves to a custom domain must re-register; the old host's
+  passkeys do not carry over ([Authentication](../authentication.md#passkeys)). Covered
+  by the design of `finishLogin`, which filters on all three values.
 - **Discoverable credentials with required user verification.** Registration asks for a
   resident key and user verification, and both registration and login verification pass
   `requireUserVerification: true`. The passkey, not a password plus a second step, is the
@@ -175,9 +183,12 @@ either way.
   caller's answers 404 (`notFound()`), the same answer as a row that does not exist.
 - **Listing is bounded.** `listPasskeys` returns at most 50 rows (a person has a handful of
   devices), so the settings page never loads an unbounded list.
-- **Transport hints are stored as JSON.** The authenticator's transports are kept so the
-  UI and future `allowCredentials` hints can use them; the value comes from the verified
-  registration, not from client input.
+- **Transport hints are stored as JSON.** The transports are kept so the UI and future
+  `allowCredentials` hints can use them. They are the browser-reported
+  `response.response.transports` that `verifyRegistrationResponse` copies into
+  `credential.transports`. The signature does not cover that list, so it is client input
+  and is kept only as a hint. Do not trust it for any access decision; scope and RP ID
+  checks rest on the verified ceremony and the stored columns, never on transports.
 - **The credential name is bounded.** The display name is trimmed, cut to 60 characters
   and defaults to "Passkey", so a client can not store an unbounded string.
 - **No secret is stored.** Only the public key (base64url) is kept; the private key never
