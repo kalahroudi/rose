@@ -33,8 +33,14 @@
       "project": ["**/*.{js,mjs}"]
     }
   },
-  "ignoreDependencies": ["@cloudflare/workers-types"],
-  "ignoreBinaries": ["qlmanage"],
+  "ignoreDependencies": [
+    "@cloudflare/workers-types",
+    "wrangler"
+  ],
+  "ignoreBinaries": [
+    "qlmanage",
+    "vitest"
+  ],
   "ignore": [
     "**/migrations/**",
     ".wrangler/**",
