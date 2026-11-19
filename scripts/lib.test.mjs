@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ROOT, parseArgs, setDatabaseId, setRoutes, setVar } from "./lib.mjs";
+import { ROOT, diagnoseOperatorSignIn, parseArgs, setDatabaseId, setRoutes, setVar } from "./lib.mjs";
 
 /** Strip // comments (outside strings) and parse. */
 const parseJsonc = (t) => JSON.parse(t.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*/g, (m, str) => str ?? ""));
@@ -32,4 +32,28 @@ for (const app of ["app", "admin"]) {
 
 test("parseArgs", () => {
   assert.deepEqual(parseArgs(["--a", "1", "--b=2", "--c", "x", "--d"]), { _: [], a: "1", b: "2", c: "x", d: true });
+});
+
+test("diagnoseOperatorSignIn names the cause of a refused operator code", async () => {
+  const { diagnoseOperatorSignIn } = await import("./lib.mjs");
+  const e = "op@example.com";
+  assert.match(diagnoseOperatorSignIn(e, { userExists: false, isOperator: false, passkeys: 0 }), /not an operator.*--operator-email/);
+  assert.match(diagnoseOperatorSignIn(e, { userExists: true, isOperator: false, passkeys: 0 }), /not an operator/);
+  assert.match(diagnoseOperatorSignIn(e, { userExists: true, isOperator: true, passkeys: 2 }), /console passkey/);
+  assert.equal(diagnoseOperatorSignIn(e, { userExists: true, isOperator: true, passkeys: 0 }), null);
+});
+
+test("diagnoseOperatorSignIn: zero operators points at the bootstrap address, not a non-existent operator", () => {
+  const m = diagnoseOperatorSignIn("x@example.com", { userExists: false, isOperator: false, passkeys: 0, noOperators: true });
+  assert.match(m, /no operators yet/);
+  assert.match(m, /BOOTSTRAP_OPERATOR_EMAIL/);
+  assert.doesNotMatch(m, /an operator's address/);
+});
+
+test("diagnoseOperatorSignIn: zero operators with a passkey on the address names the passkey and the empty-value case", () => {
+  const withKey = diagnoseOperatorSignIn("x@example.com", { userExists: true, isOperator: false, passkeys: 1, noOperators: true });
+  assert.match(withKey, /no operators yet/);
+  assert.match(withKey, /console passkey/);
+  const plain = diagnoseOperatorSignIn("x@example.com", { userExists: false, isOperator: false, passkeys: 0, noOperators: true });
+  assert.match(plain, /not empty/);
 });

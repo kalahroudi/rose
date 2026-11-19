@@ -8,7 +8,7 @@ import { etag } from "hono/etag";
 import { z } from "zod";
 import {
   addDomain, addOperator, assertFreshSession, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
-  deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, isOperatorEmail, listDomains, listJobs,
+  deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, idempotent, isOperatorEmail, listDomains, listJobs,
   listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, operatorCount, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
   requestTenantDeletion, tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
@@ -39,7 +39,7 @@ const cfConnection = async (env: PlatformWorkerEnv): Promise<cloudflare.Cloudfla
 // ── Background jobs owned by the operator worker ─────────────────────────────────
 const jobHandlers: Record<string, JobHandler<PlatformWorkerEnv>> = {
   /** Registers a custom domain with Cloudflare for SaaS, then polls until its certificate is live. */
-  "domain.verify": async (env, job, payload) => {
+  "domain.verify": idempotent(async (env, job, payload) => {
     const hostname = String(payload.hostname ?? "");
     const row = await getDomain(env.DB, hostname);
     if (!row) return { done: true, result: { skipped: "removed" } };
@@ -64,7 +64,7 @@ const jobHandlers: Record<string, JobHandler<PlatformWorkerEnv>> = {
     }
     await setDomainState(env.DB, hostname, { status: "pending", providerId: h.id, detail });
     return { done: false, retryInMs: 30_000, note: "Waiting for DNS" };
-  },
+  }),
 };
 
 async function tick(env: PlatformWorkerEnv): Promise<void> {

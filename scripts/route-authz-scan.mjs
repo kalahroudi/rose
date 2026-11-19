@@ -3,6 +3,14 @@
 // `need(<ctx>, <permission>)`. TypeScript 7 has no JS API and we add no dependencies, so this is a small
 // tokenizer plus a token-level walk, not a regex over text. See docs/pentest.md (AUTHZ-07).
 
+import { createHash } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
+import { builtinModules } from "node:module";
+import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const idName = (v) => (v === "inline" ? "identifier:inline" : v); // an identifier named inline must not match the reserved inline entries
+
 const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "extends"]);
 const REGISTRARS = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all", "on", "use", "route", "mount"]);
 const isLT = (ch) => ch === "\n" || ch === "\r" || ch === "\u2028" || ch === "\u2029";
@@ -19,8 +27,7 @@ export const CORE_EXEMPTIONS = {
  * Routes registered before app.use("/api/*", authenticate) in the real tenant-app.ts: they run without a session
  * and without need(), so each must be listed here with the reason it is public. "METHOD path" -> reason (same key
  * format as CORE_EXEMPTIONS: ALL for app.all, ROUTE for app.route mounts). `app.use(...)` middleware before the
- * authentication line is NOT covered by this list (it never answers a request on its own by convention; the scanner
- * leaves it out of scope).
+ * authentication line is covered by PUBLIC_CORE_MIDDLEWARE instead.
  */
 export const PUBLIC_CORE_ROUTES = {
   "GET /api/bootstrap": "The signed-out SPA needs the host kind, brand and sign-in options before anyone can authenticate; it returns only what the request host already reveals and no tenant data.",
@@ -30,6 +37,41 @@ export const PUBLIC_CORE_ROUTES = {
   "POST /api/root/enter": "Hands a freshly verified root-host sign-in to a workspace host; it checks the signed, short-lived proof itself and issues no session without it.",
   "GET /auth/handoff": "Receives the one-time handoff from the root host and creates the session on the workspace host; the token is signed, single-use and short-lived, and the host decides the tenant.",
   "ROUTE /api/auth": "The sign-in, sign-out, passkey and session routes cannot require a session; each handler enforces its own checks (rate limits, one-time codes, CSRF guard in front of them).",
+};
+
+/**
+ * Middleware registered with `app.use(path, handler)` before the authentication line in the real tenant-app.ts. It
+ * runs for requests that are not yet authenticated and could answer them, so every such registration must match an
+ * entry here exactly, and all of them must come before the first public route (public routes rely on them).
+ * Entries, in source order:
+ * - Named: `{ path, handler, from, reason }`. `handler` is the exact form: an identifier (`csrfGuard`; a cast
+ *   `requestContext as never` counts as `requestContext`) or a call with no arguments (`etag()`, never
+ *   interchangeable with a bare `etag`). `from` is the module it must be imported from, unrenamed; the name must
+ *   appear nowhere else in the file (no declaration, parameter, assignment or other use that could rebind it).
+ * - Inline: `{ path, handler: "inline", fingerprint, reason }`. `fingerprint` is `middlewareFingerprint()` of the
+ *   handler's tokens plus where each free identifier it uses comes from (an import's module and export, or a
+ *   built-in). Those identifiers must not be declared, assigned or passed around anywhere else in the file. Editing
+ *   the code, or re-pointing a helper's import, fails the scan until the entry is re-reviewed and updated.
+ * Each registration consumes the first unused matching entry; matches must follow the list order. An entry that
+ * nothing consumes is stale (in `stalePublic` as "USE <path> <handler>"); a malformed entry is unparsed.
+ */
+export const PUBLIC_CORE_MIDDLEWARE = [
+  { path: "*", handler: "inline", fingerprint: "42a79847e9eaf569", reason: "Environment check: answers only with a fixed 500 when the server is misconfigured, otherwise calls next(); reads no tenant data." },
+  { path: "*", handler: "requestContext", from: "./http/base", reason: "Attaches the request id and logging context and calls next(); it never answers a request." },
+  { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "Rejects cross-site state-changing requests before anything runs; it can only deny." },
+  { path: "/svc/*", handler: "csrfGuard", from: "./http/base", reason: "Rejects cross-site state-changing requests before anything runs; it can only deny." },
+  { path: "/api/*", handler: "inline", fingerprint: "6473efbb2ee99bd0", reason: "Runs next() first, then only sets a Cache-Control header on the finished response; answers nothing itself." },
+  { path: "/api/*", handler: "etag()", from: "hono/etag", reason: "Hono etag middleware: hashes the finished response and may turn it into a 304; adds no data of its own." },
+  { path: "*", handler: "inline", fingerprint: "f86106658b3aed18", reason: "Tenant resolution: derives the tenant from the request host, stores it on the context and calls next(); it never answers." },
+];
+
+/**
+ * Registrations after the authentication line on paths outside /api and /svc: they get neither authentication nor
+ * need(), so each must be listed here with the reason that is safe. "METHOD path" -> reason (same key format as
+ * CORE_EXEMPTIONS). An entry matching no such registration is reported as stale.
+ */
+export const OUTSIDE_SCOPE_ROUTES = {
+  "POST /__dev/tick": "Development-only job tick for `pnpm dev`; the handler throws notFound() unless ENVIRONMENT is \"development\", so it does nothing in production.",
 };
 
 /**
@@ -227,8 +269,8 @@ const MAX_AMBIGUOUS = 200;
 // reading of an ambiguous `/` only matters when it changes this sequence (numbers, operators, other identifiers and
 // regex bodies do not), which keeps ordinary division such as `(a) / 2 + b / 3` from being reported.
 const RELEVANT_IDS = new Set([...REGISTRARS, "app", "need", "authenticate", "can", "forbidden", "notFound", "Hono", "onError", "function", "return", "throw", "const", "let", "var", "async", "await", "new"]);
-const significant = (toks) => toks
-  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
+const significant = (toks, extraIds) => toks
+  .filter((t) => (t.type === "id" ? RELEVANT_IDS.has(t.value) || extraIds.has(t.value) : t.type === "punct" ? "(){}[]".includes(t.value) : t.type !== "num" && t.type !== "regex"))
   .map((t) => `${t.type}\u0000${t.value}\u0000${t.text ?? ""}`)
   .join("\n");
 
@@ -257,19 +299,19 @@ function impossibleReading(toks) {
   return false;
 }
 
-export function tokenizeSafe(src) {
+export function tokenizeSafe(src, extraIds = new Set()) {
   const record = [];
   const main = tokenize(src, { record });
   if (!record.length) return main;
   const err = (msg, line) => Object.assign(new Error(`${msg} (line ${line})`), { line });
   if (record.length > MAX_AMBIGUOUS) throw err(`More than ${MAX_AMBIGUOUS} ambiguous \`/\` (regex literal or division) in the source`, record[0].line);
-  const want = significant(main);
+  const want = significant(main, extraIds);
   const readings = [[{ mode: "regex" }, record[0]], [{ mode: "division" }, record[0]], ...record.map((r) => [{ flip: r.pos }, r])];
   for (const [o, at] of readings) {
     let t;
     try { t = tokenize(src, o); } catch { continue; }
     if (impossibleReading(t)) continue;
-    if (significant(t) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
+    if (significant(t, extraIds) !== want) throw err("Ambiguous `/` (regex literal or division): the source tokenizes differently under the two readings, so a route could be hidden in what looks like a regex or string", at.line);
   }
   return main;
 }
@@ -403,6 +445,256 @@ function parseFn(toks, from, to) {
   return { from, to, pf, pt, bodyFrom, bodyTo, block, param };
 }
 
+/**
+ * Fingerprint of an inline middleware handler: a hash of its tokens (comments and whitespace ignored) plus where each
+ * free identifier it uses comes from (`name=module:export` for an import, `name=global` for a built-in), so swapping
+ * the code, or rebinding a helper it calls to another module, changes the fingerprint.
+ */
+export function middlewareFingerprint(handlerToks, bindings = []) {
+  const code = handlerToks.map((t) => [t.type, t.value ?? null, t.text ?? null]);
+  return createHash("sha256").update(JSON.stringify([code, [...bindings].sort()])).digest("hex").slice(0, 16);
+}
+
+/** Built-ins an inline pre-auth middleware may use without an import. */
+const MIDDLEWARE_GLOBALS = new Set(["Response", "Request", "Headers", "URL", "URLSearchParams", "JSON", "Date", "Math", "Promise", "Error", "Object", "Array", "String", "Number", "Boolean", "Symbol", "Map", "Set", "crypto", "console", "undefined", "NaN", "Infinity"]);
+const GLOBAL_OBJECTS = new Set(["globalThis", "self", "window", "global", "Reflect"]);
+const JS_WORDS = new Set(["async", "await", "function", "return", "if", "else", "try", "catch", "finally", "throw", "new", "const", "let", "var", "true", "false", "null", "typeof", "instanceof", "in", "of", "for", "while", "do", "break", "continue", "switch", "case", "default", "void", "delete", "this", "as", "satisfies", "yield", "class", "extends", "super"]);
+
+/** Value import specifiers of the file: local name -> [{ module, imported, at }] (`at` = token index of the local name). */
+function importsOf(toks) {
+  const map = new Map();
+  const add = (local, module, imported) => { if (!map.has(local.value)) map.set(local.value, []); map.get(local.value).push({ module, imported, at: local.idx }); };
+  for (let i = 0; i < toks.length; i++) {
+    if (!isId(toks[i], "import") || isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i + 1], "(") || isP(toks[i + 1], ".")) continue;
+    let j = i + 1;
+    let end = j;
+    while (end < toks.length && !isId(toks[end], "from") && !isP(toks[end], ";") && toks[end].type !== "str") end++;
+    const module = isId(toks[end], "from") && toks[end + 1]?.type === "str" ? toks[end + 1].value : null;
+    const typeOnly = isId(toks[j], "type") && !isP(toks[j + 1], ",") && !isId(toks[j + 1], "from");
+    if (module !== null && !typeOnly) {
+      const loc = (k) => ({ value: toks[k].value, idx: k });
+      while (j < end) {
+        if (isId(toks[j])) { add(loc(j), module, "default"); j++; }
+        else if (isP(toks[j], "*") && isId(toks[j + 1], "as") && isId(toks[j + 2])) { add(loc(j + 2), module, "*"); j += 3; }
+        else if (isP(toks[j], "{")) {
+          const close = matching(toks, j);
+          if (close < 0) break;
+          for (const [x, y] of splitArgs(toks, j + 1, close)) {
+            let k = x;
+            if (isId(toks[k], "type") && k + 1 < y) continue; // type-only specifier: no value binding
+            const imported = toks[k]?.value;
+            if (isId(toks[k + 1], "as") && isId(toks[k + 2]) && k + 3 === y) add(loc(k + 2), module, imported);
+            else if (k + 1 === y && isId(toks[k])) add(loc(k), module, imported);
+          }
+          j = close + 1;
+        } else j++;
+      }
+    }
+    i = Math.max(i, end);
+  }
+  return map;
+}
+
+/**
+ * Reviewed pre-auth helpers, keyed "<module as imported in tenant-app.ts>:<export>". The value is the manifest of
+ * the module's whole import tree (`helperManifest()`): `{ "<repo-relative file>": "<sha256 prefix of the file>" }`
+ * for every file reached through any import (relative, workspace package), `"npm:<package>"` -> its full
+ * pnpm-lock.yaml pin, and each `node:`/`cloudflare:` specifier -> "builtin" (listing it is the review). Any added,
+ * removed or edited file fails the scan until the manifest is re-reviewed and regenerated. The manifests live in
+ * route-authz-reviewed.json (the repo guard rejects those paths and specifiers quoted in source files).
+ */
+export const REVIEWED_HELPERS = JSON.parse(readFileSync(new URL("./route-authz-reviewed.json", import.meta.url), "utf8"));
+
+export const HELPER_MAX_FILES = 40;
+export const HELPER_MAX_BYTES = 262144;
+const SCRIPT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const PROBE_EXTS = [...SCRIPT_EXTS, ".json"];
+
+/** Where helper modules and the lockfile come from: the real core sources by default; tests override `read`/`lockfile`. */
+export function diskSources(root = fileURLToPath(new URL("../", import.meta.url))) {
+  const realRoot = realpathSync(root);
+  // A symlink anywhere on the path would hash the link's own location while its imports resolve next to the target.
+  const read = (path) => { try { return realpathSync(path) === resolve(realRoot, relative(root, path)) ? readFileSync(path, "utf8") : null; } catch { return null; } };
+  return { srcDir: resolve(root, "packages", "core", "src"), read, lockfile: read(resolve(root, "pnpm-lock.yaml")) };
+}
+
+const packageOf = (spec) => spec.split("/").slice(0, spec.startsWith("@") ? 2 : 1).join("/");
+
+function lockedVersion(lockfile, spec) {
+  const name = packageOf(spec);
+  if (typeof lockfile !== "string") throw new Error(`pnpm-lock.yaml could not be read, so the version of \`${name}\` is not pinned`);
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^  '?${esc}@([^\\s:'(]+)[^:]*:`, "gm");
+  const versions = new Set([...lockfile.matchAll(re)].map((m) => m[1]));
+  if (versions.size === 0) throw new Error(`pnpm-lock.yaml lists 0 versions of \`${name}\`; at least one is needed to pin it`);
+  // The version alone does not pin the code: a pnpm patch, a swapped resolution, an overrides/importer alias or a
+  // link: all keep the same `name@version` key. Hash every lockfile entry of the package (all its versions) that decides what gets installed.
+  const parts = [...lockfile.matchAll(new RegExp(`^  '?${esc}@[^\\n]*(?:\\n    [^\\n]*)*`, "gm"))].map((m) => m[0]);
+  parts.push(...lockfile.matchAll(new RegExp(`^      '?${esc}'?:(?:\\n        [^\\n]*)+`, "gm")).map((m) => m[0]));
+  parts.push(...lockfile.matchAll(/^(?:overrides|patchedDependencies|packageExtensionsChecksum|pnpmfileChecksum):[^\n]*(?:\n[ ][^\n]*)*/gm).map((m) => m[0]));
+  return `${name}@${[...versions].sort().join("+")}/${createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 12)}`;
+}
+
+/** Every module specifier a file imports. `require` and a dynamic `import()` with a non-literal argument throw (the tree cannot be known). */
+function importSpecs(text, where) {
+  let toks;
+  try { toks = tokenizeSafe(text, new Set(["import", "export", "from", "require"])); } catch (e) { throw new Error(`${where} could not be tokenized: ${e.message}`); }
+  const plain = (t) => t?.type === "str" && !t.value.includes("\\");
+  const specs = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (!isId(t)) continue;
+    // `module.require`, `globalThis.require` and an escaped `require` load modules too, so only the name is checked.
+    if (t.value === "require" || t.value.includes("\\")) throw new Error(`${where} uses \`require\`, so its imports cannot be listed`);
+    if (isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#")) continue;
+    if (t.value === "import") {
+      if (isP(toks[i + 1], ".")) continue; // import.meta
+      if (isP(toks[i + 1], "(")) {
+        if (!plain(toks[i + 2]) || !(isP(toks[i + 3], ")") || isP(toks[i + 3], ","))) throw new Error(`${where} has a dynamic import() whose argument is not a plain string literal (line ${t.line})`);
+        specs.push(toks[i + 2].value);
+        continue;
+      }
+      let depth = 0, j = i + 1;
+      for (; j < toks.length && !(depth === 0 && toks[j].type === "str"); j++) {
+        if (isP(toks[j], "{")) depth++;
+        else if (isP(toks[j], "}")) depth--;
+      }
+      if (j >= toks.length || !plain(toks[j])) throw new Error(`${where} has an import statement with no readable module specifier (line ${t.line})`);
+      specs.push(toks[j].value);
+    } else if (t.value === "export") {
+      let j = i + 1;
+      if (isId(toks[j], "type") && (isP(toks[j + 1], "*") || isP(toks[j + 1], "{"))) j++;
+      let after;
+      if (isP(toks[j], "{")) { const m = matching(toks, j); if (m < 0) throw new Error(`${where} has an unclosed export list (line ${t.line})`); after = m + 1; }
+      else if (isP(toks[j], "*")) { after = j + 1; if (isId(toks[after], "as")) after += 2; }
+      else continue;
+      if (!isId(toks[after], "from")) {
+        if (isP(toks[j], "{")) continue; // `export { a }` with no source
+        throw new Error(`${where} has an \`export *\` with no readable module specifier (line ${t.line})`);
+      }
+      if (!plain(toks[after + 1])) throw new Error(`${where} has an export-from with no readable module specifier (line ${t.line})`);
+      specs.push(toks[after + 1].value);
+    }
+  }
+  return specs;
+}
+
+/**
+ * Manifest of the import tree behind the module `spec` as tenant-app.ts imports it: every import of every file is
+ * followed (no attempt to tell which names are used). Throws when anything cannot be resolved or read, when the tree
+ * passes HELPER_MAX_FILES / HELPER_MAX_BYTES (the caller reports it as unparsed), or for a specifier kind that cannot be pinned.
+ */
+export function helperManifest(spec, src) {
+  const root = resolve(src.srcDir, "..", "..", "..");
+  const manifest = {};
+  const seen = new Set();
+  let files = 0, bytes = 0;
+  const rel = (file) => relative(root, file).split(sep).join("/");
+  const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 32);
+  const visit = (file, why) => {
+    const name = rel(file);
+    if (name.startsWith("../") || name.split("/").includes("node_modules")) throw new Error(`${why} resolves to \`${name}\`, outside the repository sources`);
+    if (seen.has(file)) return;
+    seen.add(file);
+    const text = src.read(file);
+    if (text === null) throw new Error(`${why} resolves to \`${name}\`, which cannot be read`);
+    files++;
+    bytes += Buffer.byteLength(text);
+    if (files > HELPER_MAX_FILES) throw new Error(`import tree of \`${spec}\` is larger than the cap (${HELPER_MAX_FILES} files)`);
+    if (bytes > HELPER_MAX_BYTES) throw new Error(`import tree of \`${spec}\` is larger than the cap (${HELPER_MAX_BYTES} bytes)`);
+    manifest[name] = hash(text.replaceAll("\r\n", "\n"));
+    if (/\.[tj]sx$/.test(file)) throw new Error(`${name} is JSX, which the import scanner cannot tokenize, so its imports cannot be listed`);
+    if (SCRIPT_EXTS.some((e) => file.endsWith(e))) for (const s of importSpecs(text, name)) follow(s, file);
+  };
+  const probe = (from, relSpec) => {
+    const base = resolve(dirname(from), relSpec);
+    // Every candidate a bundler or vitest may pick; more than one hit is ambiguous, so it is reported, not guessed.
+    const found = new Set([...(PROBE_EXTS.some((e) => base.endsWith(e)) ? [base] : []), ...PROBE_EXTS.flatMap((e) => [`${base}${e}`, resolve(base, `index${e}`)])].filter((f) => src.read(f) !== null));
+    if (found.size !== 1) throw new Error(`import "${relSpec}" (from ${rel(from)}) resolves to ${found.size} files; it must resolve to exactly one`);
+    return [...found][0];
+  };
+  const workspaceDir = (name, from) => {
+    if (name.startsWith("@rose/")) return resolve(root, "packages", name.slice(6));
+    const lock = typeof src.lockfile === "string" ? src.lockfile : "";
+    const lines = lock.split("\n");
+    // Only the importer (workspace package) that owns the importing file decides what `name` is for that file:
+    // another app linking a same-named package must not turn this npm import into a walked directory.
+    const importers = [];
+    let inImporters = false;
+    for (const l of lines) {
+      if (/^\S/.test(l)) inImporters = l === "importers:";
+      else if (inImporters && /^  \S/.test(l)) importers.push(l.trim().replace(/:$/, "").replace(/^'|'$/g, ""));
+    }
+    const fromRel = relative(root, from).split(sep).join("/");
+    const owns = (k) => k === "." || fromRel === k || fromRel.startsWith(`${k}/`);
+    const owner = importers.filter(owns).sort((a, b) => (b === "." ? -1 : b.length) - (a === "." ? -1 : a.length))[0];
+    if (owner === undefined) return null;
+    const dirs = new Set();
+    let importer = null;
+    inImporters = false;
+    lines.forEach((l, k) => {
+      if (/^\S/.test(l)) inImporters = l === "importers:";
+      else if (inImporters && /^  \S/.test(l)) importer = l.trim().replace(/:$/, "").replace(/^'|'$/g, "");
+      else if (inImporters && importer === owner && (l === `      ${name}:` || l === `      '${name}':`)) {
+        const v = /^        version: link:(.+)$/.exec(lines[k + 2] ?? "");
+        if (v) dirs.add(resolve(root, importer, v[1].trim()));
+      }
+    });
+    if (dirs.size > 1) throw new Error(`\`${name}\` is linked to more than one directory in pnpm-lock.yaml`);
+    return dirs.size ? [...dirs][0] : null;
+  };
+  const follow = (s, from) => {
+    const why = `import "${s}" (from ${rel(from)})`;
+    if (s === "." || s === ".." || s.startsWith("./") || s.startsWith("../")) return visit(probe(from, s), why);
+    if (/^(?:node|cloudflare):[a-z0-9_][a-z0-9_./-]*$/.test(s)) { manifest[s] = "builtin"; return undefined; }
+    if (!/^(?:@[a-z0-9][\w.~-]*\/)?[a-z0-9][\w.~-]*(?:\/[\w.~@-]+)*$/.test(s)) throw new Error(`${why}: \`${s}\` is not a relative path, a lower-case node:/cloudflare: built-in, a workspace package or an npm package name, so it cannot be pinned`);
+    const name = packageOf(s);
+    if (builtinModules.includes(name)) throw new Error(`${why}: \`${name}\` is a Node built-in written without the \`node:\` prefix; import it as \`node:${name}\` so it can be pinned by specifier`);
+    const dir = workspaceDir(name, from);
+    if (dir === null) { manifest[`npm:${name}`] = lockedVersion(src.lockfile, s); return undefined; }
+    const pkgFile = resolve(dir, "package.json");
+    visit(pkgFile, why);
+    let pkg;
+    try { pkg = JSON.parse(src.read(pkgFile)); } catch { throw new Error(`${why}: ${rel(pkgFile)} is not valid JSON`); }
+    const sub = `.${s.slice(name.length)}`;
+    const target = typeof pkg.exports === "object" && pkg.exports !== null ? pkg.exports[sub] : sub === "." ? (pkg.exports ?? pkg.main) : undefined;
+    if (typeof target !== "string") throw new Error(`${why}: workspace package \`${name}\` has no plain string entry for \`${sub}\` in package.json`);
+    return visit(resolve(dir, target), why);
+  };
+  follow(spec, resolve(src.srcDir, "tenant-app.ts"));
+  return manifest;
+}
+
+/** [kind, reason] when the helper is not the reviewed one (kind "unparsed" = could not be read, "ungated" = changed or unreviewed), else null. */
+function helperProblem(module, imported, src) {
+  const key = `${module}:${imported}`;
+  let actual;
+  try { actual = helperManifest(module, src); } catch (e) { return ["unparsed", `Cannot read pre-auth helper \`${key}\`: ${e.message}`]; }
+  if (!Object.hasOwn(REVIEWED_HELPERS, key)) return ["ungated", `Pre-auth helper \`${key}\` is not on the reviewed list (REVIEWED_HELPERS); its tree is ${JSON.stringify(actual)}`];
+  const expected = REVIEWED_HELPERS[key];
+  if (expected === null || typeof expected !== "object" || Object.keys(expected).length === 0) return ["ungated", `Pre-auth helper \`${key}\` has no reviewed manifest in REVIEWED_HELPERS`];
+  const diffs = [...new Set([...Object.keys(expected), ...Object.keys(actual)])].flatMap((k) => (!Object.hasOwn(expected, k) ? [`${k} was added`] : !Object.hasOwn(actual, k) ? [`${k} was removed`] : expected[k] !== actual[k] ? [`${k} changed`] : []));
+  if (diffs.length) return ["ungated", `Pre-auth helper \`${key}\` changed since it was reviewed (${diffs.join(", ")}); re-review it and replace its REVIEWED_HELPERS manifest with ${JSON.stringify(actual)}`];
+  return null;
+}
+
+
+/**
+ * Occurrences of identifier `name` (not property names after `.`/`?.`/`#`) at token indexes other than `allowed`.
+ * With `readsOk`, a read that cannot bind the name is also allowed: a call or member access (`name(`, `name.`,
+ * `name?.`) that does not follow `function`, `class`, `*` or a TypeScript declaration keyword (`namespace`, `enum`, ...).
+ */
+function strayUses(toks, name, allowed, readsOk = false) {
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (!isId(toks[i], name) || isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#") || allowed.has(i)) continue;
+    const read = (isP(toks[i + 1], "(") || isP(toks[i + 1], ".") || isP(toks[i + 1], "?.")) && !["function", "class", "namespace", "module", "enum", "interface", "type", "declare"].some((w) => isId(toks[i - 1], w)) && !isP(toks[i - 1], "*");
+    if (readsOk && read) continue;
+    out.push(i);
+  }
+  return out;
+}
+
 /** True when `name` is (re)declared anywhere in the function (any param, const/let/var, function, class, catch). */
 function redeclares(toks, fn, name) {
   const lo = fn.from, hi = fn.to;
@@ -512,13 +804,26 @@ function onlyThrows(toks, from, to, fnName) {
  * @param {Record<string, string | {reason: string, onlyThrows?: string}>} exemptions "METHOD path" -> reason
  * @param {Record<string, string>} publicRoutes "METHOD path" -> reason: the only non-middleware registrations allowed
  *   before the authentication line
- * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[]}}
- *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys matching no pre-auth registration
+ * @param {Record<string, string> | null} outsideRoutes "METHOD path" -> reason: the only registrations allowed after the
+ *   authentication line on paths outside /api and /svc. null (default) leaves them unchecked (legacy behaviour).
+ * @param {{path: string, handler: string, reason: string}[] | null} publicMiddleware ordered allow-list of the
+ *   `app.use` registrations allowed before the authentication line (see PUBLIC_CORE_MIDDLEWARE). null (default)
+ *   leaves them unchecked (legacy behaviour).
+ * @returns {{routes: object[], ungated: object[], unparsed: object[], stale: string[], stalePublic: string[], staleOutside: string[]}}
+ *   `stale` lists exemptions matching no signed-in route; `stalePublic` lists publicRoutes keys (and unused
+ *   publicMiddleware entries as "USE <path> <handler>") matching no pre-auth registration
  */
-export function scan(src, exemptions = {}, publicRoutes = {}) {
-  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [] };
+export function scan(src, exemptions = {}, publicRoutes = {}, outsideRoutes = null, publicMiddleware = null, sources = null) {
+  const result = { routes: [], ungated: [], unparsed: [], stale: [], stalePublic: [], staleOutside: [] };
+  const seenOutside = new Set();
   let toks;
-  try { toks = tokenizeSafe(src); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
+  // With the middleware allow-list, the names it matches by (named middleware, every import, the built-ins and global
+  // objects inline middleware may use) also count: a reading that hides one of them in a "regex" could rebind it.
+  let extraIds = new Set();
+  if (Array.isArray(publicMiddleware)) {
+    try { extraIds = new Set([...importsOf(tokenize(src)).keys(), ...MIDDLEWARE_GLOBALS, ...GLOBAL_OBJECTS, ...Array.from(publicMiddleware, (e) => (typeof e?.handler === "string" ? e.handler.replace(/\(\)$/, "") : "")).filter(Boolean)]); } catch { /* tokenizeSafe reports it */ }
+  }
+  try { toks = tokenizeSafe(src, extraIds); } catch (e) { result.unparsed.push({ line: e.line ?? 0, reason: `Could not tokenize: ${e.message}` }); return result; }
 
   // Mechanism-independent cross-check on the raw text: whatever the tokenizer decided, every occurrence of the words
   // the scan depends on must be an identifier token. A hit inside what was read as a string, regex, template or
@@ -648,7 +953,7 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
       // registration inside a function or block there can run after authentication. The authentication line itself
       // may chain registrations (app.use("/api/*", authenticate).get(...)).
       if (!topLevel(i)) result.unparsed.push({ line: t.line, reason: `Registration before the authentication line is not a top-level statement of the factory: ${brief(toks.slice(i, i + 4))}` });
-      if (i !== authAt && !isOnError && reg.method !== "use") preRegs.push(reg);
+      if (i !== authAt && !isOnError) preRegs.push(reg);
       const e = chain(reg.argTo + 1, true, i === authAt ? regs : preRegs);
       if (e >= 0) wholeStatement(i, e, t.line);
       continue;
@@ -704,8 +1009,9 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
   const seenExempt = new Set();
   // Pre-auth registrations: public only when listed. Middleware (`use`) is out of scope and never reaches here.
   const seenPublic = new Set();
+  const preUse = preRegs.filter((r) => r.method === "use").sort((a, b) => a.tok - b.tok);
   for (const reg of preRegs) {
-    if (reg.method === "use") continue; // chained middleware
+    if (reg.method === "use") continue; // middleware: checked against publicMiddleware below
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();
     let pathArg;
@@ -736,6 +1042,119 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     seenPublic.add(key);
   }
   for (const key of Object.keys(publicRoutes)) if (!seenPublic.has(key)) result.stalePublic.push(key);
+  if (publicMiddleware !== null && !Array.isArray(publicMiddleware)) {
+    result.unparsed.push({ line: 0, reason: "The public middleware allow-list (PUBLIC_CORE_MIDDLEWARE) is not an array; pre-authentication middleware was not checked" });
+  } else if (publicMiddleware !== null) {
+    const list = Array.from(publicMiddleware); // holes become undefined, which validation rejects
+    const nonEmpty = (v) => typeof v === "string" && v.trim() !== "";
+    // Entries that are not well-formed never exempt anything: they are reported and skipped.
+    const used = list.map((e, k) => {
+      const ok = e !== null && typeof e === "object" && nonEmpty(e.path) && nonEmpty(e.handler) && nonEmpty(e.reason)
+        && (e.handler === "inline" ? typeof e.fingerprint === "string" && /^[0-9a-f]{16}$/.test(e.fingerprint) && e.from === undefined : nonEmpty(e.from) && e.fingerprint === undefined);
+      if (!ok) result.unparsed.push({ line: 0, reason: `PUBLIC_CORE_MIDDLEWARE[${k}] is not a valid entry (named: { path, handler, from, reason }; inline: { path, handler: "inline", fingerprint (16 hex digits), reason }; reason non-empty): ${JSON.stringify(e) ?? String(e)}` });
+      return !ok;
+    });
+    const imports = importsOf(toks);
+    const helperSrc = sources ?? diskSources();
+    const helperProblems = (module, imported, line) => {
+      const p = helperProblem(module, imported, helperSrc);
+      if (p) return p[0] === "unparsed" ? result.unparsed.push({ line, reason: p[1] }) : result.ungated.push({ key: `HELPER ${module}:${imported}`, method: "HELPER", path: module, line, gated: false, gates: [], exempt: null, reason: p[1] });
+      return 0;
+    };
+    // Every token index where a named pre-auth middleware is used as the handler: the only allowed non-import uses.
+    const handlerAt = new Map();
+    for (const reg of preUse) {
+      const args = splitArgs(toks, reg.argFrom, reg.argTo);
+      if (args.length === 2 && isId(toks[args[1][0]])) { const n = toks[args[1][0]].value; if (!handlerAt.has(n)) handlerAt.set(n, new Set()); handlerAt.get(n).add(args[1][0]); }
+    }
+    const firstPublicRoute = Math.min(...preRegs.filter((r) => r.method !== "use").map((r) => r.tok));
+    let lastAt = -1;
+    for (const reg of preUse) {
+      const args = splitArgs(toks, reg.argFrom, reg.argTo);
+      const ptoks = args[0] ? toks.slice(args[0][0], args[0][1]) : [];
+      if (args.length !== 2 || !(ptoks.length === 1 && ptoks[0].type === "str" && !ptoks[0].value.includes("\\"))) {
+        result.unparsed.push({ line: reg.line, reason: `app.use registered before the authentication line must be app.use("<literal path>", <one handler>); cannot read it literally: ${brief(toks.slice(reg.argFrom, Math.min(reg.argTo, reg.argFrom + 6))) || "?"}` });
+        continue;
+      }
+      const [ha, hb] = args[1];
+      const h = toks.slice(ha, hb);
+      const fn = parseFn(toks, ha, hb);
+      let handler = null, name = null, fingerprint = null, from = null;
+      const helperUses = new Map();
+      if (fn) handler = "inline";
+      else if (h.length === 1 && isId(h[0])) { name = h[0].value; handler = idName(name); }
+      else if (h.length === 3 && isId(h[0]) && isId(h[1], "as") && isId(h[2])) { name = h[0].value; handler = idName(name); }
+      else if (h.length === 3 && isId(h[0]) && isP(h[1], "(") && isP(h[2], ")")) { name = h[0].value; handler = `${idName(name)}()`; }
+      if (handler === null) {
+        result.unparsed.push({ line: reg.line, reason: `app.use ${ptoks[0].value}: handler before the authentication line is not an inline function, an identifier, a cast identifier or a call with no arguments: ${brief(h) || "?"}` });
+        continue;
+      }
+      const ungated = (reason) => result.ungated.push({ key: `USE ${ptoks[0].value}`, method: "USE", path: ptoks[0].value, line: reg.line, gated: false, gates: [], exempt: null, reason });
+      if (reg.tok > firstPublicRoute) {
+        ungated("Middleware registered after a public route but before the authentication line; public routes rely on the middleware above them (CSRF guard, request context), so every pre-auth app.use must come before the first public route");
+        continue;
+      }
+      if (!list.some((e, k) => !used[k] && e.path === ptoks[0].value && e.handler === handler)) {
+        ungated("Middleware registered before the authentication line and not on the public middleware allow-list (PUBLIC_CORE_MIDDLEWARE)");
+        continue;
+      }
+      if (name !== null) {
+        // Matched by name, so the name must be one unrenamed value import and appear nowhere else in the file
+        // (no declaration, parameter, assignment or other use that could rebind it).
+        const imp = imports.get(name) ?? [];
+        const stray = imp.length === 1 ? strayUses(toks, name, new Set([imp[0].at, ...handlerAt.get(name)])) : [];
+        if (imp.length !== 1 || imp[0].imported !== name || stray.length) {
+          result.unparsed.push({ line: stray.length ? toks[stray[0]].line : reg.line, reason: `app.use ${ptoks[0].value}: middleware \`${name}\` must be bound by exactly one unrenamed import and used nowhere else in this file (only as a pre-auth middleware); the allow-list matches it by name, so another binding could swap it` });
+          continue;
+        }
+        from = imp[0].module;
+        helperUses.set(`${from}:${name}`, imp[0]);
+      } else {
+        // Inline: pin the code and where every free identifier it uses comes from.
+        const bindings = [];
+        let bad = null;
+        for (let k = ha; k < hb && !bad; k++) {
+          const t = toks[k];
+          if (!isId(t) || JS_WORDS.has(t.value) || isP(toks[k - 1], ".") || isP(toks[k - 1], "?.") || isP(toks[k - 1], "#")) continue;
+          if (isP(toks[k + 1], ":") && (isP(toks[k - 1], "{") || isP(toks[k - 1], ","))) continue; // object key
+          if ((fn.param >= 0 && toks[fn.param].value === t.value) || redeclares(toks, fn, t.value)) continue; // local to the handler (its code is pinned)
+          const imp = imports.get(t.value) ?? [];
+          const inside = new Set(); for (let q = ha; q < hb; q++) if (isId(toks[q], t.value)) inside.add(q);
+          if (imp.length === 1) inside.add(imp[0].at);
+          const stray = strayUses(toks, t.value, inside, true);
+          // A built-in can also be replaced through a global object (globalThis.Response = ..., Reflect.set(...)) or by
+          // its name as a string, so none of those may appear anywhere in the file.
+          const viaGlobal = imp.length === 0 && toks.some((u) => (isId(u) && GLOBAL_OBJECTS.has(u.value)) || ((u.type === "str" || u.type === "template") && (u.value ?? u.text ?? "").includes(t.value)));
+          if (imp.length > 1 || (imp.length === 0 && !MIDDLEWARE_GLOBALS.has(t.value)) || stray.length || viaGlobal) bad = t;
+          else {
+            bindings.push(imp.length ? `${t.value}=${imp[0].module}:${imp[0].imported}` : `${t.value}=global`);
+            if (imp.length) helperUses.set(`${imp[0].module}:${imp[0].imported}`, imp[0]);
+          }
+        }
+        if (bad) {
+          result.unparsed.push({ line: bad.line, reason: `app.use ${ptoks[0].value}: inline middleware uses \`${bad.value}\`, which must be one value import or a built-in and must not be declared, assigned or passed around elsewhere in this file (only called or read as \`${bad.value}(\` / \`${bad.value}.\`); a built-in also must not be reachable through globalThis/self/window/global/Reflect or named in a string` });
+          continue;
+        }
+        fingerprint = middlewareFingerprint(h, [...new Set(bindings)]);
+      }
+      // Exact match only: path, handler form, the import's module for named middleware, the fingerprint for inline.
+      const matches = (e) => e.path === ptoks[0].value && e.handler === handler && (handler === "inline" ? e.fingerprint === fingerprint : e.from === from);
+      const at = list.findIndex((e, k) => !used[k] && matches(e));
+      if (at >= 0) {
+        used[at] = true;
+        let helperBad = false;
+        for (const u of helperUses.values()) helperBad = helperProblems(u.module, u.imported, reg.line) > 0 || helperBad;
+        if (helperBad) continue;
+        if (at < lastAt) ungated(`Middleware before the authentication line runs in a different order than PUBLIC_CORE_MIDDLEWARE lists it (entry ${at} comes after entry ${lastAt} in the source); middleware order matters, so keep the list in source order`);
+        lastAt = Math.max(lastAt, at);
+        continue;
+      }
+      ungated(handler === "inline"
+        ? `Inline middleware before the authentication line does not match the reviewed code of any PUBLIC_CORE_MIDDLEWARE inline entry on this path (fingerprint ${fingerprint}); re-review it and update the entry's fingerprint and reason`
+        : `Middleware \`${name}\` is imported from "${from}", not from the module its PUBLIC_CORE_MIDDLEWARE entry names`);
+    }
+    list.forEach((e, k) => { if (!used[k] && e && typeof e === "object") result.stalePublic.push(`USE ${e.path} ${e.handler}`); });
+  }
   for (const reg of regs) {
     const args = splitArgs(toks, reg.argFrom, reg.argTo);
     let label = reg.method.toUpperCase();
@@ -759,7 +1178,16 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     else path = brief(ptoks) || "?";
     if (literal) {
       const first = path.startsWith("/") ? path.slice(1).split("/")[0] : null;
-      if (first !== null && /^[A-Za-z0-9_.~-]+$/.test(first) && first !== "api" && first !== "svc") continue; // out of scope
+      if (first !== null && /^[A-Za-z0-9_.~-]+$/.test(first) && first !== "api" && first !== "svc") {
+        if (outsideRoutes !== null) {
+          const okey = `${label} ${path}`;
+          const oentry = { key: okey, method: label, path, line: reg.line, gated: false, gates: [], exempt: null };
+          if (!Object.hasOwn(outsideRoutes, okey)) result.ungated.push({ ...oentry, reason: "Registered outside /api and /svc after the authentication line (no authentication, no need()) and not on the allow-list (OUTSIDE_SCOPE_ROUTES)" });
+          else if (seenOutside.has(okey)) result.ungated.push({ ...oentry, reason: "Duplicate registration of an allow-listed outside-scope route; only one is allowed" });
+          seenOutside.add(okey);
+        }
+        continue; // out of scope for the need() check
+      }
     }
     // Re-applying authentication is not a route.
     if (reg.method === "use" && args.length === 2 && literal && args[1][1] - args[1][0] === 1 && isId(toks[args[1][0]], "authenticate")) continue;
@@ -805,5 +1233,6 @@ export function scan(src, exemptions = {}, publicRoutes = {}) {
     }
   }
   for (const key of Object.keys(exemptions)) if (!seenExempt.has(key)) result.stale.push(key);
+  if (outsideRoutes !== null) for (const key of Object.keys(outsideRoutes)) if (!seenOutside.has(key)) result.staleOutside.push(key);
   return result;
 }

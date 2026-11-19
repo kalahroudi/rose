@@ -1,0 +1,294 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Project site, published to GitHub Pages by .github/workflows/pages.yml.
+     Self-contained: no external scripts, fonts or styles. The logos are copied from brand/ at deploy time. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Rose — multi-tenant SaaS starter kit</title>
+<meta name="description" content="Security-first multi-tenant SaaS starter kit for Cloudflare Workers: a private database per tenant, passkeys, envelope encryption, an operator console, and guardrails that keep AI-written changes inside the security model.">
+<meta property="og:title" content="Rose — multi-tenant SaaS starter kit for Cloudflare">
+<meta property="og:description" content="A private database per tenant, passkeys, envelope encryption, an operator console, and guardrails built for AI agents.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#e11d48">
+<link rel="icon" href="logo-mark.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #ffffff; --surface: #f7f7f8; --border: #e6e6ea; --text: #16161a; --muted: #5d5d68;
+    --accent: #e11d48; --on-accent: #ffffff; --code-bg: #f3f3f5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0b0f; --surface: #141419; --border: #26262e; --text: #ececf1; --muted: #a0a0ad;
+      --accent: #fb7185; --on-accent: #0b0b0f; --code-bg: #17171d;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 ui-sans-serif, Inter, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+  :not(pre) > code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px; padding: 0.05em 0.35em; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+  header.top { border-bottom: 1px solid var(--border); }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 16px; }
+  header.top img { height: 32px; display: block; }
+  header.top nav { display: flex; gap: 20px; font-size: 0.95rem; }
+  header.top nav a { color: var(--muted); }
+  header.top nav a:hover { color: var(--text); text-decoration: none; }
+
+  .hero { padding: 72px 0 56px; text-align: center; }
+  .hero h1 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.15; letter-spacing: -0.02em; margin: 0 auto 16px; max-width: 820px; font-weight: 700; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p.lead { color: var(--muted); font-size: 1.15rem; max-width: 680px; margin: 0 auto 28px; }
+  .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 600; border: 1px solid var(--border); color: var(--text); background: var(--surface); }
+  .btn:hover { text-decoration: none; border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+  .term { max-width: 560px; margin: 40px auto 0; text-align: left; background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .term .bar { padding: 8px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 0.8rem; }
+  .term pre { margin: 0; padding: 14px 16px; overflow-x: auto; line-height: 1.7; }
+  .term .c { color: var(--muted); }
+
+  section { padding: 56px 0; border-top: 1px solid var(--border); }
+  section h2 { font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .sub { color: var(--muted); margin: 0 0 32px; max-width: 680px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+  .card h3 { margin: 0 0 10px; font-size: 1.05rem; display: flex; align-items: center; gap: 10px; }
+  .card h3 svg { flex: none; color: var(--accent); }
+  .card ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  .card li { margin: 4px 0; }
+
+  .arch { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .arch { grid-template-columns: 1fr; } header.top nav a.hide-sm { display: none; } }
+  .plane { border: 1px dashed var(--border); border-radius: 12px; padding: 18px; }
+  .plane h4 { margin: 0 0 12px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 0.95rem; }
+  .box small { display: block; color: var(--muted); }
+  .box.db { border-left: 3px solid var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row .box { flex: 1 1 140px; }
+  .note { color: var(--muted); font-size: 0.95rem; margin-top: 16px; }
+
+  pre.code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; line-height: 1.55; margin: 0; }
+  .split { display: grid; grid-template-columns: 1.2fr 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+  .split p { margin-top: 0; }
+
+  .docs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .docs a { display: block; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--surface); }
+  .docs a:hover { text-decoration: none; border-color: var(--accent); }
+  .docs a span { display: block; color: var(--muted); font-size: 0.88rem; }
+
+  .limits { color: var(--muted); padding-left: 18px; }
+  .limits li { margin: 6px 0; }
+
+  footer { border-top: 1px solid var(--border); padding: 28px 0 40px; color: var(--muted); font-size: 0.9rem; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a href="./" aria-label="Rose home">
+      <picture>
+        <source srcset="logo-wordmark-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="logo-wordmark.svg" alt="Rose" width="94" height="32">
+      </picture>
+    </a>
+    <nav aria-label="Main">
+      <a href="#features" class="hide-sm">Features</a>
+      <a href="#architecture" class="hide-sm">Architecture</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/kalahroudi/rose">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <h1>Multi-tenant SaaS on Cloudflare, with <em>isolation by construction</em></h1>
+      <p class="lead">Rose is a security-first starter kit. Tenant isolation, passkey authentication, encryption, an operator console and a tenant app are done. You add your product as small modules, and the guardrails keep every change, human or AI-written, inside the security model.</p>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/kalahroudi/rose#60-second-start">Get started</a>
+        <a class="btn" href="https://github.com/kalahroudi/rose/blob/main/docs/architecture.md">Read the architecture</a>
+      </div>
+      <div class="term" role="region" aria-label="Quick start">
+        <div class="bar">60-second start · no Cloudflare account needed</div>
+<pre><code>git clone https://github.com/kalahroudi/rose.git &amp;&amp; cd rose
+pnpm install
+pnpm dev
+<span class="c"># console  http://localhost:5173
+# app      http://localhost:5174</span></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>What you get</h2>
+      <p class="sub">The hard, easy-to-get-wrong parts of a multi-tenant product, finished and tested.</p>
+      <div class="grid">
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Isolation by construction</h3>
+          <ul>
+            <li>Every tenant has its own SQLite database (a Durable Object). No shared table to leak from.</li>
+            <li>The request host decides the tenant. Sessions, passkeys, API keys and codes are bound to one tenant.</li>
+            <li>The operator console runs in a separate Worker with no path to tenant data.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m16 7 3 3"/><path d="m18 5 2 2"/></svg>Modern authentication</h3>
+          <ul>
+            <li>Passkeys (WebAuthn) and emailed one-time codes. No passwords.</li>
+            <li>Host-bound <code>__Host-</code> cookies, server-side sessions, CSRF protection, rate limits.</li>
+            <li>Self-service signup, invitations, roles and scoped API keys.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Encryption</h3>
+          <ul>
+            <li>Per-tenant data keys wrapped by a master key (AES-256-GCM envelope encryption).</li>
+            <li>One-line field encryption bound to tenant and column; blind indexes for exact search.</li>
+            <li>Deleting a tenant destroys its key after a 48-hour grace period.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="M13 9h5M13 13h5"/></svg>Two finished apps, one UI kit</h3>
+          <ul>
+            <li>Operator console: tenants, custom domains, operators, audit, background jobs, setup health.</li>
+            <li>Tenant app: onboarding, members, API keys, audit log, settings, and a Contacts module to copy.</li>
+            <li>Shared shell, drawers, paginated tables, confirmations, light and dark, in-app help.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/><circle cx="5" cy="12" r="2"/></svg>Multi-tenant any service</h3>
+          <ul>
+            <li>A <code>/svc</code> gateway forwards authenticated requests to your existing service with a short-lived signed tenant token.</li>
+            <li>Or route to per-tenant Workers with Workers for Platforms.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>Built for AI agents</h3>
+          <ul>
+            <li><code>AGENTS.md</code>, skills, and hooks that run the guard after every edit.</li>
+            <li>Static guard rules that explain why and how to fix.</li>
+            <li>An isolation test contract that automatically covers every new module.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <div class="wrap">
+      <h2>Two planes, one rule</h2>
+      <p class="sub">Tenant data and operator tooling never share a path. The control plane holds identity and routing only.</p>
+      <div class="arch">
+        <div class="plane">
+          <h4>Tenant plane · acme.example.com</h4>
+          <div class="box"><strong>rose-app worker</strong><small>auth · modules · /svc gateway</small></div>
+          <div class="row">
+            <div class="box db"><strong>Tenant A</strong><small>private SQLite</small></div>
+            <div class="box db"><strong>Tenant B</strong><small>private SQLite</small></div>
+          </div>
+          <div class="box"><strong>Your service</strong><small>signed tenant token, or per-tenant Workers</small></div>
+        </div>
+        <div class="plane">
+          <h4>Operator plane · admin.example.com</h4>
+          <div class="box"><strong>rose-admin worker</strong><small>tenants · domains · operators · audit</small></div>
+          <div class="box db"><strong>Control plane · D1</strong><small>identity and routing only, shared by both workers</small></div>
+          <div class="box"><strong>No tenant database binding</strong><small>operator work on tenant data runs as a job inside the tenant worker</small></div>
+        </div>
+      </div>
+      <p class="note">Full threat model, with the control and the test that proves each one: <a href="https://github.com/kalahroudi/rose/blob/main/docs/tenancy-and-isolation.md">tenancy and isolation</a>.</p>
+    </div>
+  </section>
+
+  <section id="build">
+    <div class="wrap">
+      <div class="split">
+        <div>
+<pre class="code"><code>export const orders = defineModule({
+  id: "orders",
+  permissions: { "orders:read": ["owner", "admin", "member"] },
+  migrations: [{ id: "orders_001",
+    sql: "CREATE TABLE orders (id TEXT PRIMARY KEY, item TEXT NOT NULL)" }],
+  routes: [{
+    method: "GET", path: "/", permission: "orders:read",
+    handler: async (ctx) =&gt; ({
+      items: await ctx.db.all("SELECT * FROM orders LIMIT 50"),
+    }),
+  }],
+  isolationProbe: { /* how the shared tests create and find a record */ },
+});</code></pre>
+        </div>
+        <div>
+          <h2>Build on it</h2>
+          <p>Add a feature by adding a module: a complete, isolated, permission-checked, audited endpoint.</p>
+          <p><code>ctx.db</code> can only reach the current tenant, and there is no <code>env</code> to misuse. Register the module and the isolation suite tests it automatically.</p>
+          <p><a href="https://github.com/kalahroudi/rose/blob/main/docs/adding-a-module.md">Adding a module →</a><br>
+             <a href="https://github.com/kalahroudi/rose/blob/main/docs/multi-tenanting-a-service.md">Already have a service? →</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="docs">
+    <div class="wrap">
+      <h2>Documentation</h2>
+      <p class="sub">Everything lives in the repository, next to the code it describes.</p>
+      <div class="docs">
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/architecture.md">Architecture<span>The two planes, request lifecycle, where data lives</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/tenancy-and-isolation.md">Tenancy and isolation<span>Every threat, its control, and its test</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/authentication.md">Authentication<span>Passkeys, email codes, sessions, operators</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/encryption.md">Encryption<span>Key hierarchy, field encryption, rotation</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/adding-a-module.md">Adding a module<span>Build your product on the kit</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/ui.md">Building UI<span>Page template, tables, drawers, help</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/multi-tenanting-a-service.md">Multi-tenanting a service<span>Gateway, dispatch namespaces, custom domains</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/agents.md">Building with AI agents<span>The guardrails and their limits</span></a>
+        <a href="https://github.com/kalahroudi/rose/blob/main/docs/deployment.md">Deployment<span>Guided Cloudflare setup and deploy</span></a>
+      </div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="wrap">
+      <h2>Status and limits</h2>
+      <p class="sub">Rose is a starter kit, not a managed product. Before production, know that:</p>
+      <ul class="limits">
+        <li>The production setup and deploy scripts are verified with <code>--dry-run</code> only in this repository.</li>
+        <li>The full passkey ceremony, live Cloudflare for SaaS calls and Workers for Platforms dispatch are not covered by automated tests.</li>
+        <li>Search on encrypted fields is exact-match. The edge rate limiter is per location.</li>
+        <li>No billing, file storage or per-tenant KV helpers yet.</li>
+        <li>The guard is a tripwire for drift, not a proof of security. The guarantees come from the per-tenant database, the typed module context and the isolation tests.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Apache-2.0 © <a href="https://github.com/kalahroudi">kalahroudi</a></span>
+    <span><a href="https://github.com/kalahroudi/rose/blob/main/SECURITY.md">Report a vulnerability</a> · <a href="https://github.com/kalahroudi/rose">Source on GitHub</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

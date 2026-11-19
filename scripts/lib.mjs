@@ -160,3 +160,36 @@ export function setRoutes(text, routes) {
 
 export const readText = (p) => readFileSync(p, "utf8");
 export const writeText = (p, s) => writeFileSync(p, s);
+
+/**
+ * `withheld`: the console answered 200 but sent no code. Then `local` says whether a local-stack diagnosis
+ * applies: `why` is its result (null when no known cause), `diagnosisError` is why it could not run.
+ */
+export function operatorNoSessionReason(error, verifyBrief, { withheld = false, local = false, why = null, diagnosisError = null } = {}) {
+  if (error == null) return `the verify succeeded without a session cookie (${verifyBrief ?? "no response"})`;
+  if (!withheld) return error;
+  if (!local) return `${error} Is this a production deployment? Use --provision wrangler.`;
+  if (diagnosisError) return `${error} (could not diagnose: ${diagnosisError})`;
+  return why ?? `${error} The operator has no passkey yet got no code: check BOOTSTRAP_OPERATOR_EMAIL and the console logs.`;
+}
+
+/**
+ * Why the console refused to issue a development sign-in code to an operator address, given what the local
+ * control plane holds. Returns an actionable message, or null when none of the known causes apply.
+ * Pure: the caller does the (read-only) lookups. Never include codes or tokens.
+ */
+export function diagnoseOperatorSignIn(email, { userExists, isOperator, passkeys, noOperators = false }) {
+  if (noOperators) {
+    if (passkeys > 0) {
+      return `This dev control plane has no operators yet and ${email} has a console passkey, so emailed codes are refused: remove that passkey, or pass --operator-email <the BOOTSTRAP_OPERATOR_EMAIL value from apps/admin/.dev.vars>.`;
+    }
+    return `This dev control plane has no operators yet, so the console sends a code only to its bootstrap address: pass --operator-email <the BOOTSTRAP_OPERATOR_EMAIL value from apps/admin/.dev.vars>, or sign in to the console with that address once. If ${email} already is that address, check BOOTSTRAP_OPERATOR_EMAIL is set (not empty) in apps/admin/.dev.vars and restart the dev stack.`;
+  }
+  if (!userExists || !isOperator) {
+    return `${email} is not an operator in this dev control plane, so the console sends it no code: pass --operator-email <an operator's address>.`;
+  }
+  if (passkeys > 0) {
+    return `${email} has a console passkey, so emailed codes are refused: pass --operator-email of an operator without a passkey, or remove the passkey in the console.`;
+  }
+  return null;
+}

@@ -35,7 +35,7 @@ const input = z.object({
 const EMAIL = "contacts.email";
 const NOTES = "contacts.notes";
 
-async function seal(ctx: ModuleJobContext, v: { email: string; notes: string }) {
+async function seal(ctx: Pick<ModuleJobContext, "crypto">, v: { email: string; notes: string }) {
   const c = await ctx.crypto();
   return {
     email_enc: v.email ? await c.encrypt(v.email, EMAIL) : null,
@@ -131,7 +131,7 @@ export const contacts = defineModule({
       const lines = String(payload.csv ?? "").split(/\r?\n/).filter((l) => l.trim());
       let imported = 0;
       let skipped = 0;
-      for (const line of lines) {
+      for (const [i, line] of lines.entries()) {
         const [name = "", email = "", company = ""] = parseCsvLine(line);
         const parsed = input.safeParse({ name, email, company });
         if (!parsed.success || name.toLowerCase() === "name") {
@@ -140,8 +140,9 @@ export const contacts = defineModule({
         }
         const s = await seal(ctx, { email: parsed.data.email, notes: "" });
         const t = now();
-        await ctx.db.run("INSERT INTO contacts (id, name, company, email_enc, email_idx, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'lead', ?, ?)", [
-          newId("ct"), parsed.data.name, parsed.data.company, s.email_enc, s.email_idx, t, t,
+        await ctx.db.run("INSERT OR IGNORE INTO contacts (id, name, company, email_enc, email_idx, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'lead', ?, ?)", [
+          // Derived from the job and line so a reclaimed rerun skips rows already inserted.
+          `ct_${ctx.jobId}_${i}`, parsed.data.name, parsed.data.company, s.email_enc, s.email_idx, t, t,
         ]);
         imported++;
       }

@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
-import { CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, scan, tokenize } from "./route-authz-scan.mjs";
+import { CORE_EXEMPTIONS, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_MIDDLEWARE, PUBLIC_CORE_ROUTES, middlewareFingerprint, scan, tokenize } from "./route-authz-scan.mjs";
+// Fingerprint of the plain pass-through inline middleware used in fixtures (it uses no free identifiers).
+const FP_NEXT = middlewareFingerprint(tokenize("async (c, next) => { await next(); }"));
 
 const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
 const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
@@ -512,4 +514,201 @@ test("`#name` after a keyword-named private field is a property, and `extends /r
 test("impossible readings are discarded: no false positive on (1) / 2 + [4][0] / 2", () => {
   const r = scan(wrap("const a = (1) / 2 + [4][0] / 2; const b = (a) / 2 + f(b) / 3;"), {});
   assert.deepEqual(r.unparsed, []);
+});
+
+test("the real tenant-app.ts passes with OUTSIDE_SCOPE_ROUTES enforced", () => {
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, OUTSIDE_SCOPE_ROUTES);
+  assert.deepEqual([r.unparsed, r.ungated, r.stale, r.stalePublic, r.staleOutside], [[], [], [], [], []]);
+});
+
+test("an unlisted post-auth route outside /api and /svc is reported", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({ secret: 1 }));'), {}, {}, {});
+  assert.deepEqual(r.ungated.map((u) => u.key), ["GET /evil"]);
+  assert.deepEqual(r.staleOutside, []);
+});
+
+test("a listed post-auth route outside /api and /svc passes", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({}));'), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual([r.ungated, r.unparsed, r.staleOutside], [[], [], []]);
+});
+
+test("a stale outside-scope entry is reported", () => {
+  const r = scan(wrap(GOOD), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual(r.staleOutside, ["GET /evil"]);
+  assert.deepEqual(r.ungated, []);
+});
+
+test("a duplicate listed outside-scope registration is reported", () => {
+  const r = scan(wrap('app.get("/evil", async (c) => c.json({})); app.get("/evil", async (c) => c.json({}));'), {}, {}, { "GET /evil": "reason" });
+  assert.deepEqual(r.ungated.map((u) => u.key), ["GET /evil"]);
+});
+
+const MW_IMPORTS = 'import { csrfGuard, requestContext } from "./http/base";\nimport { etag } from "hono/etag";\n';
+const MW = (pre, list = PUBLIC_CORE_MIDDLEWARE) => scan(`${MW_IMPORTS}function f() {\nconst app = new Hono();\n${pre}\n${AUTH}\nreturn app;\n}`, {}, {}, null, list);
+const MW_OK = [{ path: "*", handler: "inline", fingerprint: FP_NEXT, reason: "r" }, { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }];
+const MW_SRC = 'app.use("*", async (c, next) => { await next(); });\napp.use("/api/*", csrfGuard);';
+
+test("pre-auth middleware: listed middleware passes, in source order", () => {
+  const r = MW(MW_SRC, MW_OK);
+  assert.deepEqual([r.ungated, r.unparsed, r.stalePublic], [[], [], []]);
+  assert.ok(PUBLIC_CORE_MIDDLEWARE.every((e) => e.reason.trim() && e.path && e.handler));
+});
+
+test("pre-auth middleware: an answering app.use above the auth line is flagged", () => {
+  const r = MW(`${MW_SRC}\napp.use("/api/evil", async (c) => c.json(secret));`, MW_OK);
+  assert.deepEqual(r.ungated.map((u) => u.key), ["USE /api/evil"]);
+  assert.match(r.ungated[0].reason, /PUBLIC_CORE_MIDDLEWARE/);
+});
+
+test("pre-auth middleware: an extra unlisted app.use('*', inline) is flagged (each entry is used once)", () => {
+  const r = MW(`${MW_SRC}\napp.use("*", async (c, next) => { await next(); });`, MW_OK);
+  assert.deepEqual(r.ungated.map((u) => u.key), ["USE *"]);
+});
+
+test("pre-auth middleware: a removed listed middleware is stale", () => {
+  const r = MW('app.use("*", async (c, next) => { await next(); });', MW_OK);
+  assert.deepEqual(r.stalePublic, ["USE /api/* csrfGuard"]);
+});
+
+test("pre-auth middleware: non-literal path or handler is unparsed, never a pass", () => {
+  for (const s of ['app.use(P, csrfGuard);', 'app.use(`/api/${x}`, csrfGuard);', 'app.use("/api/*", a, b);', 'app.use("/api/*", ...hs);', 'app.use("/api/*", (a || b));', 'app.use(csrfGuard);']) {
+    const r = MW(s, MW_OK);
+    assert.equal(r.unparsed.length, 1, s);
+    assert.deepEqual(r.ungated, [], s);
+  }
+});
+
+test("pre-auth middleware: a chained use after a listed one is checked too", () => {
+  const r = MW('app.use("*", async (c, next) => { await next(); }).use("/api/evil", async (c) => c.json(1));\napp.use("/api/*", csrfGuard);', MW_OK);
+  assert.deepEqual(r.ungated.map((u) => u.key), ["USE /api/evil"]);
+});
+
+test("the real tenant-app.ts passes with PUBLIC_CORE_MIDDLEWARE enforced", () => {
+  const r = scan(readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8"), CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_MIDDLEWARE);
+  assert.deepEqual([r.unparsed, r.ungated, r.stale, r.stalePublic, r.staleOutside], [[], [], [], [], []]);
+});
+
+test("pre-auth middleware: calls with arguments are unparsed; bare and call forms differ", () => {
+  const list = [{ path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }, { path: "/api/*", handler: "etag()", from: "hono/etag", reason: "r" }];
+  const ok = MW('app.use("/api/*", csrfGuard);\napp.use("/api/*", etag());', list);
+  assert.deepEqual([ok.ungated, ok.unparsed, ok.stalePublic], [[], [], []]);
+  for (const s of ['app.use("/api/*", etag(async (c) => c.json(secret)));\napp.use("/api/*", csrfGuard);', 'app.use("/api/*", etag());\napp.use("/api/*", csrfGuard(x));']) {
+    const r = MW(s, list);
+    assert.ok(r.unparsed.length === 1 && r.ungated.length === 0, s);
+  }
+  const bare = MW('app.use("/api/*", csrfGuard);\napp.use("/api/*", etag);', list);
+  assert.deepEqual(bare.ungated.map((u) => u.key), ["USE /api/*"]);
+});
+
+// L14 review follow-ups: exact handler form, reviewed inline code, import-only names, order, list validation.
+const REAL = () => readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
+const realMw = (src) => scan(src, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_MIDDLEWARE);
+const beforeFirstUse = (src, code) => { const at = src.indexOf('app.use("*"'); assert.ok(at > 0); return `${src.slice(0, at)}${code}\n  ${src.slice(at)}`; };
+const swap = (src, a, b) => { assert.ok(src.includes(a), a); return src.replace(a, b); };
+
+test("pre-auth middleware: a no-argument call never matches a bare-identifier entry", () => {
+  const r = MW('app.use("*", requestContext());', [{ path: "*", handler: "requestContext", from: "./http/base", reason: "r" }]);
+  assert.deepEqual([r.ungated.map((u) => u.key), r.stalePublic], [["USE *"], ["USE * requestContext"]]);
+  for (const [a, b] of [['app.use("*", requestContext as never);', 'app.use("*", requestContext());'], ['app.use("/api/*", csrfGuard);', 'app.use("/api/*", csrfGuard());']]) {
+    const r2 = realMw(swap(REAL(), a, b));
+    assert.equal(r2.ungated.length, 1, b);
+  }
+});
+
+test("pre-auth middleware: changing the code of a reviewed inline middleware fails until its fingerprint is updated", () => {
+  assert.ok(PUBLIC_CORE_MIDDLEWARE.filter((e) => e.handler === "inline").every((e) => /^[0-9a-f]{16}$/.test(e.fingerprint ?? "")));
+  const r = realMw(swap(REAL(), 'app.use("*", async (c, next) => {', 'app.use("*", async (c, next) => {\n    return c.json({ leaked: c.env });'));
+  assert.ok(r.ungated.some((u) => /fingerprint/.test(u.reason)), JSON.stringify(r.ungated));
+  // whitespace and comments are not code: they do not change the fingerprint
+  const r2 = realMw(swap(REAL(), 'app.use("*", async (c, next) => {', 'app.use("*", async (c, next) => { // reviewed\n'));
+  assert.deepEqual([r2.ungated, r2.unparsed, r2.stalePublic], [[], [], []]);
+});
+
+test("pre-auth middleware: a named handler must be bound only by an import", () => {
+  for (const code of ["const csrfGuard = async (c) => c.json(secret);", "const etag = () => async (c) => c.json(secret);", "let { requestContext } = evil;"]) {
+    const r = realMw(beforeFirstUse(REAL(), code));
+    assert.ok(r.unparsed.some((u) => /exactly one unrenamed import|must be one value import/.test(u.reason)), code);
+  }
+  const assigned = MW('csrfGuard = evil;\napp.use("/api/*", csrfGuard);', [{ path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }]);
+  assert.equal(assigned.unparsed.length, 1);
+  const notImported = scan(`function f() {\nconst app = new Hono();\napp.use("/api/*", csrfGuard);\n${AUTH}\nreturn app;\n}`, {}, {}, null, [{ path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }]);
+  assert.equal(notImported.unparsed.length, 1);
+  const renamed = scan(`import { csrfGuard as cg } from "./http/base";\nfunction f() {\nconst app = new Hono();\napp.use("/api/*", csrfGuard);\n${AUTH}\nreturn app;\n}`, {}, {}, null, [{ path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }]);
+  assert.equal(renamed.unparsed.length, 1);
+});
+
+test("pre-auth middleware: registrations must follow the list order", () => {
+  const list = [{ path: "*", handler: "requestContext", from: "./http/base", reason: "r" }, { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" }];
+  const ok = MW('app.use("*", requestContext);\napp.use("/api/*", csrfGuard);', list);
+  assert.deepEqual([ok.ungated, ok.unparsed, ok.stalePublic], [[], [], []]);
+  const r = MW('app.use("/api/*", csrfGuard);\napp.use("*", requestContext);', list);
+  assert.equal(r.ungated.length, 1);
+  assert.match(r.ungated[0].reason, /order/);
+});
+
+test("pre-auth middleware: a malformed allow-list is reported, never a pass or a crash", () => {
+  const src = 'app.use("/api/*", csrfGuard);';
+  for (const list of [[{ path: "/api/*", handler: "csrfGuard" }], [{ path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "  " }], [null], [{ path: "*", handler: "csrfGuard", from: "./http/base", reason: "r", fingerprint: "abc" }]]) {
+    const r = MW(src, list);
+    assert.ok(r.unparsed.some((u) => /PUBLIC_CORE_MIDDLEWARE\[0\]/.test(u.reason)), JSON.stringify(list));
+    assert.deepEqual(r.ungated.map((u) => u.key), ["USE /api/*"], JSON.stringify(list));
+  }
+  const notArray = MW(src, { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" });
+  assert.equal(notArray.unparsed.length, 1);
+});
+
+test("pre-auth middleware: the import's module is pinned and must not be renamed", () => {
+  const r = realMw(swap(REAL(), 'import { etag } from "hono/etag";', 'import { etag } from "./evil";'));
+  assert.ok(r.ungated.some((u) => /imported from "\.\/evil"/.test(u.reason)), JSON.stringify(r.ungated));
+  const noBase = (src) => swap(src, "import { clientIp, csrfGuard, errorHandler,", "import { clientIp, errorHandler,");
+  for (const imp of ['import { csrfGuard } from "./evil";', 'import { answer as csrfGuard } from "./http/base";', 'import csrfGuard from "./http/base";']) {
+    const r2 = realMw(swap(noBase(REAL()), 'import { z } from "zod";', `import { z } from "zod";\n${imp}`));
+    assert.ok(r2.ungated.length + r2.unparsed.length > 0, imp);
+  }
+});
+
+test("pre-auth middleware: any other binding of a named middleware fails (generic params, using, namespaces)", () => {
+  const fac = "export function createTenantApp(options: TenantAppOptions) {";
+  for (const [a, b] of [[fac, "export function createTenantApp<T = unknown>(options: TenantAppOptions, [csrfGuard, requestContext]: any[] = [evil, evil]) {"], [fac, `namespace csrfGuard {}\n${fac}`], ["  const app = new Hono<Env>();", "  using csrfGuard: any = evil;\n  const app = new Hono<Env>();"], ["  const app = new Hono<Env>();", "  ({ csrfGuard } = evil);\n  const app = new Hono<Env>();"]]) {
+    const r = realMw(swap(REAL(), a, b));
+    assert.ok(r.unparsed.length > 0, b);
+  }
+});
+
+test("pre-auth middleware: all middleware must come before the first public route", () => {
+  const r = realMw(swap(swap(REAL(), '  app.use("/api/*", csrfGuard);\n', ""), '  app.use("/api/*", authenticate);', '  app.use("/api/*", csrfGuard);\n  app.use("/api/*", authenticate);'));
+  assert.ok(r.ungated.some((u) => /after a public route/.test(u.reason)), JSON.stringify(r.ungated));
+});
+
+test("pre-auth middleware: helpers called by a fingerprinted inline middleware cannot be shadowed or re-imported", () => {
+  for (const code of ["const assertEnvironment = (_e) => { throw 0; };", "const Response = class {};", "const resolveHost = async () => evil;"]) {
+    const r = realMw(swap(REAL(), "  const app = new Hono<Env>();", `  ${code}\n  const app = new Hono<Env>();`));
+    assert.ok(r.unparsed.some((u) => /inline middleware uses/.test(u.reason)), code);
+  }
+  const moved = realMw(swap(REAL(), 'import { hostnameOf, invalidateHostCache, resolveHost, type HostResolution } from "./tenancy/resolve";', 'import { hostnameOf, invalidateHostCache, type HostResolution } from "./tenancy/resolve";\nimport { resolveHost } from "./evil";'));
+  assert.ok(moved.ungated.some((u) => /fingerprint/.test(u.reason)), JSON.stringify(moved.ungated));
+});
+
+test("pre-auth middleware: inline entries need a fingerprint, named entries a module, and holes are reported", () => {
+  for (const list of [[{ path: "*", handler: "inline", reason: "r" }], [{ path: "/api/*", handler: "csrfGuard", reason: "r" }]]) {
+    const r = MW('app.use("*", async (c, next) => { await next(); });\napp.use("/api/*", csrfGuard);', list);
+    assert.ok(r.unparsed.some((u) => /PUBLIC_CORE_MIDDLEWARE\[0\]/.test(u.reason)), JSON.stringify(list));
+  }
+  const sparse = [];
+  sparse[1] = { path: "/api/*", handler: "csrfGuard", from: "./http/base", reason: "r" };
+  const r = MW('app.use("/api/*", csrfGuard);', sparse);
+  assert.ok(r.unparsed.some((u) => /PUBLIC_CORE_MIDDLEWARE\[0\]/.test(u.reason)));
+  assert.deepEqual(r.ungated, []);
+});
+
+test("pre-auth middleware: names hidden by an ambiguous `/`, global rebinding and namespace merges are caught", () => {
+  const fac = "export function createTenantApp(options: TenantAppOptions) {";
+  const hidden = realMw(swap(REAL(), fac, "export function createTenantApp(options: TenantAppOptions, a = 0 as Array<any> / 1, csrfGuard: any = globalThis.answerAll, b = 1 / 1) {"));
+  assert.ok(hidden.unparsed.length > 0, "a parameter hidden in a misread regex");
+  for (const code of ["globalThis.Response = Evil as never;", 'Reflect.set(globalThis, "Response", Evil);']) {
+    const r = realMw(swap(REAL(), "  const app = new Hono<Env>();", `  ${code}\n  const app = new Hono<Env>();`));
+    assert.ok(r.unparsed.some((u) => /inline middleware uses `Response`/.test(u.reason)), code);
+  }
+  const ns = realMw(swap(REAL(), fac, `namespace Response.x { export const y = 1; }\n${fac}`));
+  assert.ok(ns.unparsed.some((u) => /inline middleware uses `Response`/.test(u.reason)));
 });
