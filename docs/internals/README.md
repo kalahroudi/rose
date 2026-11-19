@@ -7,3 +7,4 @@ comments. Each page references files and symbols, not line numbers.
 | Page | Area |
 |---|---|
 | [Core auth](core-auth.md) | `packages/core/src/auth`: realms, email codes, passkeys, sessions |
+| [Core HTTP](core-http.md) | `packages/core/src/http`: request context, CSRF, errors, bodies, rate limits, cookies, list queries, LIKE patterns, sort |
