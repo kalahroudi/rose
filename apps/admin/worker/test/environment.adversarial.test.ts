@@ -121,7 +121,7 @@ describe("adversarial: operator console in production", () => {
   it("refuses a session over plain HTTP", async () => {
     // Obtain a real operator session through development sign-in, then replay it over HTTP in production.
     const dev = withEnv("development");
-    const { devCode } = (await (await fetchWith(dev, "/api/auth/code/request", codeReq())).json()) as { devCode: string };
+    const { devCode } = await (await fetchWith(dev, "/api/auth/code/request", codeReq())).json<{ devCode: string }>();
     const v = await fetchWith(dev, "/api/auth/code/verify", { method: "POST", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify({ email: "root@example.com", code: devCode }) });
     expect(v.status).toBe(200);
     const token = (v.headers.get("Set-Cookie") ?? "").split(";")[0]!.split("=")[1]!;
@@ -136,7 +136,7 @@ describe("adversarial: operator console in development still works", () => {
   it("devCode is returned, missing RL_AUTH tolerated, domain auto-activates without Cloudflare", async () => {
     const res = await fetchWith(withEnv("development", { RL_AUTH: undefined }), "/api/auth/code/request", codeReq("root@example.com"));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { devCode?: string }).devCode).toMatch(/^\d{6}$/);
+    expect((await res.json<{ devCode?: string }>()).devCode).toMatch(/^\d{6}$/);
 
     const { hostname, jobId } = await pendingDomain();
     await worker.queue({ messages: [{ body: { jobId }, ack() {} }] }, withEnv("development"));

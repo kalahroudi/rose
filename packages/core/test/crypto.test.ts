@@ -67,8 +67,8 @@ describe("envelope keys", () => {
 
   it("stores module secrets encrypted, readable only through the owning tenant", async () => {
     const a = await createTestTenant(env, SELF);
-    const created = (await (await a.fetch("/api/m/notes", { body: { title: "t", secret: "p@ss" } })).json()) as { id: string };
-    const read = (await (await a.fetch(`/api/m/notes/${created.id}`)).json()) as { secret: string; raw: string };
+    const created = await (await a.fetch("/api/m/notes", { body: { title: "t", secret: "p@ss" } })).json<{ id: string }>();
+    const read = await (await a.fetch(`/api/m/notes/${created.id}`)).json<{ secret: string; raw: string }>();
     expect(read.secret).toBe("p@ss");
     expect(read.raw).toMatch(/^v1\./);
     expect(read.raw).not.toContain("p@ss");
