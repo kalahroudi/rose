@@ -2,7 +2,6 @@
 import { openPlatformSecret, sealPlatformSecret } from "../crypto";
 import { now } from "../ids";
 
-/** Operator-plane settings. Values flagged `secret` are encrypted before they touch the database. */
 export async function putSetting(db: D1Database, masterKey: string, key: string, value: string, secret = false): Promise<void> {
   const stored = secret ? await sealPlatformSecret(masterKey, key, value) : value;
   await db

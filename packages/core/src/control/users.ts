@@ -42,8 +42,6 @@ export const touchLogin = (db: D1Database, userId: string) =>
 export const setUserName = (db: D1Database, userId: string, name: string) =>
   db.prepare("UPDATE users SET name = ? WHERE id = ?").bind(name.trim().slice(0, 80), userId).run();
 
-// ── Memberships ────────────────────────────────────────────────────────────────
-
 export const getMembership = (db: D1Database, tenantId: string, userId: string) =>
   db.prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ?").bind(tenantId, userId).first<{ role: Role }>();
 
@@ -89,7 +87,6 @@ async function ownerCount(db: D1Database, tenantId: string): Promise<number> {
   return r?.n ?? 0;
 }
 
-/** Only owners may grant or revoke the owner role; a workspace always keeps at least one owner. */
 export async function changeMemberRole(db: D1Database, tenantId: string, actorRole: Role, userId: string, role: Role): Promise<void> {
   const cur = await getMembership(db, tenantId, userId);
   if (!cur) throw notFound();
@@ -124,11 +121,6 @@ export async function listWorkspacesForUser(db: D1Database, userId: string): Pro
     .all<{ id: string; slug: string; name: string; role: Role }>();
   return r.results;
 }
-
-// ── Invitations ────────────────────────────────────────────────────────────────
-// An invitation is a pending membership for an email address. It is redeemed when
-// that address proves ownership by signing in on the workspace, so there is no
-// invitation token that could be forwarded or leaked.
 
 export interface InvitationRow {
   id: string;
@@ -188,7 +180,6 @@ export async function revokeInvitation(db: D1Database, tenantId: string, id: str
 export const getPendingInvitation = (db: D1Database, tenantId: string, email: string) =>
   db.prepare("SELECT * FROM invitations WHERE tenant_id = ? AND email = ? AND expires_at > ?").bind(tenantId, email, now()).first<InvitationRow>();
 
-/** Turn a pending invitation into a membership. Returns the granted role, or null if there was none. */
 export async function redeemInvitation(db: D1Database, tenantId: string, user: UserRow): Promise<Role | null> {
   const inv = await getPendingInvitation(db, tenantId, user.email);
   if (!inv) return null;
@@ -198,8 +189,6 @@ export async function redeemInvitation(db: D1Database, tenantId: string, user: U
   ]);
   return inv.role;
 }
-
-// ── Operators (platform staff) ─────────────────────────────────────────────────
 
 export type OperatorRole = "owner" | "operator";
 export interface OperatorItem {
