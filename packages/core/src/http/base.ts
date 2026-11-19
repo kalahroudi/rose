@@ -2,6 +2,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ZodType } from "zod";
+import { consumeRateLimit } from "../control/rate-limit";
 import { type CoreEnv, isDev } from "../env";
 import { AppError, badRequest, forbidden, invalid, misconfigured, tooMany } from "../errors";
 import { newId } from "../ids";
@@ -133,15 +134,15 @@ export function requesterKey(ip: string | null): string {
   return groups.slice(0, 4).map((g) => g.toString(16)).join(":") + "::/64";
 }
 
-/** Fails closed in production if the limiter binding is missing. */
 export async function rateLimit(c: AnyCtx | Context, key: string): Promise<void> {
   const env = c.env as CoreEnv;
   if (!env.RL_AUTH) {
     if (!isDev(env)) throw misconfigured("Rate limiter binding RL_AUTH is missing.");
-    return;
+  } else {
+    const { success } = await env.RL_AUTH.limit({ key });
+    if (!success) throw tooMany();
   }
-  const { success } = await env.RL_AUTH.limit({ key });
-  if (!success) throw tooMany();
+  if (!(await consumeRateLimit(env.DB, env.ROSE_MASTER_KEY, key))) throw tooMany();
 }
 
 // ── Session cookie ─────────────────────────────────────────────────────────────
