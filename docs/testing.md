@@ -103,7 +103,7 @@ The floors ratchet.
 
 | Package | Lines | Statements | Functions | Branches | Measured on |
 |---|---|---|---|---|---|
-| `packages/core` | 79 | 76 | 77 | 64 | 2026-11-18 |
+| `packages/core` | 89 | 86 | 87 | 75 | 2026-11-19 |
 | `apps/app` | 86 | 87 | 93 | 88 | 2026-11-18 |
 | `apps/admin` | 65 | 63 | 76 | 43 | 2026-11-18 |
 
