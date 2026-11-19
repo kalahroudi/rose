@@ -172,17 +172,33 @@ as one requester" (all `packages/core/test/auth.test.ts`).
 
 ## Rate limits (`rateLimit`)
 
-`rateLimit(c, key)` calls `RL_AUTH.limit({ key })` and throws `tooMany()` (429) when the
-binding reports failure. If the binding is missing it fails closed outside development
-with `misconfigured(...)`; in development it returns without limiting, which lets local
-sign-in work without the Cloudflare binding. The helper does not own the counting window
-or the budget. The binding does, and callers choose the key string.
+`rateLimit(c, key)` enforces a two-layer limit and throws `tooMany()` (429) when either
+layer refuses the request:
 
-Tests: "production still fails closed without RL_AUTH"
-(`packages/core/test/otp-requester.adversarial.test.ts`), "missing RL_AUTH fails closed on
-code request and verify, with no devCode" (`packages/core/test/environment.adversarial.test.ts`),
-and "dev returns a devCode, tolerates missing RL_AUTH, and allows an HTTP session" in the
-same file.
+1. **Per-server first filter (`RL_AUTH`)**: calls `env.RL_AUTH.limit({ key })` when the
+   binding is present, shedding same-server floods cheaply before hitting D1. If `RL_AUTH`
+   is missing outside `development` (`!isDev(env)`), `rateLimit` fails closed with
+   `misconfigured(...)`; in `development`, a missing binding skips only this first filter
+   so local sign-in and tests can work without the Cloudflare binding.
+2. **Durable global counter (`consumeRateLimit`)**: calls
+   `consumeRateLimit(env.DB, env.ROSE_MASTER_KEY, key)` against the control-plane D1
+   `rate_limits` table (`packages/core/src/control/rate-limit.ts`).
+
+`RL_AUTH` alone is not sufficient as a security boundary. Cloudflare's Workers rate-limit
+binding counts per edge server and is eventually consistent: a client that opens a new
+TCP connection per request (`Connection: close` / `keepAlive: false`, as `pnpm pentest`
+does) or sends a parallel burst can land across servers or outrun convergence and bypass
+the budget. Layering the atomic D1 counter behind `RL_AUTH` keeps the fast path cheap
+while making the 20 requests / 60 s limit strongly consistent across reconnecting clients
+and parallel bursts. Callers choose the key string; see
+[core-control.md](core-control.md#rate-limitts) for the D1 counter's schema, hashing and
+window rules.
+
+Tests: `packages/core/test/rate-limit.test.ts`, plus "production still fails closed
+without RL_AUTH" (`packages/core/test/otp-requester.adversarial.test.ts`), "missing
+RL_AUTH fails closed on code request and verify, with no devCode"
+(`packages/core/test/environment.adversarial.test.ts`), and "dev returns a devCode,
+tolerates missing RL_AUTH, and allows an HTTP session" in the same file.
 
 ## Session cookies (`cookieSpec`, `setSessionCookie`, `readSessionCookie`, `clearSessionCookie`)
 
@@ -316,8 +332,5 @@ page states what it does.
 - `requesterKey` says IPv4 is unchanged and unparseable input is returned as-is. The
   input is trimmed, lower-cased and zone-stripped first, and a colon-free value is
   returned without IPv4 validation.
-- `rateLimit` says it fails closed "in production". The test is `isDev`, so any value
-  other than exactly `development` fails closed. The entry guard rejects odd
-  `ENVIRONMENT` values before a request reaches this helper.
 - `readJson` says the size "is capped" without saying that two caps apply, one in bytes
   from the declared length and one in UTF-16 code units from the decoded text.

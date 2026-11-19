@@ -58,6 +58,7 @@ privately. Wrangler commands for production take `-c wrangler.production.jsonc`.
 | **Back up the tenant worker's `ROSE_MASTER_KEY`** | Cloudflare never shows a secret again. To hold a copy, set it yourself *before* running setup: `openssl rand -base64 32`, store it in your secret manager, then `wrangler secret put ROSE_MASTER_KEY` in `apps/app`. Setup keeps an existing key |
 | Verify your sending domain with the email provider | Done in the provider's dashboard |
 | Cloudflare Access on the admin hostname (recommended) | See below |
+| Cloudflare zone WAF rate-limiting rule on `/api/*/code/*` and `/api/auth/passkey/*` (recommended) | See below |
 | Cloudflare for SaaS (only for customer-owned domains) | See [multi-tenanting-a-service.md](multi-tenanting-a-service.md#custom-domains-cloudflare-for-saas) |
 
 ## First sign-in
@@ -74,6 +75,22 @@ The console is protected by its own authentication, but it is the most privilege
 surface you run. Put [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
 in front of the admin hostname (allow only your staff's identity provider group). An
 attacker then needs to defeat two independent systems.
+
+## Defence in depth for auth endpoints (zone WAF)
+
+Inside the workers, auth endpoints are guarded by two layers: Cloudflare's `RL_AUTH`
+rate-limit binding as a cheap per-server first filter, followed by a strongly consistent
+global counter in D1 (`rate_limits`). Add a Cloudflare zone WAF rate-limiting rule in
+front of those paths as defence in depth:
+
+- **Paths**: `/api/*/code/*` and `/api/auth/passkey/*` (covers tenant, root and operator
+  email-code request/verify and passkey routes).
+- **Key**: client IP.
+- **Action**: block with HTTP `429`.
+
+A zone WAF rule drops abusive bursts at the edge before a Worker is invoked or D1 is
+written to, protecting Worker invocations and D1 write quota while `RL_AUTH` and the
+durable D1 counter enforce the application's 20 requests / 60 s limit inside the workers.
 
 ## Subsequent deploys
 
@@ -103,7 +120,7 @@ migrations the next time it starts after a deploy.
 | `MAX_WORKSPACES_PER_USER` | app | var, optional | Most workspaces one person may create at signup. Any positive integer; empty, `0`, negative or non-numeric values mean the default, 5 |
 | `UPSTREAM_MODE`, `UPSTREAM_ORIGIN` | app | var | `off` \| `origin` \| `dispatch` |
 | `UPSTREAM_SIGNING_SECRET` | app | secret | Signs the tenant token sent upstream |
-| `RL_AUTH` | both | rate-limit binding | Required in production |
+| `RL_AUTH` | both | rate-limit binding | Cheap per-server first filter ahead of the durable D1 rate-limit counter; required in production |
 | `DB` | both | D1 binding | Control plane |
 | `TENANT_DO` | app only | Durable Object | Per-tenant databases |
 
@@ -115,6 +132,7 @@ migrations the next time it starts after a deploy.
 - [ ] Email provider configured and the sending domain verified (SPF/DKIM).
 - [ ] At least two platform owners, each with a passkey.
 - [ ] Cloudflare Access in front of the console.
+- [ ] Cloudflare zone WAF rate-limiting rule on `/api/*/code/*` and `/api/auth/passkey/*` (keyed by client IP, returning 429).
 - [ ] The tenant worker's master key is backed up in a secret manager.
 - [ ] Branch protection on `main` that requires CODEOWNERS review. Nothing else makes the security core review real ([docs/agents.md](agents.md#5-the-security-core)).
 - [ ] You have read the limits in [architecture.md](architecture.md#known-limits).
@@ -124,7 +142,7 @@ migrations the next time it starts after a deploy.
 - **Queues** (`rose-app-jobs`, `rose-admin-jobs`, created by `pnpm setup`) start
   background jobs as soon as they are queued.
 - **Cron** runs hourly in both workers: cleanup of expired sessions, codes, handoffs,
-  challenges and invitations, and a safety-net sweep for jobs whose message was lost.
+  challenges, invitations and rate-limit windows, and a safety-net sweep for jobs whose message was lost.
 - **Logs**: Workers observability is enabled. Errors are JSON lines with a `requestId`,
   which is also returned to the client in `X-Request-Id` and in error bodies.
 - **Suspending a tenant** (console) blocks its sessions and API keys on the next request.

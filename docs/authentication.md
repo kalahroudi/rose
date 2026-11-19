@@ -130,11 +130,11 @@ JSON bodies require `Content-Type: application/json`.
 
 | Limit | Where | Scope |
 |---|---|---|
-| 20 requests / 60 s per key (`code:<scope>:<email>:<ip>`, `code-ip:<ip>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
+| 20 requests / 60 s per key (`code:<scope>:<email>:<ip>`, `code-ip:<ip>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter) | per server, then global |
 | 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code by its own requester, plus 3 shared by all other requesters | D1 | global |
 | 100 guesses per address and scope across all codes created in the last 25 min | D1 | global |
-| 20 verifications / 60 s per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) | Workers rate limiter binding `RL_AUTH` | per Cloudflare location |
+| 20 verifications / 60 s per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter) | per server, then global |
 
 If `RL_AUTH` is missing in production, auth endpoints fail closed.
 
