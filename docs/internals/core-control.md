@@ -65,8 +65,9 @@ rules that are not expressible as a database constraint:
 
 `removeMember` deletes the membership, that user's sessions in that tenant and that
 user's passkeys in that tenant in one batch. Removing someone therefore ends their
-access on the next request rather than at their next sign-in. Covered by "only owners
-can invite owners or change owner access; last owner is protected"
+access on the next request rather than at their next sign-in. The session and passkey
+deletion is not covered by a test. The owner and last-owner rules are covered by "only
+owners can invite owners or change owner access; last owner is protected"
 (`packages/core/test/auth.test.ts`).
 
 ### Invitations
@@ -89,13 +90,15 @@ invitation in one workspace does not admit (or audit) the person in another"
 
 ### Operators
 
-`PLATFORM_SCOPE` is the literal scope `"platform"`; operator sessions, passkeys and
-challenges use it like a tenant id, so the same session code serves both realms without
+`PLATFORM_SCOPE` is exported but unused; the code uses the literal `"platform"`. Operator
+sessions, passkeys and challenges use that literal like a tenant id, so the same session
+code serves both realms without
 sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
 NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` refuses
 to remove the last platform owner and, in one batch, deletes the operator row, the
-platform session rows and the platform passkey rows for that user. Covered by "only
-owners manage operators and connections; the last owner can not be removed"
+platform session rows and the platform passkey rows for that user. The session and
+passkey deletion is not covered by a test. The owner and last-owner rules are covered by
+"only owners manage operators and connections; the last owner can not be removed"
 (`apps/admin/worker/test/admin.test.ts`).
 
 ## `tenants.ts`
@@ -159,7 +162,8 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   must not outlive it; the purge job itself has scope `"platform"`, so it survives.
 - The tenant stops serving authenticated requests immediately: the session query joins
   the tenant and requires `status = 'active'`. Host-level routing can lag by the host
-  cache TTL on other isolates, which is why the caller also calls `invalidateHostCache()`.
+  cache TTL on other isolates, which is why the tenant-app owner-deletion route also
+  calls `invalidateHostCache()`; the operator deletion route relies on the TTL alone.
   Covered by "existing sessions and API keys stop working as soon as deletion is
   requested" and "over HTTP: a suspension is visible on every request within TTL + margin,
   and authenticated access is refused immediately"
@@ -234,8 +238,10 @@ There are two limits:
   inside its absolute lifetime, because both reads require
   `expires_at > now AND last_seen_at > now - SESSION_IDLE_TIMEOUT`.
 
-`readSession` refreshes `last_seen_at` at most once per `TOUCH_INTERVAL` (5 minutes).
-That interval is far below the idle timeout, so an active person is never signed out by
+`readSession` refreshes `last_seen_at` check-then-write when the row is more than
+`TOUCH_INTERVAL` (5 minutes) old. The check and the write are separate statements, so
+parallel requests each write. That interval is far below the idle timeout, so an active
+person is never signed out by
 the idle rule, and a busy client does not write to the database on every request. An
 idle refusal does not touch the row, so it cannot revive itself. `listSessions` applies
 the same two conditions and returns at most 50 rows; `revokeSessionById` filters by
@@ -407,9 +413,10 @@ is logged and ignored. A lost or missing message is not fatal, because the job r
 `queued` and the hourly sweep picks it up. The queue delay is capped at
 `MAX_QUEUE_DELAY_S` (12 hours); a longer deadline stays on `run_after`, and the consumer
 ignores a message that arrives more than a second early, so the sweep is what wakes the
-job when it is actually due. Covered by "the safety-net sweep does not auto-activate a
-domain" and "queue: domain.verify does not auto-activate, job untouched, message not
-acked" (`apps/admin/worker/test/environment.adversarial.test.ts`).
+job when it is actually due. Covered by "queuing a job wakes the right worker, and the
+message runs it exactly once" (`packages/core/test/isolation.test.ts`), which asserts a
+message for a job that is not due yet does nothing. The 12-hour cap and the one-second
+early boundary are not covered by a test.
 
 ### Delivery, claims and ownership
 
@@ -458,8 +465,9 @@ A handler returns `{ done: true, result? }` or
 `runJobMessages` always acknowledges, including for a malformed body, a missing row, a
 job that is already done, or a handler that threw. Retries are scheduled by this code
 and recorded on the row, not requested by leaving the message unacked, so a poison
-message cannot loop through the queue. A message that arrives early (within one second of
-`run_after`) is skipped and left to its re-notification or the sweep.
+message cannot loop through the queue. A message that arrives more than one second early
+is skipped but still acknowledged; nothing re-notifies it, and the sweep is what wakes
+the job when it is due.
 
 `runDueJobs` is the safety net: it selects up to `limit` (10) jobs of the registered
 types that are due and either `queued` or stuck `running`, oldest deadline first, and
@@ -486,6 +494,10 @@ used for ownership.
   the workspace (or the platform) with no owner. The race needs two simultaneous owner
   actions and is not reachable by one person through the UI, but the inline comment "a
   workspace always keeps at least one owner" is stronger than the code guarantees.
+- **The `last_seen_at` refresh is check-then-write.** `readSession` reads the row, then
+  writes a fresh `last_seen_at` in a separate statement when the row is older than
+  `TOUCH_INTERVAL`. Parallel requests that read the same old value each pass the check and
+  each write, so "at most once" holds only for a single request at a time.
 - **A cancel can strip a delete request's purge job.** `cancelTenantDeletion` restores the
   tenant status in one statement and deletes the queued `tenant.purge` job in a second.
   Neither step reads the other's result. A delete request that lands between them sets the
@@ -505,8 +517,9 @@ used for ownership.
   that are already gone. Tracked as Noty bug E55E9FFF.
 - **Host routing lags on other isolates.** A pending or suspended tenant is refused
   immediately by `readSession`, but another isolate may route its host from a cached
-  lookup until the host cache TTL expires. The deletion and suspension callers invalidate
-  the cache in their own isolate; the TTL covers the rest.
+  lookup until the host cache TTL expires. Only the tenant-app owner deletion and the
+  workspace rename call `invalidateHostCache()`, in their own isolate; operator
+  suspension and operator deletion rely on the TTL alone.
 - **`createTenant` is uncapped.** It exists for fixtures and tests. Only
   `createTenantForOwner` enforces the workspace cap, and the operator console has no
   tenant-creation route, which is covered by "the console has no route to create a tenant
