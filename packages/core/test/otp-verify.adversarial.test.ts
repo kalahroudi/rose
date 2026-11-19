@@ -22,11 +22,11 @@ function fakeLimiter(limit: number) {
     seen,
     counts,
     binding: {
-      async limit({ key }: { key: string }) {
+      limit({ key }: { key: string }) {
         seen.push(key);
         const n = (counts.get(key) ?? 0) + 1;
         counts.set(key, n);
-        return { success: n <= limit };
+        return Promise.resolve({ success: n <= limit });
       },
     },
   };

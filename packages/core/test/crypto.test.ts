@@ -91,10 +91,10 @@ describe("upstream gateway", () => {
     const a = await createTestTenant(env, SELF);
     let seen: Request | undefined;
     const original = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      seen = new Request(input as RequestInfo, init);
-      return new Response("upstream-ok", { headers: { "Set-Cookie": "evil=1", "X-Kept": "yes" } });
-    }) as typeof fetch;
+    globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      seen = new Request(input, init);
+      return Promise.resolve(new Response("upstream-ok", { headers: { "Set-Cookie": "evil=1", "X-Kept": "yes" } }));
+    };
     try {
       const res = await a.fetch("/svc/orders?x=1", { headers: { "X-Rose-Tenant-Id": "tn_forged" } });
       expect(res.status).toBe(200);

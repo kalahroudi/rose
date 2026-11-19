@@ -78,7 +78,7 @@ export function Onboarding({ boot }: { boot: Bootstrap }) {
   );
 }
 
-function Choose({ boot, verified, onLeaving, onExpired }: { boot: Bootstrap; verified: RootVerified; onLeaving(): void; onExpired(): void }) {
+function Choose({ boot, verified, onLeaving, onExpired }: { boot: Bootstrap; verified: RootVerified; onLeaving: () => void; onExpired: () => void }) {
   const [creating, setCreating] = useState(verified.workspaces.length === 0);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");

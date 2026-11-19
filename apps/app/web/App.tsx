@@ -61,11 +61,11 @@ interface CorePage {
   show?: boolean;
 }
 
-function SignedIn({ boot, tenant, session, onDeleted }: { boot: Bootstrap; tenant: TenantView; session: SessionView; onDeleted(deleteAfter: number | null): void }) {
+function SignedIn({ boot, tenant, session, onDeleted }: { boot: Bootstrap; tenant: TenantView; session: SessionView; onDeleted: (deleteAfter: number | null) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const workspace = useMemo<Workspace>(
-    () => ({ boot, tenant, session, can: (p) => session.permissions.includes(p), markDeleted: onDeleted }),
+    () => ({ boot, tenant, session, can: (p) => session.permissions.includes(p), markDeleted: (deleteAfter) => onDeleted(deleteAfter) }),
     [boot, tenant, session, onDeleted],
   );
 

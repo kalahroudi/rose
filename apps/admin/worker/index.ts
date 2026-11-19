@@ -40,7 +40,7 @@ const cfConnection = async (env: PlatformWorkerEnv): Promise<cloudflare.Cloudfla
 const jobHandlers: Record<string, JobHandler<PlatformWorkerEnv>> = {
   /** Registers a custom domain with Cloudflare for SaaS, then polls until its certificate is live. */
   "domain.verify": idempotent(async (env, job, payload) => {
-    const hostname = String(payload.hostname ?? "");
+    const hostname = typeof payload.hostname === "string" ? payload.hostname : "";
     const row = await getDomain(env.DB, hostname);
     if (!row) return { done: true, result: { skipped: "removed" } };
     const conn = await cfConnection(env);
@@ -115,10 +115,11 @@ app.get("/api/bootstrap", async (c) => {
   return c.json({ ...base, session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, hasPasskey: passkeys.length > 0, method: s.method } });
 });
 
-app.route("/api/auth", createAuthRoutes(async (c) => realm(c as unknown as Ctx)) as never);
+app.route("/api/auth", createAuthRoutes((c) => Promise.resolve(realm(c as unknown as Ctx))) as never);
 
 // ── Everything below requires an operator session ────────────────────────────────
 app.use("/api/*", async (c, next) => {
+  // oxlint-disable-next-line typescript/no-unsafe-argument -- Hono types middleware input as `any`; currentSession reads only env, headers and cookies
   const s = await currentSession(c, { scope: SCOPE, cookie: COOKIE });
   if (!s) throw unauthorized();
   c.set("operator", { userId: s.userId, email: s.email, name: s.name, role: s.role as OperatorRole, method: s.method, createdAt: s.createdAt });
@@ -326,7 +327,7 @@ app.put("/api/setup/github", async (c) => {
     headers: { "User-Agent": "rose-starter-kit", Accept: "application/vnd.github+json", ...(body.token ? { Authorization: `Bearer ${body.token}` } : {}) },
   });
   if (!res.ok) throw invalid("GitHub could not find that repository.", { repo: res.status === 404 ? "Not found. For a private repository, add a token with read access." : `GitHub responded ${res.status}.` });
-  const info = (await res.json()) as { full_name: string; default_branch: string; private: boolean };
+  const info = await res.json<{ full_name: string; default_branch: string; private: boolean }>();
   await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.repo", info.full_name);
   await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.branch", info.default_branch);
   if (body.token) await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.token", body.token, true);

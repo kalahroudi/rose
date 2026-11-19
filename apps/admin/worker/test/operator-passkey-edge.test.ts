@@ -7,7 +7,7 @@ const EMAIL = "root@example.com";
 const post = (path: string, json: unknown) =>
   SELF.fetch(ORIGIN + path, { method: "POST", redirect: "manual", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(json) });
 const body = async <T>(r: Response) => (await r.json()) as T;
-const strip = (j: unknown) => JSON.parse(JSON.stringify(j).replace(/"requestId":"[^"]*"/, "\"requestId\":\"-\""));
+const strip = (j: unknown): unknown => JSON.parse(JSON.stringify(j).replace(/"requestId":"[^"]*"/, "\"requestId\":\"-\""));
 const codeFor = async (email: string) => (await body<{ devCode?: string }>(await post("/api/auth/code/request", { email }))).devCode;
 
 async function addPasskey(email: string, scope: string, cred: string) {

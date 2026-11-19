@@ -14,7 +14,7 @@ import { AddDomainDrawer, domainTone } from "./Domains";
 const statusTone: Record<TenantStatus, Tone> = { active: "ok", suspended: "warn", pending_deletion: "warn", deleting: "bad" };
 const statusLabel: Record<TenantStatus, string> = { active: "Active", suspended: "Suspended", pending_deletion: "Pending deletion", deleting: "Deleting" };
 
-function TenantDetail({ id, onClose }: { id: string | null; onClose(): void }) {
+function TenantDetail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const boot = useSession();
   const confirm = useConfirm();
   const toast = useToast();

@@ -14,7 +14,21 @@
     "no-debugger": "error",
     "eqeqeq": ["error", "smart"],
     "react/set-state-in-effect": "off",
-    "react/refs": "off"
+    "react/refs": "off",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-promise-reject-errors": "error"
   },
   "ignorePatterns": [
     "**/node_modules/**",
@@ -26,5 +40,40 @@
     ".ai-ship-worktrees/**",
     "**/*.d.ts"
   ],
-  "overrides": [{ "files": [".claude/hooks/**/*.mjs"], "env": { "node": true } }]
+  "overrides": [
+    { "files": [".claude/hooks/**/*.mjs"], "env": { "node": true } },
+    {
+      // JavaScript outside the TypeScript projects has no type information: every import is
+      // `any`, which the type-safety rules read as "unsafe". React, worker and package code is TS.
+      "files": ["**/*.js", "**/*.mjs", "**/*.cjs"],
+      "rules": {
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/restrict-template-expressions": "off",
+        "typescript/no-base-to-string": "off"
+      }
+    },
+    {
+      // Tests read untyped JSON and mock calls on purpose: an explicit cast is the readable form there,
+      // and stringifying a mock argument is how assertions print it.
+      "files": ["**/test/**/*.ts", "**/*.test.ts"],
+      "rules": {
+        "typescript/no-unnecessary-type-assertion": "off",
+        "typescript/no-base-to-string": "off"
+      }
+    },
+    {
+      // Vitest config files are outside every tsconfig project, so imported types resolve to an error type.
+      "files": ["**/vitest.config.ts"],
+      "rules": {
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-member-access": "off"
+      }
+    }
+  ]
 }
