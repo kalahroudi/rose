@@ -38,8 +38,10 @@ pnpm ci:local --here          # run in this tree, uncommitted changes allowed
 ```
 
 `scripts/ci-local.mjs` runs every command in `.github/workflows/ci.yml`, in CI order,
-and stops at the first failure. By default it checks out HEAD into a temporary git
-worktree (`$TMPDIR/rose-ci-<sha>`), so only commits are tested, the way CI sees them.
+and stops at the first failure. Both run the pentest step in strict mode with the same
+`--allow-skip` list, so a new skip fails the job instead of passing quietly. By default it
+checks out HEAD into a temporary git worktree (`$TMPDIR/rose-ci-<sha>`), so only commits are
+tested, the way CI sees them.
 It refuses to start when tracked files have uncommitted changes, unless you pass `--here`.
 A refusal records `ok: false` in `.rose/ci-local/last-run.json`, so a green summary from an
 earlier run cannot stand in for one that never started.

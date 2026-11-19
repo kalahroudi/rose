@@ -2,12 +2,18 @@
 // Drift between .github/workflows/ci.yml and `pnpm ci:local`. If CI gains a command the local
 // runner does not run, these tests fail and name it.
 import assert from "node:assert/strict";
-import { readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { STEPS } from "./ci-local.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { ALLOWED_SKIPS, PENTEST_COMMAND, STEPS } from "./ci-local.mjs";
 
 const CI = ".github/workflows/ci.yml";
 const SUMMARY = ".rose/ci-local/last-run.json";
+const ROOT = resolve(import.meta.dirname, "..");
+const CI_LOCAL = fileURLToPath(new URL("./ci-local.mjs", import.meta.url));
 const read = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 
 /** Commands ci.yml runs that the runner implements itself instead of shelling out to. */
@@ -46,11 +52,14 @@ function ciCommands(text = read(CI)) {
 
 const shellCommands = (commands) => commands.filter((c) => !NATIVE.has(c));
 
+/** The literal list CI and ci-local share. A change here must change the commands in both files. */
+const EXPECTED_ALLOWED_SKIPS = ["AUTH-08", "ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "INT-03", "AUTH-09"];
+
 test("ci.yml parses to commands, both single-line and a `run: |` block", () => {
   const commands = ciCommands();
   assert.ok(commands.includes("pnpm guard"));
   assert.ok(NATIVE.has(commands.at(-2)), "the start-the-stack block keeps its shape");
-  assert.equal(commands.at(-1), "pnpm pentest");
+  assert.equal(commands.at(-1), PENTEST_COMMAND);
 });
 
 test("drift: every ci.yml command runs in ci:local", () => {
@@ -68,6 +77,39 @@ test("order: verify steps keep ci.yml's relative order", () => {
   const positions = local.map((command) => ciCommands().indexOf(command));
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b), "a verify step is out of ci.yml order");
   assert.equal(positions.length, new Set(positions).size, "a verify command runs twice in ci.yml");
+});
+
+test("pentest runs strict and allows exactly today's skips", () => {
+  const step = STEPS.find((s) => s.job === "pentest" && s.name === "Attack it");
+  assert.equal(step.run, PENTEST_COMMAND);
+  assert.deepEqual(ALLOWED_SKIPS, EXPECTED_ALLOWED_SKIPS, "ALLOWED_SKIPS changed; update this literal and both pentest commands");
+  assert.equal(PENTEST_COMMAND, `pnpm pentest --strict${EXPECTED_ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`);
+  assert.ok(ciCommands().includes(PENTEST_COMMAND), "ci.yml runs the same strict command");
+  assert.ok(EXPECTED_ALLOWED_SKIPS.includes("AUTH-09"), "AUTH-09 is a known skip until --slow reaches ci:local");
+});
+
+test("a failing step exits non-zero and skips the rest", () => {
+  const steps = [
+    { job: "verify", name: "Passes", run: 'node -e "process.exit(0)"' },
+    { job: "verify", name: "Fails", run: 'node -e "process.exit(1)"' },
+    { job: "verify", name: "After", run: 'node -e "process.exit(0)"' },
+  ];
+  const logDir = mkdtempSync(join(tmpdir(), "rose-ci-local-"));
+  const before = statSync(join(ROOT, SUMMARY), { throwIfNoEntry: false })?.mtimeMs;
+  try {
+    const source = `import { main } from ${JSON.stringify(pathToFileURL(CI_LOCAL).href)};
+const code = await main(["--here", "--job", "verify"], { steps: ${JSON.stringify(steps)}, logDir: ${JSON.stringify(logDir)} });
+process.exit(code);`;
+    const r = spawnSync(process.execPath, ["--input-type=module", "--eval", source], { cwd: ROOT, encoding: "utf8" });
+    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+    assert.match(`${r.stdout}${r.stderr}`, /Fails/);
+    const summary = JSON.parse(readFileSync(join(logDir, "last-run.json"), "utf8"));
+    assert.deepEqual(summary.steps.map((s) => [s.name, s.status]), [["Passes", "passed"], ["Fails", "failed"], ["After", "skipped"]]);
+    assert.equal(summary.ok, false);
+    assert.equal(statSync(join(ROOT, SUMMARY), { throwIfNoEntry: false })?.mtimeMs, before, "the test must not overwrite the real last-run.json");
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
 });
 
 test("STEPS mirror both jobs, verify first", () => {
