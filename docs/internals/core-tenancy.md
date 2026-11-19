@@ -172,16 +172,21 @@ or a name. Secret values never belong in `meta`; `AGENTS.md` makes that a rule.
 
 The built-in entries use `meta` unevenly, and that is the real shape: `member.join`,
 `member.role` and `invitation.create` pass `{ role }`; `apikey.create` passes
-`{ name, role }`; `member.remove`, `invitation.revoke` and `apikey.revoke` pass no `meta`
-at all, so it is stored as `NULL`. The target is a user id for member changes, an
-invitation id for `invitation.revoke`, an API-key id for API-key create and revoke, and
-the invitee's email for `invitation.create`.
+`{ name, role }`; `workspace.rename` passes `{ name }`, the new name as free text.
+`member.remove`, `invitation.revoke`, `apikey.revoke`, `auth.login.<method>`,
+`auth.passkey.add` and `auth.passkey.remove` pass no `meta` at all, so it is stored as
+`NULL`. The target is a user id for member changes, an invitation id for
+`invitation.revoke`, an API-key id for API-key create and revoke, and the invitee's email
+for `invitation.create`.
 
-`actor` is the person's label for user actions (their email) and a `job:` prefix plus the
-queuing actor's label for background work. `target` is usually an id, but an invitation
-entry puts the invitee's email there. Neither column is encrypted and the audit page is
-readable by owners and admins (`audit:read`), so the rule that keeps personal free text out
-of audit metadata is a rule about what callers pass, not something the table enforces.
+`actor` is a label, not a value from the request. A user action uses the person's email,
+except the owner's first `member.join` row, written when the workspace is created: that one
+uses the user id (`tenant-app.ts:271`). An API-key action uses `key:<name>`, so a job the
+key queues shows `job:key:<name>`, and a job with no creator shows `job:system`. `target`
+is usually an id, but an invitation entry puts the invitee's email there. Neither column is
+encrypted and the audit page is readable by owners and admins (`audit:read`), so the rule
+that keeps personal free text out of audit metadata is a rule about what callers pass, not
+something the table enforces.
 
 Both list functions build their `WHERE` clause from fixed fragments and bound values, but
 they do not share a filter set. `listTenantAudit` filters by `q` (matched as a "contains"
