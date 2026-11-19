@@ -130,13 +130,13 @@ JSON bodies require `Content-Type: application/json`.
 
 | Limit | Where | Scope |
 |---|---|---|
-| 20 requests / 60 s per key (`code:<scope>:<email>:<ip>`, `code-ip:<ip>`, per IP, per passkey/slug/API-key IP) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter) | per server, then global |
+| 20 requests / 60 s fixed window per key (`code:<scope>:<email>:<requester>`, `code-ip:<requester>`, `pk-ip:<requester>`, `slug-ip:<requester>`, `key-fail:<requester>`) — up to 2 × 20 - 1 = 39 requests can pass across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
 | 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code by its own requester, plus 3 shared by all other requesters | D1 | global |
 | 100 guesses per address and scope across all codes created in the last 25 min | D1 | global |
-| 20 verifications / 60 s per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter) | per server, then global |
+| 20 verifications / 60 s fixed window per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) — same fixed 60 s window (up to 2 × 20 - 1 = 39 across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
 
-If `RL_AUTH` is missing in production, auth endpoints fail closed.
+Every rate-limit key (`code`, `code-ip`, `verify`, `verify-ip`, `pk-ip`, `slug-ip`, `key-fail`) is keyed on the requester (`requesterKey`: IPv4 address or IPv6 /64 prefix, with IPv4-mapped IPv6 treated as IPv4), not the raw IP. If `RL_AUTH` is missing in production, auth endpoints fail closed.
 
 ## Operators: passkey replaces emailed codes
 

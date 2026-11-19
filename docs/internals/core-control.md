@@ -400,7 +400,9 @@ another address is unaffected" (`packages/core/test/otp-guess-cap.adversarial.te
 
 `rate-limit.ts` implements the strongly consistent global rate-limit counter called by
 `rateLimit` in `http/base.ts`. It exports `RATE_LIMIT_MAX` (20), `RATE_LIMIT_WINDOW_MS`
-(60,000 ms) and `consumeRateLimit(db, masterKey, key, opts?)`. The backing table
+(60,000 ms) and `consumeRateLimit(db, masterKey, key, opts?)`, where `opts` takes only an
+optional `limit` (defaulting to `RATE_LIMIT_MAX`; values `<= 0` refuse immediately without
+writing a row) and the window length is always `RATE_LIMIT_WINDOW_MS`. The backing table
 `rate_limits (key_hash TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT
 NULL)` and its `rate_limits_window (window_start)` index live in
 `packages/core/migrations/0006_rate_limits.sql`.
@@ -432,17 +434,19 @@ CONFLICT (key_hash) DO UPDATE SET ... WHERE excluded.window_start -
 rate_limits.window_start >= ? OR rate_limits.count < ? RETURNING count`):
 
 - **First hit**: inserts `(key_hash, now, 1)` and returns `count = 1` (allowed).
-- **Active window (`now - window_start < windowMs`)**: increments `count` and leaves
-  `window_start` unchanged while `count < max`. Once `count` reaches `max`, the `WHERE`
-  predicate fails, no row is updated, `RETURNING count` yields no row and
+- **Active window (`now - window_start < RATE_LIMIT_WINDOW_MS`)**: increments `count` and
+  leaves `window_start` unchanged while `count < limit`. Once `count` reaches `limit`, the
+  `WHERE` predicate fails, no row is updated, `RETURNING count` yields no row and
   `consumeRateLimit` refuses the request.
-- **Window expiry**: at the exact boundary `now - window_start >= windowMs`, the conflict
-  branch resets `window_start` to `now` and `count` to `1`, opening a new window in the
-  same atomic write. Stale rows are also purged on the hourly cron by `sweepExpired`.
+- **Window expiry**: at the exact boundary `now - window_start >= RATE_LIMIT_WINDOW_MS`,
+  the conflict branch resets `window_start` to `now` and `count` to `1`, opening a new
+  window in the same atomic write. Stale rows are also purged on the hourly cron by
+  `sweepExpired`.
 - **Clock skew**: if the clock moves backwards (`now < window_start`),
-  `now - window_start` is negative and therefore never satisfies `>= windowMs`. Backward
-  clock skew cannot prematurely reset an active window or extend the budget; requests keep
-  counting against the existing row until `now` passes `window_start + windowMs`.
+  `now - window_start` is negative and therefore never satisfies
+  `>= RATE_LIMIT_WINDOW_MS`. Backward clock skew cannot prematurely reset an active window
+  or extend the budget; requests keep counting against the existing row until `now` passes
+  `window_start + RATE_LIMIT_WINDOW_MS`.
 
 Covered by `packages/core/test/rate-limit.test.ts`.
 
@@ -579,6 +583,11 @@ used for ownership.
   tenant-creation route, which is covered by "the console has no route to create a tenant
   or invite its owner; sign-up is the only path"
   (`apps/admin/worker/test/admin.test.ts`).
+- **The D1 rate limiter uses a fixed 60 s window.** A key's window starts on its first
+  request (`window_start`) and resets once `now - window_start >= RATE_LIMIT_WINDOW_MS`,
+  so up to `2 × 20 - 1 = 39` requests (19 at the end of one window after the request that
+  opened it, plus 20 at the start of the next) can pass across a window boundary. The
+  per-code OTP caps in `control/otp.ts` are unaffected.
 
 ## Corrections to inline comments
 
