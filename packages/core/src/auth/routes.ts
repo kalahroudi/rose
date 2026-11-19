@@ -10,20 +10,13 @@ import { unauthorized } from "../errors";
 import { clearSessionCookie, clientIp, rateLimit, requesterKey, readJson, readSessionCookie, setSessionCookie, type BaseVars } from "../http/base";
 import { beginLogin, beginRegistration, deletePasskey, finishLogin, finishRegistration, listPasskeys, type PasskeySite } from "./passkeys";
 
-/**
- * A realm is "where you are signing in": one tenant, or the operator console.
- * It is derived from the request host by the caller, never from request data.
- */
 export interface AuthRealm {
   scope: string;
   displayName: string;
   cookie: string;
-  /** May this address receive a sign-in code here? Must be side-effect free. */
   eligible(email: string): Promise<boolean>;
-  /** Identity is proven; confirm or grant access (e.g. redeem an invitation). False refuses sign-in. */
   admit(user: UserRow): Promise<boolean>;
   audit(event: { actor: string; action: string; ip: string | null }): Promise<void>;
-  /** Once a user has a passkey here, emailed codes stop working for them (mailbox control must not equal account control). */
   enforcePasskey?: boolean;
 }
 
@@ -45,15 +38,9 @@ export async function startSession(c: Context, realm: AuthRealm, user: UserRow, 
   await realm.audit({ actor: user.email, action: `auth.login.${method}`, ip: clientIp(c) });
 }
 
-/**
- * Send a sign-in code if (and only if) the address is eligible. The HTTP response is the
- * same either way and is not delayed by the work, so it can not be used to discover who
- * has an account. Returns the code in non-production environments for local sign-in.
- */
 export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean> }): Promise<{ ok: true; devCode?: string }> {
   const env = c.env as CoreEnv;
   const requester = requesterKey(clientIp(c));
-  // Per-requester keys only: one client's flood must not spend the budget others need.
   await rateLimit(c, `code-ip:${requester}`);
   await rateLimit(c, `code:${opts.scope}:${opts.email}:${requester}`);
   const work = async (): Promise<string | undefined> => {
@@ -77,13 +64,11 @@ export async function requestCode(c: Context, opts: { scope: string; label: stri
 export async function checkCode(c: Context, scope: string, email: string, code: string): Promise<void> {
   const env = c.env as CoreEnv;
   const requester = requesterKey(clientIp(c));
-  // Keyed by requester: one client's wrong guesses can not lock the address's real user out.
   await rateLimit(c, `verify-ip:${requester}`);
   await rateLimit(c, `verify:${scope}:${email}:${requester}`);
   if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code, requester))) throw unauthorized(BAD_CODE);
 }
 
-/** True when this realm refuses emailed codes for the address because the user has registered a passkey. */
 async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Promise<boolean> {
   if (!realm.enforcePasskey) return false;
   const user = await getUserByEmail(db, email);
@@ -205,7 +190,6 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   return app;
 }
 
-/** Changing a person's passkeys needs a recent sign-in, and a passkey sign-in once they have one (first enrolment needs only the fresh sign-in). */
 async function assertFreshForPasskeys(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
   const has = (await listPasskeys((c.env as CoreEnv).DB, s.userId, realm.scope)).length > 0;
   assertFreshSession(s, { passkey: has });
