@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// Built-in per-tenant records: audit log and API keys. They live inside the tenant's
-// own database, so they share its isolation and are destroyed with it.
 import { sha256Hex, timingSafeEqual } from "../crypto";
 import type { Role } from "../control/users";
 import { notFound } from "../errors";
@@ -42,10 +40,6 @@ export async function listTenantAudit(db: TenantDb, f: ListQuery & { action?: st
   ]);
   return { items: rows!.rows as unknown as TenantAuditEntry[], total: count!.rows[0]!.n as number, page: f.page, pageSize: f.pageSize };
 }
-
-// ── API keys ───────────────────────────────────────────────────────────────────
-// Format: rose_<keyId>_<secret>. Only SHA-256(secret) is stored; the secret has 256 bits
-// of entropy so a fast hash is appropriate. Keys act with a fixed role, never "owner".
 
 export interface ApiKeyItem {
   id: string;

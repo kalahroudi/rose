@@ -122,8 +122,10 @@ export function ensureDistDirs() {
   for (const d of [APP_DIR, ADMIN_DIR]) mkdirSync(join(d, "dist/client"), { recursive: true });
 }
 
+export const localPersistTo = () => resolve(ROOT, process.env.ROSE_PERSIST_TO ?? ".wrangler/state");
+
 export function applyLocalMigrations() {
-  const r = run(bin(APP_DIR, "wrangler"), ["d1", "migrations", "apply", DB_NAME, "--local", "--persist-to", "../../.wrangler/state"], { cwd: APP_DIR, capture: true, env: { CI: "1" } });
+  const r = run(bin(APP_DIR, "wrangler"), ["d1", "migrations", "apply", DB_NAME, "--local", "--persist-to", localPersistTo()], { cwd: APP_DIR, capture: true, env: { CI: "1" } });
   if (r.status !== 0) fail(`Applying local migrations failed:\n${r.stdout}\n${r.stderr}`);
 }
 

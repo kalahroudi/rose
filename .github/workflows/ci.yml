@@ -65,6 +65,9 @@ jobs:
     name: Penetration tests (local stack)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ROSE_PERSIST_TO: .wrangler/state
+      ROSE_PENTEST_STATE: .wrangler/state
     steps:
       - uses: actions/checkout@v7
         with:
@@ -84,7 +87,7 @@ jobs:
           done
           cat dev.log; exit 1
       - name: Attack it
-        run: pnpm pentest --strict --allow-skip AUTH-08 --allow-skip ADM-05 --allow-skip ADM-05b --allow-skip ADM-06 --allow-skip GW-01 --allow-skip HARD-01 --allow-skip HARD-05 --allow-skip INT-03 --allow-skip AUTH-09
+        run: pnpm pentest --strict --allow-skip ADM-05 --allow-skip ADM-05b --allow-skip ADM-06 --allow-skip GW-01 --allow-skip HARD-01 --allow-skip HARD-05 --allow-skip AUTH-09
       - name: Keep the report
         if: always()
         uses: actions/upload-artifact@v7

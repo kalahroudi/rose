@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { join } from "node:path";
-import { ADMIN_DIR, APP_DIR, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, ok, spawnChild } from "./lib.mjs";
+import { ADMIN_DIR, APP_DIR, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, localPersistTo, ok, spawnChild } from "./lib.mjs";
 
 const WORKERS_PORT = 8787;
 
@@ -89,7 +89,7 @@ for (const dir of [APP_DIR, ADMIN_DIR]) {
 
 start("workers", c.magenta, bin(APP_DIR, "wrangler"), [
   "dev", "-c", "scripts/dev/wrangler.jsonc", "-c", "apps/app/wrangler.dev.jsonc", "-c", "apps/admin/wrangler.dev.jsonc",
-  "--persist-to", ".wrangler/state", "--port", String(WORKERS_PORT), "--show-interactive-dev-session=false",
+  "--persist-to", localPersistTo(), "--port", String(WORKERS_PORT), "--show-interactive-dev-session=false",
 ], ROOT);
 start("admin", c.blue, bin(ADMIN_DIR, "vite"), ["dev"], ADMIN_DIR);
 start("app", c.green, bin(APP_DIR, "vite"), ["dev"], APP_DIR);
