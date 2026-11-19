@@ -3,7 +3,8 @@
 // runner does not run, these tests fail and name it.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -93,15 +94,22 @@ test("a failing step exits non-zero and skips the rest", () => {
     { job: "verify", name: "Fails", run: 'node -e "process.exit(1)"' },
     { job: "verify", name: "After", run: 'node -e "process.exit(0)"' },
   ];
-  const source = `import { main } from ${JSON.stringify(pathToFileURL(CI_LOCAL).href)};
-const code = await main(["--here", "--job", "verify"], { steps: ${JSON.stringify(steps)} });
+  const logDir = mkdtempSync(join(tmpdir(), "rose-ci-local-"));
+  const before = statSync(join(ROOT, SUMMARY), { throwIfNoEntry: false })?.mtimeMs;
+  try {
+    const source = `import { main } from ${JSON.stringify(pathToFileURL(CI_LOCAL).href)};
+const code = await main(["--here", "--job", "verify"], { steps: ${JSON.stringify(steps)}, logDir: ${JSON.stringify(logDir)} });
 process.exit(code);`;
-  const r = spawnSync(process.execPath, ["--input-type=module", "--eval", source], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
-  assert.match(`${r.stdout}${r.stderr}`, /Fails/);
-  const summary = JSON.parse(readFileSync(join(ROOT, SUMMARY), "utf8"));
-  assert.deepEqual(summary.steps.map((s) => [s.name, s.status]), [["Passes", "passed"], ["Fails", "failed"], ["After", "skipped"]]);
-  assert.equal(summary.ok, false);
+    const r = spawnSync(process.execPath, ["--input-type=module", "--eval", source], { cwd: ROOT, encoding: "utf8" });
+    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+    assert.match(`${r.stdout}${r.stderr}`, /Fails/);
+    const summary = JSON.parse(readFileSync(join(logDir, "last-run.json"), "utf8"));
+    assert.deepEqual(summary.steps.map((s) => [s.name, s.status]), [["Passes", "passed"], ["Fails", "failed"], ["After", "skipped"]]);
+    assert.equal(summary.ok, false);
+    assert.equal(statSync(join(ROOT, SUMMARY), { throwIfNoEntry: false })?.mtimeMs, before, "the test must not overwrite the real last-run.json");
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
 });
 
 test("STEPS mirror both jobs, verify first", () => {
