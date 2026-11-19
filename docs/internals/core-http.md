@@ -66,7 +66,12 @@ order:
 2. A request whose `Authorization` header starts with `Bearer ` passes. Browsers never
    attach a bearer token on their own. The tenant auth middleware ignores cookies whenever
    an `Authorization` header is present, so the bearer path is the request's only
-   identity, and a cookie-authenticated request can not borrow the exemption.
+   identity, and a cookie-authenticated request can not borrow the exemption. That
+   guarantee holds only in the tenant app. The console's `currentSession` reads the
+   session cookie even when a `Bearer` header is present, so a cookie the browser attaches
+   is still accepted. The exemption is safe there only because a browser can not send that
+   header on a cross-site request without a CORS preflight, and the console sends no CORS
+   allow headers, so the browser refuses the request.
 3. When `Origin` is present, the guard parses it and the request URL and compares
    `URL.host`. The port is part of the comparison; the scheme is not. An origin that does
    not parse fails the check.
@@ -280,6 +285,9 @@ Tests: "inherited object properties are not valid sort columns"
   client error from 400 to 422.
 - `fitBytes` can split a surrogate pair when it trims, as described above. No test covers
   a search term that ends this way.
+- `listQuerySchema` accepts `page` up to 100,000, so `offsetOf` can ask SQLite to skip
+  about ten million rows at the maximum page size of 100. The code fix is tracked as Noty
+  bug FDC4A6BB.
 
 ## Corrections to the comments
 
@@ -292,6 +300,10 @@ page states what it does.
   set only when the response does not already carry them.
 - `csrfGuard` says a request must come from "this exact origin". The code compares
   `URL.host`, so the port counts and the scheme does not.
+- `csrfGuard` says "cookies are ignored whenever a bearer token is present". That holds
+  only in the tenant app. The console's `currentSession` reads the session cookie even
+  when a `Bearer` header is present, and is safe only because a browser can not send that
+  header cross-site without a CORS preflight the console refuses.
 - `requesterKey` says IPv4 is unchanged and unparseable input is returned as-is. The
   input is trimmed, lower-cased and zone-stripped first, and a colon-free value is
   returned without IPv4 validation.
