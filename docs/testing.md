@@ -49,7 +49,9 @@ earlier run cannot stand in for one that never started.
 The pentest job starts the local stack itself, waits up to 90 seconds for it, and always
 stops it. It refuses to run while something listens on ports 5173, 5174 or 8787, and never
 kills a process it did not start. Output goes to the terminal, the dev-stack log to
-`.rose/ci-local/dev.log`, and the per-step summary to `.rose/ci-local/last-run.json`.
+`.rose/ci-local/dev.log`, the throwaway control-plane database to `.rose/ci-local/state`
+(the stack and the harness share it, never the developer's `.wrangler/state`), and the
+per-step summary to `.rose/ci-local/last-run.json`.
 
 `--keep` leaves the worktree in place for debugging. `--report` posts a `local-ci` commit
 status with `gh` (it needs an authenticated `gh`); without the flag nothing is posted.
