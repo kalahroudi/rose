@@ -1,8 +1,58 @@
 # Testing
 
 ```sh
-pnpm verify      # guard + typecheck + every suite. Run before every commit and PR.
+pnpm verify      # guard + lint + knip + script tests + typecheck + every suite. Run before every commit and PR.
 ```
+
+## Lint
+
+```sh
+pnpm lint        # oxlint over the whole repo; under a second
+```
+
+`pnpm lint` runs [oxlint](https://oxc.rs/docs/guide/usage/linter) with `.oxlintrc.json`:
+the `correctness` category plus `typescript/no-explicit-any`, `no-unused-vars`,
+`no-debugger`, `eqeqeq` and `no-undef`. It runs in `pnpm verify` before the typecheck
+(it is the fastest gate), in CI right after the guardrails, and in the pre-commit hook.
+
+Fix the cause: remove the unused import or variable, rename an unused parameter to `_x`,
+type the value instead of `any`. Do not disable a rule to get green. A rule that finds
+more than fifteen violations, or that would need a behaviour change to satisfy, stays
+`"off"` in the config with its reason recorded in a follow-up issue.
+
+`react/refs` and `react/set-state-in-effect` are off. Satisfying either would change
+behaviour, so they are tracked as follow-up task Q15.
+
+`no-undef` needs the environment's globals. The config makes Node globals global
+(`process`, `Buffer`), which covers the build scripts and the Node test runner. The
+worker and web code is left with browser globals enabled so `Request`, `Response`,
+`fetch`, `crypto`, `URL`, `Headers`, `console` and timers resolve in one shared set,
+matching the Workers runtime they run on.
+
+## Run CI locally
+
+```sh
+pnpm ci:local                 # both CI jobs, at HEAD, in a throwaway worktree
+pnpm ci:local --job verify    # just the verify job
+pnpm ci:local --here          # run in this tree, uncommitted changes allowed
+```
+
+`scripts/ci-local.mjs` runs every command in `.github/workflows/ci.yml`, in CI order,
+and stops at the first failure. By default it checks out HEAD into a temporary git
+worktree (`$TMPDIR/rose-ci-<sha>`), so only commits are tested, the way CI sees them.
+It refuses to start when tracked files have uncommitted changes, unless you pass `--here`.
+A refusal records `ok: false` in `.rose/ci-local/last-run.json`, so a green summary from an
+earlier run cannot stand in for one that never started.
+
+The pentest job starts the local stack itself, waits up to 90 seconds for it, and always
+stops it. It refuses to run while something listens on ports 5173, 5174 or 8787, and never
+kills a process it did not start. Output goes to the terminal, the dev-stack log to
+`.rose/ci-local/dev.log`, and the per-step summary to `.rose/ci-local/last-run.json`.
+
+`--keep` leaves the worktree in place for debugging. `--report` posts a `local-ci` commit
+status with `gh` (it needs an authenticated `gh`); without the flag nothing is posted.
+`scripts/ci-local.test.mjs` fails when `ci.yml` gains a `run:` command the local runner
+does not run.
 
 All worker tests run inside the real Workers runtime (workerd) through
 `@cloudflare/vitest-plugin`, with a real local D1 database and real Durable Objects.
@@ -32,8 +82,26 @@ istanbul is the only provider that works in the Workers runtime (v8 coverage doe
 
 - A package measures only its own source: `packages/core/src`, or `worker/` in each app.
   Core code exercised by the app and admin tests is not counted towards core.
-- The SPAs (`web/`, `packages/ui`) and `scripts/` are not measured.
-- There are no thresholds. Coverage is a map of untested code, not a gate.
+- The SPAs (`web/`, `packages/ui`) are not measured. `scripts/` is measured, report
+  only (no floors yet), by `pnpm test:scripts:coverage`, which prints a per-file table and
+  writes `scripts/coverage/lcov.info`. CI runs it and keeps the lcov file in the `coverage`
+  artifact.
+- Each package fails `pnpm test:coverage` if line, statement, function or branch
+  coverage drops below its floor. The floors live in each `vitest.config.ts`.
+
+### Coverage floors
+
+The floors ratchet.
+
+- Floors are measured coverage minus 1, rounded down.
+- A PR may raise floors and must never lower them unless the maintainer agrees in writing.
+- Untested new code fails the gate. Add tests; do not add istanbul ignore comments.
+
+| Package | Lines | Statements | Functions | Branches | Measured on |
+|---|---|---|---|---|---|
+| `packages/core` | 79 | 76 | 77 | 64 | 2026-11-18 |
+| `apps/app` | 86 | 87 | 93 | 88 | 2026-11-18 |
+| `apps/admin` | 65 | 63 | 76 | 43 | 2026-11-18 |
 
 ## Writing a module test
 
@@ -71,7 +139,8 @@ create a record as tenant A, then asserts:
 7. a cross-site POST is blocked (403).
 
 `pnpm guard` fails if this file is missing, skipped, focused, or no longer passes the
-full manifest; it is also a protected file.
+full manifest. It is also part of the security core, so `CODEOWNERS` requires a
+maintainer's review of any change to it ([agents.md](agents.md#5-the-security-core)).
 
 ## What is not covered
 

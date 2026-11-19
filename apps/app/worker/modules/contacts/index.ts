@@ -82,11 +82,16 @@ export function parseCsvLine(line: string): string[] {
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]!;
     if (quoted) {
-      if (ch === '"' && line[i + 1] === '"') (cur += '"'), i++;
-      else if (ch === '"') quoted = false;
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
       else cur += ch;
     } else if (ch === '"') quoted = true;
-    else if (ch === ",") (out.push(cur.trim()), (cur = ""));
+    else if (ch === ",") {
+      out.push(cur.trim());
+      cur = "";
+    }
     else cur += ch;
   }
   out.push(cur.trim());
@@ -151,7 +156,8 @@ export const contacts = defineModule({
       method: "GET", path: "/", permission: "contacts:read",
       handler: async (ctx) => {
         const q = ctx.req.list();
-        const w = await where(ctx, { q: q.q, status: ctx.req.query("status") });
+        const status = ctx.req.query("status");
+        const w = await where(ctx, { q: q.q, ...(status !== undefined && { status }) });
         const order = orderBy(q.sort, { name: "name", company: "company", created: "created_at", status: "status" }, "created_at DESC");
         const [rows, count] = await ctx.db.batch([
           { sql: `SELECT * FROM contacts ${w.sql} ORDER BY ${order} LIMIT ? OFFSET ?`, params: [...w.args, q.pageSize, offsetOf(q)] },

@@ -23,13 +23,13 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   if (!path.startsWith("/")) throw new Error("api() only accepts same-origin paths");
   let res: Response;
   try {
-    res = await fetch(path, {
-      method: opts.method ?? (opts.body === undefined ? "GET" : "POST"),
-      headers: opts.body === undefined ? undefined : { "Content-Type": "application/json" },
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      credentials: "same-origin",
-      signal: opts.signal,
-    });
+    const init: RequestInit = { method: opts.method ?? (opts.body === undefined ? "GET" : "POST"), credentials: "same-origin" };
+    if (opts.body !== undefined) {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify(opts.body);
+    }
+    if (opts.signal !== undefined) init.signal = opts.signal;
+    res = await fetch(path, init);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     throw new ApiError(0, "network", "Could not reach the server. Check your connection and try again.");

@@ -29,7 +29,7 @@ export interface SessionInfo {
  */
 export async function createSession(
   db: D1Database,
-  input: { userId: string; scope: string; method: string; ip?: string | null; userAgent?: string | null },
+  input: { userId: string; scope: string; method: string; ip?: string | null; userAgent?: string | null | undefined },
 ): Promise<{ token: string; expiresAt: number }> {
   const token = randomToken();
   const t = now();

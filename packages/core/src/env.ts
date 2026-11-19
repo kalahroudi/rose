@@ -68,7 +68,7 @@ export function assertEnvironment(env: Pick<CoreEnv, "ENVIRONMENT">): void {
   if (v !== "development" && v !== "production") throw new EnvironmentMisconfigured();
 }
 
-export class EnvironmentMisconfigured extends Error {
+class EnvironmentMisconfigured extends Error {
   constructor() {
     super("Server misconfigured: ENVIRONMENT must be exactly 'development' or 'production'.");
   }

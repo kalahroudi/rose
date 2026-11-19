@@ -30,6 +30,8 @@ export default defineConfig({
       include: ["worker/**/*.ts"],
       exclude: ["worker/**/*.test.ts", "worker/test/**"],
       reporter: ["text-summary", "html", "lcov", "json-summary"],
+      // Ratchet floors (2026-11-18, measured pct - 1). Raise only; see docs/testing.md.
+      thresholds: { lines: 86, statements: 87, functions: 93, branches: 88 },
     },
   },
 });

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Adversarial cases for the `deployment-values` guard rule and the committed wrangler configs.
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { checkFile } from "./guard.mjs";
 

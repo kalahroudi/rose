@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
 import { CORE_EXEMPTIONS, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_MIDDLEWARE, PUBLIC_CORE_ROUTES, middlewareFingerprint, scan, tokenize } from "./route-authz-scan.mjs";
+import { pentestSource } from "./pentest-source.mjs";
 // Fingerprint of the plain pass-through inline middleware used in fixtures (it uses no free identifiers).
 const FP_NEXT = middlewareFingerprint(tokenize("async (c, next) => { await next(); }"));
 
@@ -159,6 +160,6 @@ test("legacy: default (no publicMiddleware) leaves pre-auth app.use unchecked an
 });
 
 test("pentest AUTHZ-07 wires PUBLIC_CORE_MIDDLEWARE into the scan", () => {
-  const src = readFileSync(join(ROOT, "scripts", "pentest.mjs"), "utf8");
+  const src = pentestSource(ROOT);
   assert.match(src, /scanRoutes\([^;]*PUBLIC_CORE_MIDDLEWARE\)/);
 });

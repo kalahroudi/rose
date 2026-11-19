@@ -82,13 +82,13 @@ export function SetupPage() {
     agents: {
       what: "How to let AI coding agents extend this product without weakening it. The kit gives agents a narrow, typed surface to build on and fails their work automatically if it crosses a security line.",
       diagram: {
-        node: <Flow title="Guardrails an agent's change passes through" steps={[{ label: "Agent edits", sub: "a module" }, { label: "Guard", sub: "rules, on every edit", tone: "on" }, { label: "Tests", sub: "isolation contract", tone: "on" }, { label: "CI", sub: "same checks again", tone: "on" }, { label: "You", sub: "approve core changes", tone: "ok" }]} />,
+        node: <Flow title="Guardrails an agent's change passes through" steps={[{ label: "Agent edits", sub: "a module" }, { label: "Guard", sub: "rules, on every edit", tone: "on" }, { label: "Tests", sub: "isolation contract", tone: "on" }, { label: "CI", sub: "same checks again", tone: "on" }, { label: "You", sub: "review core changes", tone: "ok" }]} />,
         caption: "Each layer catches a different kind of drift. Changes to the security core always need a human.",
       },
       terms: terms("guard", "isolationTest", "privateDatabase", "tenant"),
       why: [
         { q: "Why can an agent not just query the database?", a: "Module code receives a context that is already bound to one tenant. There is no handle to the shared database and no way to name another tenant, so the mistake that causes most data leaks can not be written." },
-        { q: "What happens if an agent edits the security core?", a: "The guard compares protected files against a lock file and fails. A person reviews the diff and runs pnpm guard:approve. Agents are instructed never to run it." },
+        { q: "What happens if an agent edits the security core?", a: "It names every core file it changed in its report, through the security-review skill, and the pull request waits for your review as CODEOWNERS requires. That works only while branch protection on main requires that review." },
         { q: "How does an agent call a tenant's API?", a: "With an API key created by that tenant's admin in their workspace (API keys page). The key works on that one tenant only and can never have the owner role." },
       ],
       links: [{ label: "Workers for Platforms", href: WFP_DOCS }],
@@ -209,7 +209,7 @@ export function SetupPage() {
                       ["Types", "Module code only receives a tenant-bound context. There is no database handle or environment to misuse."],
                       ["Guard", "Runs after every agent edit and before every commit. Blocks raw data access, unsafe HTML, unbounded lists and more."],
                       ["Isolation contract", "Every module must declare a probe; one shared test proves other tenants can not see or change its data."],
-                      ["Protected core", "Auth, crypto and tenancy files are hash-locked. A person must approve any change with pnpm guard:approve."],
+                      ["Security core", "Auth, crypto and tenancy files merge only through a pull request you review, which CODEOWNERS enforces while branch protection on main requires it."],
                       ["CI", "The same checks run again on every pull request, so nothing depends on the agent behaving."],
                     ].map(([t, d]) => (
                       <li key={t} className="row" style={{ alignItems: "flex-start" }}>

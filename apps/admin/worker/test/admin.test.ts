@@ -8,7 +8,7 @@ const call = (path: string, init: { method?: string; body?: unknown; cookie?: st
   SELF.fetch(ORIGIN + path, {
     method: init.method ?? (init.body !== undefined ? "POST" : "GET"),
     headers: { Origin: init.origin ?? ORIGIN, ...(init.cookie ? { Cookie: init.cookie } : {}), ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}) },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    ...(init.body !== undefined && { body: JSON.stringify(init.body) }),
   });
 // Tenants are created only by self-serve sign-up, so the console has no create route; tests seed them directly.
 const seed = (slug: string, name = slug) => createTenant(env.DB, { name, slug });
@@ -54,7 +54,7 @@ describe("operator console", () => {
   });
 
   it("a tenant session is not an operator session", async () => {
-    const cookie = await root();
+    await root();
     const t = await seed("acme", "Acme");
     // Forge the best case for an attacker: a real, valid session for a tenant, presented under the admin cookie name.
     const { createSession } = await import("../../../../packages/core/src/control/sessions");

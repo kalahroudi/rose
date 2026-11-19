@@ -26,8 +26,13 @@ function useLayer(open: boolean, onClose: () => void) {
         if (items.length === 0) return;
         const a = items[0]!;
         const z = items[items.length - 1]!;
-        if (e.shiftKey && document.activeElement === a) (e.preventDefault(), z.focus());
-        else if (!e.shiftKey && document.activeElement === z) (e.preventDefault(), a.focus());
+        if (e.shiftKey && document.activeElement === a) {
+          e.preventDefault();
+          z.focus();
+        } else if (!e.shiftKey && document.activeElement === z) {
+          e.preventDefault();
+          a.focus();
+        }
       }
     };
     el?.addEventListener("keydown", onKey);
@@ -44,7 +49,7 @@ export interface DrawerProps {
   onClose(): void;
   title: ReactNode;
   subtitle?: ReactNode;
-  size?: "md" | "lg" | "xl";
+  size?: "md" | "lg" | "xl" | undefined;
   footer?: ReactNode;
   children: ReactNode;
   /** Render children edge to edge (used for embedded previews). */
@@ -197,7 +202,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
     () => ({
       success(message, action) {
         const id = ++toastSeq;
-        setToasts((t) => [...t.slice(-3), { id, tone: "ok", message, action }]);
+        setToasts((t) => [...t.slice(-3), action === undefined ? { id, tone: "ok" as const, message } : { id, tone: "ok" as const, message, action }]);
         setTimeout(() => dismiss(id), action ? 8000 : 4500);
       },
       error(message) {

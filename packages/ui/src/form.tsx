@@ -5,7 +5,7 @@ import { Icon } from "./icons";
 import { Drawer, useConfirm, type DrawerProps } from "./overlay";
 import { Button, Callout, Hint } from "./primitives";
 
-export function Field({ label, hint, error, optional, help, children }: { label: string; hint?: ReactNode; error?: string; optional?: boolean; help?: string; children: (props: { id: string; "aria-invalid": boolean; "aria-describedby": string | undefined }) => ReactNode }) {
+export function Field({ label, hint, error, optional, help, children }: { label: string; hint?: ReactNode; error?: string | undefined; optional?: boolean; help?: string | undefined; children: (props: { id: string; "aria-invalid": boolean; "aria-describedby": string | undefined }) => ReactNode }) {
   const id = useId();
   const describedBy = error ? `${id}-err` : hint ? `${id}-hint` : undefined;
   return (

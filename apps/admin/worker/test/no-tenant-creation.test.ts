@@ -15,7 +15,7 @@ const call = (path: string, init: Init = {}) =>
       ...(init.json !== undefined ? { "Content-Type": "application/json" } : {}),
       ...init.headers,
     },
-    body: init.json !== undefined ? JSON.stringify(init.json) : (init.body ?? undefined),
+    ...(init.json !== undefined ? { body: JSON.stringify(init.json) } : init.body ? { body: init.body } : {}),
   });
 const json = async <T>(r: Response | Promise<Response>) => (await (await r).json()) as T;
 

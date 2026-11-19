@@ -18,13 +18,13 @@ export interface TenantAuditEntry {
   ip: string | null;
 }
 
-export async function writeTenantAudit(db: TenantDb, e: { actor: string; action: string; target?: string | null; meta?: unknown; ip?: string | null }): Promise<void> {
+export async function writeTenantAudit(db: TenantDb, e: { actor: string; action: string; target?: string | null | undefined; meta?: unknown; ip?: string | null | undefined }): Promise<void> {
   await db.run("INSERT INTO audit_log (id, at, actor, action, target, meta, ip) VALUES (?, ?, ?, ?, ?, ?, ?)", [
     newId("au"), now(), e.actor, e.action, e.target ?? null, e.meta === undefined ? null : JSON.stringify(e.meta), e.ip ?? null,
   ]);
 }
 
-export async function listTenantAudit(db: TenantDb, f: ListQuery & { action?: string }): Promise<Page<TenantAuditEntry>> {
+export async function listTenantAudit(db: TenantDb, f: ListQuery & { action?: string | undefined }): Promise<Page<TenantAuditEntry>> {
   const where: string[] = [];
   const args: (string | number)[] = [];
   if (f.q) {

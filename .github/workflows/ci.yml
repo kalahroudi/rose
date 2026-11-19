@@ -32,15 +32,20 @@ jobs:
           cache: pnpm
       - name: Install (lockfile is authoritative; no lifecycle scripts beyond the allow-list)
         run: pnpm install --frozen-lockfile
-      - name: Guardrails (security invariants and protected-core lock)
+      - name: Guardrails (security invariants)
         run: pnpm guard
-      - name: Guard self-tests
+      - name: Lint
+        run: pnpm lint
+      - name: Dead code
+        run: pnpm knip
+      - name: Guard self-tests (with coverage)
         # File patterns, not directories: Node 22 does not accept a directory here.
-        run: pnpm test:scripts
+        # Report only: no coverage thresholds. Writes scripts/coverage/lcov.info.
+        run: pnpm test:scripts:coverage
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)
-        # Same suites as `pnpm test`, instrumented. Report only: no coverage thresholds.
+        # Same suites as `pnpm test`, instrumented. Fails if coverage drops below the floors in each vitest.config.ts.
         run: pnpm test:coverage
       - name: Keep the coverage report
         if: always()
@@ -51,6 +56,7 @@ jobs:
             packages/core/coverage/
             apps/app/coverage/
             apps/admin/coverage/
+            scripts/coverage/
           if-no-files-found: ignore
       - name: Build
         run: pnpm build

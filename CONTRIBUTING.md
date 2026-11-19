@@ -18,10 +18,10 @@ Requirements: Node 22+, pnpm. See [docs/local-development.md](docs/local-develop
 - **Read [AGENTS.md](AGENTS.md).** The invariants there apply to humans too.
 - New product features are **modules** in `apps/app/worker/modules/`
   ([docs/adding-a-module.md](docs/adding-a-module.md)). They rarely need core changes.
-- Changes to the **protected security core** need a clear justification, a test that
-  proves the security property, and a maintainer-approved `guard.lock.json` update
-  (`pnpm guard:approve`, run by a human after reviewing the diff).
-  See [docs/agents.md](docs/agents.md#5-the-protected-core-and-guardlockjson).
+- Changes to the **security core** need a clear justification and a test that proves the
+  security property. They merge only through a pull request the maintainer reviews, as
+  `CODEOWNERS` requires, so branch protection on `main` must require that review.
+  See [docs/agents.md](docs/agents.md#5-the-security-core).
 - Never edit a shipped migration; add a new one.
 - No new dependency without discussion. Every dependency is attack surface.
 - Every source file starts with `// SPDX-License-Identifier: Apache-2.0`.

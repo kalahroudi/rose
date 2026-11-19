@@ -64,7 +64,7 @@ Sign-in codes are shown on screen in development.
 - `AGENTS.md` / `CLAUDE.md`, skills, and hooks that run the guard after every edit.
 - `pnpm guard`: static rules that explain *why* and *how to fix*.
 - An isolation test contract that automatically covers every new module.
-- A hash-locked security core that only a human can approve changes to.
+- A security core that only merges through a maintainer's CODEOWNERS review.
 
 ## Architecture
 
@@ -118,7 +118,7 @@ Already have a service? → [docs/multi-tenanting-a-service.md](docs/multi-tenan
 | | |
 |---|---|
 | `pnpm dev` | Run everything locally |
-| `pnpm verify` | Guard + typecheck + all tests |
+| `pnpm verify` | Guard + knip (dead code) + script tests + typecheck + all tests |
 | `pnpm setup --production` | Guided Cloudflare setup (`--dry-run` to preview) |
 | `pnpm deploy` | Verify, build, migrate, deploy |
 | `pnpm brand --name "Acme" --color "#2563eb"` | Rename and recolour |

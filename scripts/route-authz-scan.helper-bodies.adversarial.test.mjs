@@ -43,7 +43,7 @@ test("changing the AppError class body (reached by csrfGuard via forbidden) fail
 });
 
 test("changing EnvironmentMisconfigured (declared after assertEnvironment, same module) fails the scan", () => {
-  const r = run(withFiles({ "env.ts": edit("env.ts", (s) => s.replace("export class EnvironmentMisconfigured extends Error {", "export class EnvironmentMisconfigured extends Error {\n  override name = \"ok\";")) }));
+  const r = run(withFiles({ "env.ts": edit("env.ts", (s) => s.replace("\nclass EnvironmentMisconfigured extends Error {", "\nclass EnvironmentMisconfigured extends Error {\n  override name = \"ok\";")) }));
   assert.ok(fails(r), show(r));
 });
 

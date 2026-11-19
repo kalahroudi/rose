@@ -26,8 +26,8 @@ Restart `pnpm dev` after rebranding and commit the changed files.
 
 - All design tokens (surfaces, text, borders, radius, shadows; light and dark) are CSS
   variables in `packages/ui/src/styles.css`. See [ui.md](ui.md).
-- Email wording is in `packages/core/src/auth/routes.ts` and `tenant-app.ts` (protected
-  files: changing them needs `pnpm guard:approve`).
+- Email wording is in `packages/core/src/auth/routes.ts` and `tenant-app.ts` (security
+  core: changes need a maintainer's review, see [agents.md](agents.md#5-the-security-core)).
 - Internal names (`rose-app`, `rose-admin`, the `rose_` API key prefix, `X-Rose-*`
   headers, cookie names) are identifiers, not branding. Leave them unless you have a
   reason; they are referenced by tests and the guard.

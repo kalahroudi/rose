@@ -30,7 +30,7 @@ Each has a reason. If a task seems to require breaking one, stop and ask the use
 7. **The operator console (`apps/admin`) has no path to tenant data.** Never give it a
    Durable Object binding or a tenant key. Tenant-data work requested by an operator runs
    as a job in the tenant worker.
-8. **Do not weaken guardrails to get green.** No skipping/narrowing tests, no loosening
+8. **Do not weaken guardrails to get green.** No skipping/narrowing tests, no lowering coverage floors, no loosening
    the CSP, no deleting guard rules, no `--no-verify`. A `// guard-allow:` exception
    needs the user's explicit agreement and a real reason.
 9. **Shipped migrations are immutable**: add a new numbered migration instead of editing an existing one.
@@ -63,9 +63,12 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 | Command | Use |
 |---|---|
 | `pnpm dev` | Run everything locally (console :5173, app :5174, `<slug>.localhost:5174`) |
-| `pnpm verify` | **Definition of "works"**: guard + typecheck + all tests |
+| `pnpm verify` | **Definition of "works"**: guard + lint + knip + script tests + typecheck + all tests |
 | `pnpm guard` | Static guardrails only; also runs automatically after each edit |
+| `pnpm lint` | Lint (oxlint); also part of verify |
+| `pnpm knip` | Unused files, exports and dependencies; part of verify |
 | `pnpm test` / `pnpm typecheck` | Individual steps |
+| `pnpm ci:local` | Run both CI jobs (`verify` + `pentest`) locally, at HEAD, in a throwaway worktree |
 | `pnpm --filter @rose/app test` | Just the tenant app's tests |
 
 Do not run `pnpm deploy`, `pnpm setup --production`, `wrangler secret`, or `git push`
@@ -97,6 +100,11 @@ instead: `docs/multi-tenanting-a-service.md`.
 First check whether the public API already covers it (`packages/core/src/index.ts`,
 `ModuleContext`). If it truly does not: make the smallest change, add or extend a test in
 `packages/core/test/` that proves the security property still holds, and run `pnpm verify`.
+Then run the `security-review` skill, which lists every security-core file you changed so a
+human sees it before merge. The core is protected by a CODEOWNERS review on GitHub, which
+works only when `main` has branch protection that requires it. An agent may change product code, the
+core included, but it needs the owner's agreement first for files that define the checks (the guard and route-scanner scripts, the pentest harness, CI workflows and git hooks, `.claude/`, the isolation contract and `packages/core/src/testing`, coverage floors, tsconfig strictness and the verify scripts) and irreversible or supply-chain changes (migrations, dependencies and the lockfile, deploy and wrangler config, CSP headers, AGENTS.md, CODEOWNERS)
+([docs/agents.md](docs/agents.md#5-the-security-core)).
 
 ## Definition of done
 

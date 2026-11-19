@@ -174,7 +174,7 @@ export interface JobView {
 const view = (j: JobRow): JobView => ({ id: j.id, type: j.type, title: j.title, status: j.status, error: j.error, attempts: j.attempts, createdAt: j.created_at, updatedAt: j.updated_at });
 
 /** List jobs for a scope. Pass `null` to list every scope (operators only). */
-export async function listJobs(db: D1Database, scope: string | null, f: ListQuery & { status?: string }): Promise<Page<JobView> & { active: number }> {
+export async function listJobs(db: D1Database, scope: string | null, f: ListQuery & { status?: string | undefined }): Promise<Page<JobView> & { active: number }> {
   const where: string[] = [];
   const args: unknown[] = [];
   if (scope !== null) {

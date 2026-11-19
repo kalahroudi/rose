@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./lib.mjs";
 import { CORE_EXEMPTIONS, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_ROUTES, scan } from "./route-authz-scan.mjs";
+import { pentestSource } from "./pentest-source.mjs";
 
 const AUTH_LINE = 'app.use("/api/*", authenticate);\n';
 const NEED = "const need = (c, permission) => { const a = c.get(\"actor\"); if (!can(a.role, permission)) throw forbidden(); return a; };\n";
@@ -139,7 +140,7 @@ test("staleOutside is always an array (empty when enforcement is off)", () => {
 });
 
 test("AUTHZ-07 in pentest passes OUTSIDE_SCOPE_ROUTES and reports staleOutside", () => {
-  const src = readFileSync(join(ROOT, "scripts", "pentest.mjs"), "utf8");
+  const src = pentestSource(ROOT);
   const call = src.match(/const scanCoreRoutes = \(\) => scanRoutes\(([^\n]*)\);/);
   assert.ok(call, "scanCoreRoutes definition found");
   assert.match(call[1], /OUTSIDE_SCOPE_ROUTES/);

@@ -121,8 +121,14 @@ function JobsBell({ path, href }: { path: string; href: string }) {
     for (const j of q.data.items) {
       const before = prev.get(j.id);
       const wasActive = before === "queued" || before === "running" || (before === undefined && Date.now() - j.createdAt < 60_000);
-      if (wasActive && j.status === "succeeded") (toast.success(`${j.title}: done`), (settled = true));
-      if (wasActive && j.status === "failed") (toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`), (settled = true));
+      if (wasActive && j.status === "succeeded") {
+        toast.success(`${j.title}: done`);
+        settled = true;
+      }
+      if (wasActive && j.status === "failed") {
+        toast.error(`${j.title} failed${j.error ? `: ${j.error}` : ""}`);
+        settled = true;
+      }
     }
     if (settled) {
       setUnread(true);
@@ -213,7 +219,6 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
   }, [toggle]);
 
   const isActive = (href: string) => (href === "/" ? location === "/" : location === href || location.startsWith(`${href}/`));
-  let lastSection: string | undefined;
 
   return (
     <div className="shell" data-collapsed={collapsed}>
@@ -226,9 +231,8 @@ export function Shell({ brand, nav, user, onSignOut, jobs, children }: ShellProp
           </span>
         </Link>
         <div className="nav-list">
-          {nav.map((item) => {
-            const head = item.section && item.section !== lastSection ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
-            lastSection = item.section;
+          {nav.map((item, i) => {
+            const head = item.section && item.section !== nav[i - 1]?.section ? <div className="nav-section" key={`s-${item.section}`}>{item.section}</div> : null;
             return (
               <div key={item.href} style={{ display: "contents" }}>
                 {head}
@@ -273,7 +277,7 @@ export interface HelpContent {
   /** Why things work the way they do. */
   why?: { q: string; a: ReactNode }[];
   /** Short how-tos. `run` opens the relevant drawer. */
-  tasks?: { label: string; detail?: string; run?(): void }[];
+  tasks?: { label: string; detail?: string | undefined; run?: (() => void) | undefined }[];
   diagram?: { node: ReactNode; caption: string };
   /** Third-party references: open in a new tab or preview beside the page. */
   links?: { label: string; href: string }[];
@@ -362,7 +366,7 @@ function HelpDrawer({ title, help, open, onClose }: { title: string; help: HelpC
 export interface TabDef {
   id: string;
   label: string;
-  count?: number;
+  count?: number | undefined;
   prefetch?(): void;
 }
 
@@ -505,7 +509,7 @@ export function Gate({ queries, skeleton, children }: { queries: AnyQuery[]; ske
     return (
       <>
         <div className="topbar-progress" />
-        {slow ? <Skeleton kind={skeleton} /> : null}
+        {slow ? (skeleton === undefined ? <Skeleton /> : <Skeleton kind={skeleton} />) : null}
         {verySlow ? <p className="muted" role="status">Still loading. The server is taking longer than usual; you can keep waiting or reload the page.</p> : null}
       </>
     );
