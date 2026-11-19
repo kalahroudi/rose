@@ -4,10 +4,8 @@ import { notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
 import type { OperatorRole, Role } from "./users";
 
-export const SESSION_TTL = 7 * 86_400_000; // absolute lifetime
-/** A session unused for this long is refused, even inside its absolute lifetime. */
+export const SESSION_TTL = 7 * 86_400_000;
 export const SESSION_IDLE_TIMEOUT = 12 * 3_600_000;
-// Must stay far below SESSION_IDLE_TIMEOUT so an active person is never signed out by the idle rule.
 const TOUCH_INTERVAL = 5 * 60_000;
 
 export interface SessionInfo {
@@ -19,14 +17,9 @@ export interface SessionInfo {
   role: Role | OperatorRole;
   method: string;
   expiresAt: number;
-  /** When this session was created (sign-in time), epoch ms. */
   createdAt: number;
 }
 
-/**
- * Create a session for exactly one scope (a tenant id, or "platform").
- * Only the SHA-256 of the token is stored: a database leak does not yield usable sessions.
- */
 export async function createSession(
   db: D1Database,
   input: { userId: string; scope: string; method: string; ip?: string | null; userAgent?: string | null | undefined },
@@ -44,12 +37,6 @@ export async function createSession(
   return { token, expiresAt };
 }
 
-/**
- * Resolve a session token **for a given scope**. The scope comes from the request host,
- * never from the client, so a token issued for tenant A is simply not found on tenant B.
- * Access also requires a live membership (or operator row) and an active tenant, so
- * removing a member or suspending a tenant takes effect on the very next request.
- */
 export async function readSession(db: D1Database, token: string, scope: string): Promise<SessionInfo | null> {
   if (!token || token.length > 100) return null;
   const hash = await sha256Hex(token);
@@ -111,8 +98,6 @@ export async function revokeSessionById(db: D1Database, userId: string, scope: s
   if (r.meta.changes === 0) throw notFound();
 }
 
-// ── Handoffs: single-use, 60-second tokens that carry a verified identity across hosts ──
-
 export async function createHandoff(db: D1Database, input: { purpose: "session" | "signup"; userId: string; scope: string; ttlMs?: number }): Promise<string> {
   const token = randomToken();
   await db
@@ -122,7 +107,6 @@ export async function createHandoff(db: D1Database, input: { purpose: "session" 
   return token;
 }
 
-/** Atomically consume a handoff. Returns the user id only if purpose and scope match. */
 export async function consumeHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string): Promise<string | null> {
   if (!token || token.length > 100) return null;
   const row = await db
@@ -132,7 +116,6 @@ export async function consumeHandoff(db: D1Database, token: string, purpose: "se
   return row?.user_id ?? null;
 }
 
-/** Read (without spending) the user a live handoff belongs to, so a request can be refused before the ticket is consumed. */
 export async function peekHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string): Promise<string | null> {
   if (!token || token.length > 100) return null;
   const row = await db
@@ -142,7 +125,6 @@ export async function peekHandoff(db: D1Database, token: string, purpose: "sessi
   return row?.user_id ?? null;
 }
 
-/** Housekeeping for expired auth artefacts. Safe to run at any time. */
 export async function sweepExpired(db: D1Database): Promise<void> {
   const t = now();
   await db.batch([
@@ -154,13 +136,8 @@ export async function sweepExpired(db: D1Database): Promise<void> {
   ]);
 }
 
-/** A deletion needs a sign-in this recent. */
 export const FRESH_SIGN_IN_MS = 10 * 60_000;
 
-/**
- * Throws `reauth_required` unless the session was created within the last 10 minutes and,
- * when `passkey` is set, was created by a passkey. Used before irreversible actions.
- */
 export function assertFreshSession(s: Pick<SessionInfo, "method" | "createdAt">, opts: { passkey: boolean }): void {
   const age = now() - s.createdAt;
   if (age < 0 || age >= FRESH_SIGN_IN_MS || (opts.passkey && s.method !== "passkey")) {

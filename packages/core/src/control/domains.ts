@@ -19,7 +19,6 @@ const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{
 export function validateHostname(hostname: string, baseDomain: string): string {
   const h = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (!HOST_RE.test(h)) throw invalid("Check the domain.", { hostname: "Enter a full domain such as app.customer.com." });
-  // A custom domain may never shadow the platform's own namespace.
   if (h === baseDomain || h.endsWith(`.${baseDomain}`)) {
     throw invalid("Check the domain.", { hostname: `Domains under ${baseDomain} are assigned automatically.` });
   }
