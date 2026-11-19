@@ -35,6 +35,7 @@ export const STEPS = [
   { job: "verify", name: "Typecheck", run: "pnpm typecheck" },
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },
   { job: "verify", name: "Build", run: "pnpm build" },
+  { job: "pentest", name: "Install", run: "pnpm install --frozen-lockfile" },
   { job: "pentest", name: "Start the local stack", native: "dev-stack" },
   { job: "pentest", name: "Attack it", run: PENTEST_COMMAND },
   { job: "pentest", name: "Stop the local stack", native: "dev-stack-stop" },
