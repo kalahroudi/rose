@@ -6,17 +6,21 @@ when they sign in) read [Authentication](../authentication.md) first; this page 
 rationale behind the code.
 
 Both files are on the public surface. `packages/core/src/tenant-app.ts` mounts
-`createAuthRoutes` under `/api/auth` and also calls `requestCode`, `checkCode`,
-`startSession` and `currentSession` directly for the root-host signup flow.
+`createAuthRoutes` under `/api/auth` and also uses parts of them directly. The root-host
+signup flow (`/api/root/code/request`, `/api/root/code/verify`) calls only `requestCode`
+and `checkCode`; it issues a signup handoff ticket rather than a session. `startSession`
+and `currentSession` serve the handoff (`/auth/handoff`), the `/api/bootstrap` route and
+the other session routes.
 `packages/core/src/platform.ts` re-exports `createAuthRoutes`, `currentSession`,
 `AuthRealm` and `listPasskeys` for the operator console. Anything documented here is a
 contract those callers rely on.
 
 ## `AuthRealm` (routes.ts)
 
-A realm is "where you are signing in": one tenant, or the operator console. The realm is
-derived from the request host by the caller (`realmFor` in `tenant-app.ts`, `realm` in
-`apps/admin/worker/index.ts`), never from request data. The realm carries:
+A realm is "where you are signing in": one tenant, or the operator console. The tenant
+realm comes from the request host (`realmFor` in `tenant-app.ts`); the operator realm is
+the fixed `"platform"` scope of the console worker (`SCOPE` in
+`apps/admin/worker/index.ts`). Neither is taken from request data. The realm carries:
 
 - `scope` and `cookie`. The scope keys every session, passkey, challenge and sign-in code;
   the cookie names the session cookie (tenant: `rose_session`, which becomes
@@ -114,8 +118,10 @@ deletion. Covered by "a stale session can not enrol or remove passkeys"
 
 ## Session routes (routes.ts)
 
-`/sessions`, `/sessions/:id`, `/profile` and `/logout` all require a session in the realm
-scope and act only on the session's own user.
+`/sessions`, `/sessions/:id` and `/profile` require a session in the realm scope and act
+only on the session's own user. `/logout` needs no session. If the request carries a
+cookie, `/logout` revokes that cookie's token, then clears the cookie and answers 200
+either way.
 
 - The list marks the row whose public id matches the current session as `current`, which
   is how the UI labels "this device".
@@ -147,16 +153,19 @@ scope and act only on the session's own user.
   registration, user id, with a 5-minute expiry (`CHALLENGE_TTL`). `takeChallenge` reads
   and deletes the row in one statement, so two concurrent verifies can not both use the
   same challenge. Expiry is checked in the same statement (`expires_at > now`), so an
-  expired challenge is never accepted and is cleaned up on the failed read.
+  expired challenge is refused; the row stays in the table until `sweepExpired`
+  (`control/sessions.ts`) deletes it.
 - **Registration challenges are bound to the user.** `finishRegistration` refuses when the
   challenge row's user id differs from the signed-in user, so a challenge started by one
   account can not finish enrolment on another.
-- **Verification failures are one generic error.** Both `finishRegistration` and
-  `finishLogin` answer "That passkey could not be verified." for a bad challenge, an
-  expired challenge, an unknown credential and a failed ceremony. `verifyRegistrationResponse`
-  and `verifyAuthenticationResponse` exceptions are caught and turned into that same
-  error, so a malformed client response can not surface a stack trace or a library
-  message.
+- **The two verifiers answer differently on a bad challenge.** For a missing, expired or
+  other-user challenge, `finishRegistration` answers "Passkey setup expired. Try again.";
+  it answers "That passkey could not be verified." only when the ceremony fails.
+  `finishLogin` answers that generic error for every failure: a missing or expired
+  challenge, an unknown credential and a failed ceremony.
+  `verifyRegistrationResponse` and `verifyAuthenticationResponse` exceptions are caught
+  and turned into that same error, so a malformed client response can not surface a
+  stack trace or a library message.
 - **The counter and `last_used_at` move forward on every login.** After a successful
   login the stored signature counter is replaced with the authenticator's `newCounter`.
   That is what lets a cloned authenticator be detected later.
