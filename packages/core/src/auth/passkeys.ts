@@ -11,9 +11,6 @@ import { fromB64Url, toB64Url, utf8 } from "../encoding";
 import { notFound, unauthorized } from "../errors";
 import { newId, now } from "../ids";
 
-// A passkey is registered for one scope and one RP ID (the exact host). The browser
-// refuses to offer it on any other host, and the server re-checks scope + RP ID.
-
 const CHALLENGE_TTL = 5 * 60_000;
 
 export interface PasskeySite {
@@ -32,7 +29,6 @@ async function saveChallenge(db: D1Database, kind: "register" | "login", site: P
   return id;
 }
 
-/** Single use: the row is deleted as it is read. */
 async function takeChallenge(db: D1Database, id: string, kind: "register" | "login", scope: string): Promise<{ challenge: string; user_id: string | null } | null> {
   return db
     .prepare("DELETE FROM webauthn_challenges WHERE id = ? AND kind = ? AND scope = ? AND expires_at > ? RETURNING challenge, user_id")
@@ -78,7 +74,6 @@ export async function beginLogin(db: D1Database, site: PasskeySite) {
   return { id: await saveChallenge(db, "login", site, options.challenge, null), options };
 }
 
-/** Returns the authenticated user id. */
 export async function finishLogin(db: D1Database, site: PasskeySite, challengeId: string, response: AuthenticationResponseJSON): Promise<string> {
   const fail = unauthorized("That passkey could not be verified.");
   const ch = await takeChallenge(db, challengeId, "login", site.scope);
