@@ -32,7 +32,7 @@ is sent in development.
 | Command | Does |
 |---|---|
 | `pnpm dev` | Run everything locally |
-| `pnpm verify` | Guard + typecheck + all tests. The definition of "it works" |
+| `pnpm verify` | Guard + knip (dead code) + script tests + typecheck + all tests. The definition of "it works" |
 | `pnpm guard` | Static guardrails only (fast) |
 | `pnpm test` | All test suites, in the real Workers runtime |
 | `pnpm test:coverage` | The same suites with a coverage report per package ([testing.md](testing.md#coverage)) |

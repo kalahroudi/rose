@@ -2,7 +2,7 @@
 import { getSetting, operatorCount } from "@rose/core/platform";
 import type { PlatformWorkerEnv } from "@rose/core";
 
-export interface SetupCheck {
+interface SetupCheck {
   id: string;
   label: string;
   status: "ok" | "warn" | "fail";

@@ -18,7 +18,6 @@
     "@rose/ui": "workspace:*",
     "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-query": "^5.100.0",
-    "hono": "^4.13.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "wouter": "^3.10.0",

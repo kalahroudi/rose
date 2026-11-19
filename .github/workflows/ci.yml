@@ -36,6 +36,8 @@ jobs:
         run: pnpm guard
       - name: Lint
         run: pnpm lint
+      - name: Dead code
+        run: pnpm knip
       - name: Guard self-tests (with coverage)
         # File patterns, not directories: Node 22 does not accept a directory here.
         # Report only: no coverage thresholds. Writes scripts/coverage/lcov.info.

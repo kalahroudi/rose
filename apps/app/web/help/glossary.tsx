@@ -3,7 +3,7 @@
 // terminology from here instead of redefining it.
 import type { ReactNode } from "react";
 
-export const glossary = {
+const glossary = {
   workspace: "Your organisation's private space. It has its own address, its own members, its own database and its own encryption key. Nothing in it is shared with any other workspace.",
   address: "The web address of this workspace, such as acme.example.com. Sessions, cookies and passkeys are tied to this exact address.",
   member: "A person who can sign in to this workspace. Each member has exactly one role.",

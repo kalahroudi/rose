@@ -1,7 +1,7 @@
 # Testing
 
 ```sh
-pnpm verify      # guard + lint + typecheck + every suite. Run before every commit and PR.
+pnpm verify      # guard + lint + knip + script tests + typecheck + every suite. Run before every commit and PR.
 ```
 
 ## Lint

@@ -118,7 +118,7 @@ Already have a service? → [docs/multi-tenanting-a-service.md](docs/multi-tenan
 | | |
 |---|---|
 | `pnpm dev` | Run everything locally |
-| `pnpm verify` | Guard + typecheck + all tests |
+| `pnpm verify` | Guard + knip (dead code) + script tests + typecheck + all tests |
 | `pnpm setup --production` | Guided Cloudflare setup (`--dry-run` to preview) |
 | `pnpm deploy` | Verify, build, migrate, deploy |
 | `pnpm brand --name "Acme" --color "#2563eb"` | Rename and recolour |
