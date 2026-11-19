@@ -63,7 +63,7 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 | Command | Use |
 |---|---|
 | `pnpm dev` | Run everything locally (console :5173, app :5174, `<slug>.localhost:5174`) |
-| `pnpm verify` | **Definition of "works"**: guard + typecheck + all tests |
+| `pnpm verify` | **Definition of "works"**: guard + knip + script tests + typecheck + all tests |
 | `pnpm guard` | Static guardrails only; also runs automatically after each edit |
 | `pnpm knip` | Unused files, exports and dependencies; part of verify |
 | `pnpm test` / `pnpm typecheck` | Individual steps |

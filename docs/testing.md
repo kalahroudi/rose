@@ -1,7 +1,7 @@
 # Testing
 
 ```sh
-pnpm verify      # guard + typecheck + every suite. Run before every commit and PR.
+pnpm verify      # guard + knip + script tests + typecheck + every suite. Run before every commit and PR.
 ```
 
 ## Run CI locally

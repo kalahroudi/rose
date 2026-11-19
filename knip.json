@@ -10,36 +10,81 @@
         "examples/**/*.test.mjs",
         ".claude/hooks/*.mjs"
       ],
-      "project": ["scripts/**/*.{mjs,js}", "examples/**/*.{js,mjs}", ".claude/hooks/*.mjs"]
+      "project": [
+        "scripts/**/*.{mjs,js}",
+        "examples/**/*.{js,mjs}",
+        ".claude/hooks/*.mjs"
+      ],
+      "ignoreBinaries": [
+        "vitest"
+      ]
     },
     "packages/core": {
-      "entry": ["src/index.ts", "src/platform.ts", "src/testing/index.ts", "test/worker.ts", "test/**/*.test.ts"],
-      "project": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+      "entry": [
+        "src/index.ts",
+        "src/platform.ts",
+        "src/testing/index.ts",
+        "test/worker.ts",
+        "test/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
+      "ignoreDependencies": [
+        "wrangler"
+      ]
     },
     "packages/ui": {
-      "entry": ["src/index.ts"],
-      "project": ["src/**/*.{ts,tsx}"]
+      "entry": [
+        "src/index.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}"
+      ]
     },
     "apps/app": {
-      "entry": ["worker/index.ts", "web/main.tsx", "worker/**/*.test.ts", "vite.config.ts", "vitest.config.ts"],
-      "project": ["worker/**/*.ts", "web/**/*.{ts,tsx}"]
+      "entry": [
+        "worker/index.ts",
+        "web/main.tsx",
+        "worker/**/*.test.ts",
+        "vite.config.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "worker/**/*.ts",
+        "web/**/*.{ts,tsx}"
+      ]
     },
     "apps/admin": {
-      "entry": ["worker/index.ts", "web/main.tsx", "worker/**/*.test.ts", "vite.config.ts", "vitest.config.ts"],
-      "project": ["worker/**/*.ts", "web/**/*.{ts,tsx}"]
+      "entry": [
+        "worker/index.ts",
+        "web/main.tsx",
+        "worker/**/*.test.ts",
+        "vite.config.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "worker/**/*.ts",
+        "web/**/*.{ts,tsx}"
+      ]
     },
     "examples/upstream-service": {
-      "entry": ["worker.js", "worker.test.mjs"],
-      "project": ["**/*.{js,mjs}"]
+      "entry": [
+        "worker.js",
+        "worker.test.mjs"
+      ],
+      "project": [
+        "**/*.{js,mjs}"
+      ]
     }
   },
   "ignoreDependencies": [
-    "@cloudflare/workers-types",
-    "wrangler"
+    "@cloudflare/workers-types"
   ],
   "ignoreBinaries": [
-    "qlmanage",
-    "vitest"
+    "qlmanage"
   ],
   "ignore": [
     "**/migrations/**",
