@@ -65,6 +65,9 @@ jobs:
     name: Penetration tests (local stack)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ROSE_PERSIST_TO: .wrangler/state
+      ROSE_PENTEST_STATE: .wrangler/state
     steps:
       - uses: actions/checkout@v7
         with:
