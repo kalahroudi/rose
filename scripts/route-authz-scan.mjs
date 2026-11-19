@@ -117,7 +117,6 @@ export function tokenize(src, opts = {}) {
       if (pos >= src.length) { if (stopAtBrace) fail("Unterminated template expression", pos); return; }
       const c = src[pos], start = pos, n = src[pos + 1];
       const push = (type, value) => out.push({ type, value, pos: start, line: lineOf(start) });
-      const prev = out[out.length - 1];
       if (c === "/" && n === "/") { while (pos < src.length && !isLT(src[pos])) pos++; continue; }
       if (c === "/" && n === "*") {
         const end = src.indexOf("*/", pos + 2);
