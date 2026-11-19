@@ -517,9 +517,10 @@ used for ownership.
   that are already gone. Tracked as Noty bug E55E9FFF.
 - **Host routing lags on other isolates.** A pending or suspended tenant is refused
   immediately by `readSession`, but another isolate may route its host from a cached
-  lookup until the host cache TTL expires. Only the tenant-app owner deletion and the
-  workspace rename call `invalidateHostCache()`, in their own isolate; operator
-  suspension and operator deletion rely on the TTL alone.
+  lookup until the host cache TTL expires. Only the tenant-app owner deletion, the
+  workspace rename and the `tenant.purge` job (after `deleteTenantRecords`) call
+  `invalidateHostCache()`, each in its own isolate; operator suspension and the operator
+  deletion request rely on the TTL alone.
 - **`createTenant` is uncapped.** It exists for fixtures and tests. Only
   `createTenantForOwner` enforces the workspace cap, and the operator console has no
   tenant-creation route, which is covered by "the console has no route to create a tenant
