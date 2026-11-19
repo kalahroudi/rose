@@ -12,7 +12,6 @@ export interface AuditEntry {
   ip: string | null;
 }
 
-/** Operator-plane audit trail. Tenant activity is recorded inside each tenant's own storage instead. */
 export async function writePlatformAudit(
   db: D1Database,
   e: { actor: string; action: string; target?: string | null; meta?: unknown; ip?: string | null },

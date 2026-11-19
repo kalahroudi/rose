@@ -24,28 +24,21 @@ export interface JobRow {
 const MAX_ATTEMPTS = 5;
 const STALE_RUNNING = 5 * 60_000;
 
-/** Queue message: only the job id. The job row in the database is the source of truth. */
 export interface JobMessage {
   jobId: string;
 }
 export interface JobQueue {
   send(body: JobMessage, options?: { delaySeconds?: number }): Promise<unknown>;
 }
-/** What job functions need: the control-plane database and, when deployed, the queues that wake the workers. */
 export interface JobEnv {
   DB: D1Database;
   APP_JOBS?: JobQueue;
   ADMIN_JOBS?: JobQueue;
 }
 
-/** Job types the operator worker runs. Everything else runs in the tenant worker. */
 export const ADMIN_JOB_TYPES: ReadonlySet<string> = new Set(["domain.verify"]);
 const MAX_QUEUE_DELAY_S = 12 * 3600;
 
-/**
- * Wake the worker that owns this job. A lost or missing message is not fatal: the job row
- * stays queued and the hourly sweep (`runDueJobs`) picks it up.
- */
 async function notify(env: JobEnv, job: { id: string; type: string }, delayMs = 0): Promise<void> {
   const queue = ADMIN_JOB_TYPES.has(job.type) ? env.ADMIN_JOBS : env.APP_JOBS;
   if (!queue) return;
@@ -74,16 +67,8 @@ export async function enqueueJob(
 export type JobOutcome = { done: true; result?: unknown } | { done: false; retryInMs: number; note?: string };
 export type JobHandler<E> = ((env: E, job: JobRow, payload: Record<string, unknown>) => Promise<JobOutcome>) & { idempotent?: true };
 
-/** Delivery is at least once, so every registered handler must be safe to run again; this is how a handler says it is. */
 export const idempotent = <E>(fn: JobHandler<E>): JobHandler<E> => Object.assign(fn, { idempotent: true as const });
 
-/**
- * Claim and run one job. Delivery is at least once: a queue message, a redelivery and the
- * sweep race through an atomic compare-and-set, but the sweep reclaims a job left "running"
- * for STALE_RUNNING, so a slow worker can overlap its reclaimer. Handlers must be idempotent.
- * Every outcome write is guarded by the unique claim token, so a run that lost ownership
- * cannot overwrite the newer run's outcome.
- */
 async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHandler<E>>, job: JobRow): Promise<boolean> {
   const handler = handlers[job.type];
   if (!handler) return false;
@@ -116,11 +101,6 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
   return true;
 }
 
-/**
- * Queue consumer: each message names a job to run now. Messages are always acknowledged;
- * retries are scheduled by this code (with backoff, recorded on the job row), not by
- * queue redelivery.
- */
 export async function runJobMessages<E extends JobEnv>(
   env: E,
   handlers: Record<string, JobHandler<E>>,
@@ -130,7 +110,6 @@ export async function runJobMessages<E extends JobEnv>(
     const jobId = (message.body as Partial<JobMessage> | null)?.jobId;
     try {
       const job = typeof jobId === "string" ? await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<JobRow>() : null;
-      // A message may arrive a moment early, or for a job that is gone or already done.
       if (job && job.status === "queued" && job.run_after <= now() + 1000) await runOne(env, handlers, job);
     } catch (err) {
       console.error(JSON.stringify({ level: "error", at: "jobs.consume", job: jobId, error: String(err) }));
@@ -139,10 +118,6 @@ export async function runJobMessages<E extends JobEnv>(
   }
 }
 
-/**
- * Safety-net sweep, run from an hourly cron: picks up due jobs whose queue message was
- * lost, and jobs left "running" by a worker that died.
- */
 export async function runDueJobs<E extends JobEnv>(env: E, handlers: Record<string, JobHandler<E>>, limit = 10): Promise<number> {
   const types = Object.keys(handlers);
   if (types.length === 0) return 0;
@@ -173,7 +148,6 @@ export interface JobView {
 
 const view = (j: JobRow): JobView => ({ id: j.id, type: j.type, title: j.title, status: j.status, error: j.error, attempts: j.attempts, createdAt: j.created_at, updatedAt: j.updated_at });
 
-/** List jobs for a scope. Pass `null` to list every scope (operators only). */
 export async function listJobs(db: D1Database, scope: string | null, f: ListQuery & { status?: string | undefined }): Promise<Page<JobView> & { active: number }> {
   const where: string[] = [];
   const args: unknown[] = [];
