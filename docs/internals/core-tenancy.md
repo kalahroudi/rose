@@ -181,7 +181,7 @@ for `invitation.create`.
 
 `actor` is a label, not a value from the request. A user action uses the person's email,
 except the owner's first `member.join` row, written when the workspace is created: that one
-uses the user id (`tenant-app.ts:271`). An API-key action uses `key:<name>`, so a job the
+uses the user id (the owner-signup `writeTenantAudit` call in `POST /api/root/enter`, `tenant-app.ts`). An API-key action uses `key:<name>`, so a job the
 key queues shows `job:key:<name>`, and a job with no creator shows `job:system`. `target`
 is usually an id, but an invitation entry puts the invitee's email there. Neither column is
 encrypted and the audit page is readable by owners and admins (`audit:read`), so the rule
