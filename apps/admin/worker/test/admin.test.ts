@@ -165,6 +165,33 @@ describe("operator console", () => {
     // The API never returns the token.
     expect(JSON.stringify(await json(call("/api/setup", { cookie })))).not.toContain("super-secret-token");
   });
+
+  it("a tenant-scoped job is neither listed nor retryable", async () => {
+    const cookie = await root();
+    const t = await seed("jobleak", "JobLeak");
+    const allBefore = (await json<{ total: number }>(call("/api/jobs?pageSize=100", { cookie }))).total;
+    const failedBefore = (await json<{ failedJobs: number }>(call("/api/overview", { cookie }))).failedJobs;
+    const id = `job_${crypto.randomUUID().replace(/-/g, "")}`;
+    const title = "Import contacts for jobleak";
+    const error = "tenant-private import failed";
+    const ts = Date.now();
+    await env.DB.prepare(
+      "INSERT INTO jobs (id, type, scope, title, status, payload, error, attempts, run_after, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'failed', '{}', ?, 4, ?, NULL, ?, ?)",
+    )
+      .bind(id, "m.contacts.import", t.id, title, error, ts, ts, ts)
+      .run();
+
+    const listed = await json<{ total: number; items: { id: string }[] }>(call("/api/jobs?pageSize=100", { cookie }));
+    expect(listed.total).toBe(allBefore);
+    expect(listed.items.map((j) => j.id)).not.toContain(id);
+    expect(JSON.stringify(listed)).not.toContain(title);
+    expect(JSON.stringify(listed)).not.toContain(error);
+    expect((await json<{ failedJobs: number }>(call("/api/overview", { cookie }))).failedJobs).toBe(failedBefore);
+
+    expect((await call(`/api/jobs/${id}/retry`, { cookie })).status).toBe(404);
+    expect(await env.DB.prepare("SELECT status, attempts, error, scope FROM jobs WHERE id = ?").bind(id).first()).toEqual({ status: "failed", attempts: 4, error, scope: t.id });
+    expect(await env.DB.prepare("SELECT 1 FROM platform_audit WHERE action = 'job.retry' AND target = ?").bind(id).first()).toBeNull();
+  });
 });
 
 describe("pending deletion edge cases", () => {
