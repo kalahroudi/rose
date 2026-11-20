@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Example module: Contacts. Copy this folder to start a new module (see docs/adding-a-module.md).
-// It demonstrates every pattern a module needs:
-//   - a table in each tenant's private database        - paginated, searchable, sortable lists
-//   - encrypted sensitive fields + blind-index search  - bulk actions with server-side "select all"
-//   - permissions by role and an audit trail           - a background job (CSV import)
 import { defineModule, invalid, likePattern, newId, notFound, now, offsetOf, orderBy, searchTermSchema, type ModuleContext, type ModuleJobContext, type SqlValue } from "@rose/core";
 import { z } from "zod";
 
@@ -47,7 +43,7 @@ async function seal(ctx: Pick<ModuleJobContext, "crypto">, v: { email: string; n
 async function present(ctx: ModuleContext, r: Row, withNotes: boolean) {
   const c = await ctx.crypto();
   return {
-    id: r.id, name: r.name, company: r.company, status: r.status, createdAt: r.created_at, updatedAt: r.updated_at,
+    id: r.id, name: r.name, company: r.company, status: r.status, createdAt: r.created_at,
     email: r.email_enc ? await c.decrypt(r.email_enc, EMAIL) : "",
     ...(withNotes ? { notes: r.notes_enc ? await c.decrypt(r.notes_enc, NOTES) : "" } : {}),
   };
@@ -191,7 +187,7 @@ export const contacts = defineModule({
           [id, body.name, body.company, s.email_enc, s.email_idx, s.notes_enc, body.status, t, t],
         );
         await ctx.audit("create", id, { name: body.name });
-        return { id, name: body.name, company: body.company, email: body.email, status: body.status, createdAt: t, updatedAt: t };
+        return { id, name: body.name, company: body.company, email: body.email, status: body.status, createdAt: t };
       },
     },
     {
