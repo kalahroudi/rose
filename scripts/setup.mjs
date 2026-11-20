@@ -37,7 +37,7 @@ const dry = !!args["dry-run"];
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const interactive = process.stdin.isTTY && !args.yes && !dry;
 
-async function ask(flag, envName, question, { def, validate, secret } = {}) {
+async function ask(flag, envName, question, { def, validate } = {}) {
   let v = typeof args[flag] === "string" ? args[flag] : process.env[envName];
   while (true) {
     if (v === undefined || v === "") {
@@ -53,7 +53,6 @@ async function ask(flag, envName, question, { def, validate, secret } = {}) {
     if (!interactive) fail(`--${flag}: ${err}`);
     warn(err);
     v = undefined;
-    void secret;
   }
 }
 
@@ -93,7 +92,7 @@ let emailFrom = "";
 let resendKey = "";
 if (emailProvider === "resend") {
   emailFrom = await ask("email-from", "ROSE_EMAIL_FROM", 'From address, e.g. "Acme <login@acme.app>"', { def: `${appName} <login@${domain}>` });
-  resendKey = await ask("resend-api-key", "RESEND_API_KEY", "Resend API key (input is visible; or set RESEND_API_KEY)", { def: dry ? "re_dry_run_placeholder" : undefined, secret: true, validate: (v) => (v.length >= 8 ? null : "Paste the API key") });
+  resendKey = await ask("resend-api-key", "RESEND_API_KEY", "Resend API key (input is visible; or set RESEND_API_KEY)", { def: dry ? "re_dry_run_placeholder" : undefined, validate: (v) => (v.length >= 8 ? null : "Paste the API key") });
 } else {
   warn("EMAIL_PROVIDER=console can not deliver mail in production: nobody will be able to sign in. Use it only to stage the deployment.");
 }

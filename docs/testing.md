@@ -18,10 +18,10 @@ the `correctness` category plus `typescript/no-explicit-any`, `no-unused-vars`,
 Fix the cause: remove the unused import or variable, rename an unused parameter to `_x`,
 type the value instead of `any`. Do not disable a rule to get green. A rule that finds
 more than fifteen violations, or that would need a behaviour change to satisfy, stays
-`"off"` in the config with its reason recorded in a follow-up issue.
+`"off"` in the config.
 
 `react/refs` and `react/set-state-in-effect` are off. Satisfying either would change
-behaviour, so they are tracked as follow-up task Q15.
+behaviour.
 
 `no-undef` needs the environment's globals. The config makes Node globals global
 (`process`, `Buffer`), which covers the build scripts and the Node test runner. The

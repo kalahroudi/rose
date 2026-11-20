@@ -80,7 +80,6 @@ function readVars(file) {
   }
   return out;
 }
-export const readDevVars = readVars;
 
 function writeVars(file, vars) {
   writeFileSync(file, Object.entries(vars).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });

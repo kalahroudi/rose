@@ -600,7 +600,7 @@ test("pre-auth middleware: calls with arguments are unparsed; bare and call form
   assert.deepEqual(bare.ungated.map((u) => u.key), ["USE /api/*"]);
 });
 
-// L14 review follow-ups: exact handler form, reviewed inline code, import-only names, order, list validation.
+// Exact handler form, reviewed inline code, import-only names, order, list validation.
 const REAL = () => readFileSync(join(ROOT, "packages", "core", "src", "tenant-app.ts"), "utf8");
 const realMw = (src) => scan(src, CORE_EXEMPTIONS, PUBLIC_CORE_ROUTES, OUTSIDE_SCOPE_ROUTES, PUBLIC_CORE_MIDDLEWARE);
 const beforeFirstUse = (src, code) => { const at = src.indexOf('app.use("*"'); assert.ok(at > 0); return `${src.slice(0, at)}${code}\n  ${src.slice(at)}`; };

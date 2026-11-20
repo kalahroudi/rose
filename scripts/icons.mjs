@@ -5,7 +5,7 @@
 import { deflateSync, crc32 } from "node:zlib";
 
 // Geometry on a 64×64 grid. Two open rings and a bud: a rose seen from above.
-export const MARK = {
+const MARK = {
   size: 64,
   radius: 15, // tile corner radius
   arcs: [
@@ -26,7 +26,7 @@ function arcPath({ r, start, sweep }) {
 }
 
 /** Inner glyph only (no tile), for composing into other SVGs. */
-export function glyphSvg(fg) {
+function glyphSvg(fg) {
   return (
     MARK.arcs.map((a) => `<path d="${arcPath(a)}" fill="none" stroke="${fg}" stroke-width="${a.width}" stroke-linecap="round"/>`).join("") +
     `<circle cx="32" cy="32" r="${MARK.dot.r}" fill="${fg}"/>`
@@ -74,11 +74,7 @@ function sdArc(x, y, a) {
   return Math.min(Math.hypot(x - x0, y - y0), Math.hypot(x - x1, y - y1)) - a.width / 2;
 }
 
-/**
- * Render the mark to RGBA. `inset` (0–0.3) shrinks the glyph and fills the whole square,
- * which is what "maskable" and Apple touch icons want (the OS applies its own mask).
- */
-export function renderMark(px, { bg, fg, fullBleed = false, glyphScale = 1 }) {
+function renderMark(px, { bg, fg, fullBleed = false, glyphScale = 1 }) {
   const [br, bgG, bb] = hexToRgb(bg);
   const [fr, fgG, fb] = hexToRgb(fg);
   const out = Buffer.alloc(px * px * 4);
@@ -104,7 +100,7 @@ export function renderMark(px, { bg, fg, fullBleed = false, glyphScale = 1 }) {
   return out;
 }
 
-export function encodePng(rgba, px) {
+function encodePng(rgba, px) {
   const chunk = (type, data) => {
     const len = Buffer.alloc(4);
     len.writeUInt32BE(data.length);
