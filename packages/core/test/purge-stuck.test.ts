@@ -41,7 +41,7 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect((await tenantRow(a.id))!.status).toBe("deleting");
     expect(
       await env.DB.prepare("SELECT status, attempts, payload FROM jobs WHERE id = ?").bind(job!.id).first<{ status: string; attempts: number; payload: string }>(),
-    ).toMatchObject({ status: "failed", attempts: 5, payload: "{}" });
+    ).toMatchObject({ status: "failed", attempts: 5, payload: JSON.stringify({ tenantId: a.id }) });
     expect(await storageAlive(a.id)).toBe(0);
 
     await tenantTick(env, modules);

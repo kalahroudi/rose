@@ -603,9 +603,12 @@ A handler returns `{ done: true, result? }` or
 - A retry writes `status = 'queued'`, sets `run_after = now + retryInMs`, records the
   note as the error and re-notifies. The handler chooses the wait.
 - A thrown error is retried with backoff `2 ** attempts * 15 s` (using the attempt count
-  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed` and its payload
-  is cleared. An `AppError` stores its message, cut to 500 characters. Anything else stores
-  a fixed sentence and the detail is only logged. A final failure is not re-notified.
+  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed`. A final failure
+  wipes the payload to `{}` for tenant-scoped jobs (scope != `platform`) so sealed tenant
+  data does not linger, but keeps it for platform jobs (scope = `platform`), which hold no
+  tenant secrets, so the operator console can still retry them. An `AppError` stores its
+  message, cut to 500 characters. Anything else stores a fixed sentence and the detail is
+  only logged. A final failure is not re-notified.
 
 `runJobMessages` always acknowledges, including for a malformed body, a missing row, a
 job that is already done, or a handler that threw. Retries are scheduled by this code
@@ -626,11 +629,19 @@ Activity and the overview count only platform work. The status filter is an allo
 The response also carries `active`, the count of queued and running jobs for the scope,
 so the UI can show pending work without a second query.
 
-`retryJob` resets only a `failed` job in the given scope: `status = 'queued'`,
-`attempts = 0`, no error, a fresh `run_after`, returning the type so the right queue
-can be notified. A job that is not failed, or not in that scope, is 404 and unchanged.
-The operator console passes `"platform"`. The reset attempt count is exactly why the
-claim token is used for ownership.
+`retryJob` re-queues a `failed` job in the given scope in one conditional update:
+`status = 'queued'`, `attempts = 0`, no error, a fresh `run_after`, returning the type
+so the right queue can be notified. A job that is not failed, or not in that scope, is
+404 and unchanged. The operator console passes `"platform"`, where payloads are kept on
+failure, so a retry re-queues the job with its details intact. The reset attempt count
+is exactly why the claim token is used for ownership.
+
+The two platform handlers read their target from the payload, so each also fails closed
+on an empty payload before doing any work: `tenant.purge` refuses a missing `tenantId`
+("This deletion task has no workspace id.") and `domain.verify` refuses a missing
+`hostname`, so neither can ever run against the empty string. A legacy row already wiped
+to `{}` by older code is retried and then fails honestly through that guard, instead of
+succeeding or purging against the empty string.
 
 ## Known limits
 

@@ -97,7 +97,7 @@ describe("stale-run reclaim (adversarial)", () => {
   it("a stale run cannot revive a job the reclaimer marked failed on its final attempt", async () => {
     const type = freshType();
     const s = script(type, { 2: () => new Error("B final") });
-    const job = await enqueueJob(env, { type, scope: "platform", title: "t", payload: { x: 1 } });
+    const job = await enqueueJob(env, { type, scope: "tn_stale", title: "t", payload: { x: 1 } });
     await env.DB.prepare("UPDATE jobs SET attempts = 3 WHERE id = ?").bind(job.id).run();
     const a = runJobMessages(env, s.handlers, msg(job.id));
     await s.entered(1);
@@ -169,7 +169,7 @@ describe("stale-run reclaim (adversarial)", () => {
   it("the final-attempt decision uses the claimed attempt number", async () => {
     const type = freshType();
     const s = script(type, { 1: () => new Error("x"), 2: () => new Error("y") });
-    const j4 = await enqueueJob(env, { type, scope: "platform", title: "t", payload: { x: 1 } });
+    const j4 = await enqueueJob(env, { type, scope: "tn_stale", title: "t", payload: { x: 1 } });
     await env.DB.prepare("UPDATE jobs SET attempts = 4 WHERE id = ?").bind(j4.id).run();
     await runJobMessages(env, s.handlers, msg(j4.id));
     expect(await row(j4.id)).toMatchObject({ status: "failed", payload: "{}", attempts: 5 });

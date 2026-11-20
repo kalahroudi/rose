@@ -96,7 +96,7 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
     const final = claimed >= MAX_ATTEMPTS;
     const backoff = 2 ** job.attempts * 15_000;
     const r = await env.DB
-      .prepare(`UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? ${owned}`)
+      .prepare(`UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' AND scope != 'platform' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? ${owned}`)
       .bind(final ? "failed" : "queued", final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id, token)
       .run();
     if (!final && r.meta.changes > 0) await notifyJob(env, job, backoff);
