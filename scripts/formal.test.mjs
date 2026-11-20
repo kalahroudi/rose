@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_SECONDS,
-  MISE_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
   TLC_EXIT_TABLE,
   cfgFlags,
   describeOutcome,
@@ -705,6 +705,10 @@ test("findJava checks $JAVA then $JAVA_HOME before spawning mise, and gives mise
   let miseCalls = 0;
   let miseOpts = null;
   const spyMise = (cmd, args, opts) => {
+    if (cmd !== "mise") {
+      assert.deepEqual(args, ["-version"]);
+      return { status: 0, stdout: "", stderr: "" };
+    }
     miseCalls++;
     miseOpts = opts;
     assert.equal(cmd, "mise");
@@ -720,11 +724,46 @@ test("findJava checks $JAVA then $JAVA_HOME before spawning mise, and gives mise
 
   assert.equal(findJava({ env: {}, existsSync: (p) => p === "/mise/java/bin/java", spawnSync: spyMise }), "/mise/java/bin/java");
   assert.equal(miseCalls, 1);
-  assert.equal(miseOpts.timeout, MISE_TIMEOUT_MS);
+  assert.equal(miseOpts.timeout, PROBE_TIMEOUT_MS);
 
-  const noMise = () => ({ status: 1, stdout: "" });
+  const noMise = (cmd, args) => {
+    if (cmd === "mise") return { status: 1, stdout: "" };
+    assert.deepEqual(args, ["-version"]);
+    return { status: 0, stdout: "", stderr: "" };
+  };
   assert.equal(findJava({ env: { PATH: "/p" }, existsSync: (p) => p === "/p/java", spawnSync: noMise }), "/p/java");
   assert.equal(findJava({ env: {}, existsSync: () => false, spawnSync: noMise }), null);
+});
+
+test("a PATH stub java that does not run makes findJava return null and the harness report no Java without spawning TLC", async () => {
+  const stubEnv = { PATH: "/usr/bin" };
+  const stubExists = (p) => p === "/usr/bin/java";
+  const stubSpawn = (cmd, args) => {
+    if (cmd === "mise") return { status: 1, stdout: "" };
+    assert.deepEqual(args, ["-version"]);
+    return { status: 1, stdout: "", stderr: "" };
+  };
+
+  assert.equal(findJava({ env: stubEnv, existsSync: stubExists, spawnSync: stubSpawn }), null);
+
+  const { r, fake, errLines } = await runHarness(["--flows", FIXTURES], {
+    findJava: () => findJava({ env: stubEnv, existsSync: stubExists, spawnSync: stubSpawn }),
+  });
+  assert.equal(r.code, 1);
+  assert.equal(fake.calls.length, 0, "must not spawn TLC when the only java is a stub");
+  assert.ok(errLines.join("\n").includes("no Java found"));
+  assert.ok(errLines.join("\n").includes("does not run"));
+});
+
+test("a stub java earlier on PATH is skipped in favour of a working java later on PATH", () => {
+  const env = { PATH: ["/stub", "/good"].join(delimiter) };
+  const pathExists = (p) => p === "/stub/java" || p === "/good/java";
+  const pathSpawn = (cmd, args) => {
+    if (cmd === "mise") return { status: 1, stdout: "" };
+    assert.deepEqual(args, ["-version"]);
+    return cmd === "/good/java" ? { status: 0, stdout: "", stderr: "" } : { status: 1, stdout: "", stderr: "" };
+  };
+  assert.equal(findJava({ env, existsSync: pathExists, spawnSync: pathSpawn }), "/good/java");
 });
 
 test("downloadJar passes AbortSignal.timeout to fetch and enforces the size cap", async () => {

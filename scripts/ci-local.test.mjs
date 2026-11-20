@@ -22,6 +22,10 @@ const NATIVE = new Map([
     "nohup node scripts/dev.mjs > dev.log 2>&1 & for i in $(seq 1 90); do curl -sf http://localhost:5174/api/bootstrap | grep -q '\"root\"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0 sleep 1 done cat dev.log; exit 1",
     "Start the local stack: ci.yml backgrounds scripts/dev.mjs and polls it with curl; ci-local.mjs does that natively (fetch) and stops the process group afterwards, so there is no `run:` for it.",
   ],
+  [
+    "node --input-type=module -e \"import('./scripts/formal.mjs').then(m=>console.log('sha='+m.TLA_TOOLS_SHA256))\" >> \"$GITHUB_OUTPUT\"",
+    "TLA tools sha: ci.yml reads TLA_TOOLS_SHA256 from scripts/formal.mjs to key the actions/cache step; setup-java and cache are CI-only, and ci:local runs pnpm formal directly without a cache, so there is no `run:` for it.",
+  ],
 ]);
 
 /** Every command ci.yml runs, in file order, with the job that runs it. No YAML dependency. */
@@ -110,6 +114,19 @@ test("order: verify steps keep ci.yml's relative order", () => {
   const positions = local.map((command) => ciCommands().indexOf(command));
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b), "a verify step is out of ci.yml order");
   assert.equal(positions.length, new Set(positions).size, "a verify command runs twice in ci.yml");
+});
+
+test("no ci.yml command, ci:local step, or verify script runs pnpm formal --resync (owner constraint)", () => {
+  for (const command of ciCommands()) assert.ok(!command.includes("--resync"), `ci.yml must never run --resync: ${command}`);
+  for (const step of STEPS.filter((s) => s.run)) assert.ok(!step.run.includes("--resync"), `ci:local must never run --resync: ${step.run}`);
+  const { scripts } = JSON.parse(read("package.json"));
+  assert.ok(!scripts.verify.includes("--resync"), "the verify script must never run --resync");
+  assert.ok(!scripts.formal.includes("--resync"), "the formal script must never run --resync (verify calls it)");
+});
+
+test("ci.yml and ci:local both run a formal step", () => {
+  assert.ok(ciCommands().includes("pnpm formal"), "ci.yml must run pnpm formal");
+  assert.ok(STEPS.some((s) => s.run === "pnpm formal"), "ci:local must run pnpm formal");
 });
 
 test("pentest runs strict and allows exactly today's skips", () => {
