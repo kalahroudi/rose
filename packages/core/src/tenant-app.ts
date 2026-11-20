@@ -7,7 +7,7 @@ import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
-import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
+import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, recoverStuckPurges, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
   changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
@@ -104,6 +104,7 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
 }
 
 export async function tenantTick(env: TenantWorkerEnv, modules: ModuleDefinition[]): Promise<void> {
+  await recoverStuckPurges(env.DB);
   await runDueJobs(env, tenantJobHandlers(modules));
   await sweepExpired(env.DB);
 }

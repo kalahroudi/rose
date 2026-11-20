@@ -276,6 +276,25 @@ export async function deleteTenantRecords(db: D1Database, id: string): Promise<v
   ]);
 }
 
+export async function recoverStuckPurges(db: D1Database): Promise<number> {
+  const t = now();
+  const r = await db
+    .prepare(
+      `INSERT INTO jobs (id, type, scope, title, payload, run_after, created_by, created_at, updated_at)
+       SELECT 'job_' || lower(hex(randomblob(12))), 'tenant.purge', 'platform', 'Delete tenant ' || t.id,
+              json_object('tenantId', t.id), ?, 'system', ?, ?
+       FROM tenants t
+       WHERE (t.status = 'deleting' OR (t.status = 'pending_deletion' AND t.delete_after IS NOT NULL AND t.delete_after <= ?))
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs j
+           WHERE j.type = 'tenant.purge' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.tenantId') = t.id
+         )`,
+    )
+    .bind(t, t, t, t)
+    .run();
+  return r.meta.changes;
+}
+
 export async function tenantCounts(db: D1Database): Promise<Record<TenantStatus | "total", number>> {
   const rows = await db.prepare("SELECT status, COUNT(*) AS n FROM tenants GROUP BY status").all<{ status: TenantStatus; n: number }>();
   const out = { active: 0, suspended: 0, pending_deletion: 0, deleting: 0, total: 0 };
