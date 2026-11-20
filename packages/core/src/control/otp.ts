@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { deriveHmacKey, hmacHex, timingSafeEqual } from "../crypto";
-import { tooMany } from "../errors";
+import { forbidden, tooMany } from "../errors";
 import { newId, now, randomDigits } from "../ids";
 
 const CODE_TTL = 10 * 60_000;
@@ -47,16 +47,22 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
        SELECT ?, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?
          AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND requester = ? AND created_at > ?) < ?
-         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0`,
+         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0
+         AND (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
     )
     .bind(
       newId("lc"), email, scope, await codeHash(masterKey, scope, email, code), await linkHash(masterKey, scope, email, key), t + CODE_TTL, t, who,
       email, scope, t - WINDOW, MAX_CODES_PER_EMAIL,
       email, scope, who, t - WINDOW, MAX_CODES_PER_REQUESTER,
       email, scope, t - SEND_GAP_MS,
+      scope, scope,
     )
     .run();
   if (res.meta.changes === 0) {
+    if (scope !== "platform" && scope !== "root") {
+      const tenant = await db.prepare("SELECT status FROM tenants WHERE id = ?").bind(scope).first<{ status: string }>();
+      if (tenant && tenant.status !== "active") throw forbidden("This workspace is scheduled for deletion.");
+    }
     const recent = await db.prepare("SELECT 1 AS x FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL").bind(email, scope, t - SEND_GAP_MS).first();
     if (recent) return undefined;
     throw tooMany("Too many codes requested. Wait a few minutes and try again.");

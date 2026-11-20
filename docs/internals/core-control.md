@@ -197,6 +197,18 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   and authenticated access is refused immediately"
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
+- Credential creation is gated in SQL, never checked then created. `createSession`,
+  `createHandoff`, `issueLoginCode` and the passkey `saveChallenge` insert only while the
+  scope is `"platform"` or `"root"`, or while no tenant row for that id has a status other
+  than `active`. The conditional insert closes the gap the host cache leaves open: a cached
+  `active` can let `activeTenant()` pass after the row is already `pending_deletion`,
+  `suspended` or `deleting`, and an unguarded read then write would race. When the insert
+  writes no row, `createSession`, `createHandoff` and `saveChallenge` throw the same
+  `forbidden` error as `activeTenant()`; `issueLoginCode` re-reads the tenant to choose
+  between that error and its rate-limit answer. `"platform"` and `"root"` are not tenants
+  and bypass the check, and a scope with no tenant row does too, which keeps the sign-in
+  code unit tests working on synthetic scopes. Covered by
+  `packages/core/test/credentials-pending.adversarial.test.ts`.
 - `cancelTenantDeletion` performs no pre-check and runs a single atomic `db.batch`. Before
   the status transition, guarded deletes (`AND EXISTS (SELECT 1 FROM tenants WHERE id = ?
   AND status = 'pending_deletion')`) clear sessions, login codes, handoffs and WebAuthn
@@ -252,7 +264,9 @@ verification job record a provider id once and leave it alone on later status up
 A session is created for exactly one scope: a tenant id, or `"platform"`. `createSession`
 generates a random token, stores only its SHA-256 in `id_hash` and returns the token to
 the caller, so a database leak does not yield usable sessions. The raw token is the
-cookie value and exists only on the client. Covered by "stores only keyed hashes of codes
+cookie value and exists only on the client. The insert carries the tenant-active guard, so
+a session is never written for a tenant whose status is not `active` (see Deletion
+lifecycle). Covered by "stores only keyed hashes of codes
 and hashes of session tokens" (`packages/core/test/auth.test.ts`).
 
 `readSession` resolves a token for a scope the caller supplies, and that scope comes from
@@ -291,7 +305,8 @@ path" suite, including "last_seen_at is written at most every TOUCH_INTERVAL" an
 A handoff is a single-use, short-lived token that carries a verified identity across
 hosts: a signup on the root host handing a session to the tenant host, or a session
 transfer with purpose `"session"`. `createHandoff` stores the SHA-256 of the token, the
-purpose, user id, scope and an expiry (60 seconds by default).
+purpose, user id, scope and an expiry (60 seconds by default). It carries the same
+tenant-active guard, so a ticket is not minted for a tenant whose status is not `active`.
 
 `consumeHandoff` deletes the row with `DELETE ... WHERE token_hash = ? AND purpose = ?
 AND scope = ? AND expires_at > now RETURNING user_id`. Reading and deleting in one
@@ -359,14 +374,17 @@ any address)" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 ### Request caps
 
-`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has three
-`WHERE` subqueries: at most `MAX_CODES_PER_EMAIL` (20) rows for the address in the last
+`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has four
+`WHERE` predicates: at most `MAX_CODES_PER_EMAIL` (20) rows for the address in the last
 15 minutes, at most `MAX_CODES_PER_REQUESTER` (5) rows for the same requester and address
-in that window, and no code at all for the address in the last `SEND_GAP_MS` (2 minutes).
-If the insert changes no rows the caller gets `tooMany`. In development that surfaces as
-a 429; in production `requestCode` runs the issue inside `waitUntil` after answering, so
-a request past the cap is refused silently and the person still sees the same
-`{ ok: true }` as everyone else. Doing the count and the insert together means parallel
+in that window, no code at all for the address in the last `SEND_GAP_MS` (2 minutes), and
+a tenant-active guard that passes for `"platform"` and `"root"` and for any scope with no
+non-`active` tenant row.
+When the insert changes no rows the answer is resolved after the insert (see below). In
+development a rate-limit refusal surfaces as a 429; in production `requestCode` runs the
+issue inside `waitUntil` after answering, so a request past the cap is refused silently
+and the person still sees the same `{ ok: true }` as everyone else. Doing the count and
+the insert together means parallel
 requests cannot all pass the cap check. The per-address cap is a mail-bomb backstop and
 sits well above what one requester can reach, so one client cannot spend the whole
 address budget. Covered by "parallel requests from many requesters do not overshoot the
@@ -375,8 +393,11 @@ per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 The 2-minute gap is enforced by the `INSERT ... SELECT` guard, so two parallel requests
 cannot both send a mail in the same 2-minute window. Only after the insert is refused does
-`issueLoginCode` read for a recent unused code, and only to choose between silence
-(`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is what actually bounds mail volume;
+`issueLoginCode` decide the answer. For a tenant scope it re-reads the tenant first and
+throws the pending-deletion `forbidden` when the tenant exists and is not `active`. For
+any other scope, or an active tenant, it reads for a recent unused code to choose between
+silence (`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429.
+The gap is what actually bounds mail volume;
 the 20-per-address cap is now a defence-in-depth backstop that normal issuance can no
 longer reach (one code per 2 minutes is about 8 per 15 minutes).
 

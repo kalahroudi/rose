@@ -8,7 +8,7 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { fromB64Url, toB64Url, utf8 } from "../encoding";
-import { notFound, unauthorized } from "../errors";
+import { forbidden, notFound, unauthorized } from "../errors";
 import { newId, now } from "../ids";
 
 const CHALLENGE_TTL = 5 * 60_000;
@@ -22,10 +22,15 @@ export interface PasskeySite {
 
 async function saveChallenge(db: D1Database, kind: "register" | "login", site: PasskeySite, challenge: string, userId: string | null): Promise<string> {
   const id = newId("ch");
-  await db
-    .prepare("INSERT INTO webauthn_challenges (id, challenge, kind, scope, user_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .bind(id, challenge, kind, site.scope, userId, now() + CHALLENGE_TTL)
+  const res = await db
+    .prepare(
+      `INSERT INTO webauthn_challenges (id, challenge, kind, scope, user_id, expires_at)
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
+    )
+    .bind(id, challenge, kind, site.scope, userId, now() + CHALLENGE_TTL, site.scope, site.scope)
     .run();
+  if (res.meta.changes === 0) throw forbidden("This workspace is scheduled for deletion.");
   return id;
 }
 

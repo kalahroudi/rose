@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { sha256Hex } from "../crypto";
-import { notFound, reauthRequired } from "../errors";
+import { forbidden, notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
 import { RATE_LIMIT_WINDOW_MS } from "./rate-limit";
 import type { OperatorRole, Role } from "./users";
@@ -28,13 +28,15 @@ export async function createSession(
   const token = randomToken();
   const t = now();
   const expiresAt = t + SESSION_TTL;
-  await db
+  const res = await db
     .prepare(
       `INSERT INTO sessions (id_hash, public_id, user_id, scope, method, ip, user_agent, created_at, last_seen_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
     )
-    .bind(await sha256Hex(token), newId("ses"), input.userId, input.scope, input.method, input.ip ?? null, (input.userAgent ?? "").slice(0, 200), t, t, expiresAt)
+    .bind(await sha256Hex(token), newId("ses"), input.userId, input.scope, input.method, input.ip ?? null, (input.userAgent ?? "").slice(0, 200), t, t, expiresAt, input.scope, input.scope)
     .run();
+  if (res.meta.changes === 0) throw forbidden("This workspace is scheduled for deletion.");
   return { token, expiresAt };
 }
 
@@ -101,10 +103,15 @@ export async function revokeSessionById(db: D1Database, userId: string, scope: s
 
 export async function createHandoff(db: D1Database, input: { purpose: "session" | "signup"; userId: string; scope: string; ttlMs?: number }): Promise<string> {
   const token = randomToken();
-  await db
-    .prepare("INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(await sha256Hex(token), input.purpose, input.userId, input.scope, now() + (input.ttlMs ?? 60_000))
+  const res = await db
+    .prepare(
+      `INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at)
+       SELECT ?, ?, ?, ?, ?
+       WHERE (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
+    )
+    .bind(await sha256Hex(token), input.purpose, input.userId, input.scope, now() + (input.ttlMs ?? 60_000), input.scope, input.scope)
     .run();
+  if (res.meta.changes === 0) throw forbidden("This workspace is scheduled for deletion.");
   return token;
 }
 
