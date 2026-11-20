@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { deriveHmacKey, hmacHex, timingSafeEqual } from "../crypto";
-import { forbidden, tooMany } from "../errors";
+import { tooMany } from "../errors";
 import { newId, now, randomDigits } from "../ids";
+import { ACTIVE_TENANT_GUARD, nonTenantScope, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
 
 const CODE_TTL = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
@@ -48,7 +49,7 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
        WHERE (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?
          AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND requester = ? AND created_at > ?) < ?
          AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0
-         AND (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
+         AND ${ACTIVE_TENANT_GUARD}`,
     )
     .bind(
       newId("lc"), email, scope, await codeHash(masterKey, scope, email, code), await linkHash(masterKey, scope, email, key), t + CODE_TTL, t, who,
@@ -59,9 +60,9 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
     )
     .run();
   if (res.meta.changes === 0) {
-    if (scope !== "platform" && scope !== "root") {
-      const tenant = await db.prepare("SELECT status FROM tenants WHERE id = ?").bind(scope).first<{ status: string }>();
-      if (tenant && tenant.status !== "active") throw forbidden("This workspace is scheduled for deletion.");
+    if (!nonTenantScope(scope)) {
+      const status = await tenantStatus(db, scope);
+      if (status && status !== "active") throw refuseInactiveTenant(status);
     }
     const recent = await db.prepare("SELECT 1 AS x FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL").bind(email, scope, t - SEND_GAP_MS).first();
     if (recent) return undefined;

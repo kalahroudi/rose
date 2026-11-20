@@ -107,10 +107,10 @@ invitation in one workspace does not admit (or audit) the person in another"
 
 ### Operators
 
-`PLATFORM_SCOPE` is exported but unused; the code uses the literal `"platform"`. Operator
-sessions, passkeys and challenges use that literal like a tenant id, so the same session
-code serves both realms without
-sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
+`PLATFORM_SCOPE` names the `"platform"` realm and is used with `ROOT_SCOPE` by
+`tenant-guard.ts` to build the `nonTenantScope` check and the shared tenant-active guard.
+Operator sessions, passkeys and challenges use that literal like a tenant id, so the same
+session code serves both realms without sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
 NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` reads
 the operator's role first, guards the conditional `DELETE` on `operators` with
 `AND role = ?` and the last-owner predicate, and guards the platform session and passkey
@@ -198,16 +198,21 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
 - Credential creation is gated in SQL, never checked then created. `createSession`,
-  `createHandoff`, `issueLoginCode` and the passkey `saveChallenge` insert only while the
+  `createHandoff`, `issueLoginCode` and the passkey `saveChallenge` share one guard
+  fragment (`ACTIVE_TENANT_GUARD` in `tenant-guard.ts`): the insert runs only while the
   scope is `"platform"` or `"root"`, or while no tenant row for that id has a status other
   than `active`. The conditional insert closes the gap the host cache leaves open: a cached
   `active` can let `activeTenant()` pass after the row is already `pending_deletion`,
   `suspended` or `deleting`, and an unguarded read then write would race. When the insert
-  writes no row, `createSession`, `createHandoff` and `saveChallenge` throw the same
-  `forbidden` error as `activeTenant()`; `issueLoginCode` re-reads the tenant to choose
-  between that error and its rate-limit answer. `"platform"` and `"root"` are not tenants
-  and bypass the check, and a scope with no tenant row does too, which keeps the sign-in
-  code unit tests working on synthetic scopes. Covered by
+  writes no row, each site reads the tenant status and maps it through one shared helper
+  (`refuseInactiveTenant`), the same one `activeTenant()` uses: `pending_deletion` and
+  `suspended` become `forbidden` ("This workspace is scheduled for deletion." and
+  "This workspace is suspended. Contact support.") and `deleting` becomes `notFound()`.
+  `issueLoginCode` does the same read before falling back to its rate-limit answer, so an
+  active tenant keeps its existing rate-limit behaviour. `"platform"` and `"root"` are not
+  tenants and bypass the check, and a scope with no tenant row does too, which keeps the
+  sign-in code unit tests working on synthetic scopes; making that no-row case fail closed
+  is tracked separately. Covered by
   `packages/core/test/credentials-pending.adversarial.test.ts`.
 - `cancelTenantDeletion` performs no pre-check and runs a single atomic `db.batch`. Before
   the status transition, guarded deletes (`AND EXISTS (SELECT 1 FROM tenants WHERE id = ?
@@ -394,12 +399,13 @@ per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
 The 2-minute gap is enforced by the `INSERT ... SELECT` guard, so two parallel requests
 cannot both send a mail in the same 2-minute window. Only after the insert is refused does
 `issueLoginCode` decide the answer. For a tenant scope it re-reads the tenant first and
-throws the pending-deletion `forbidden` when the tenant exists and is not `active`. For
-any other scope, or an active tenant, it reads for a recent unused code to choose between
-silence (`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429.
-The gap is what actually bounds mail volume;
-the 20-per-address cap is now a defence-in-depth backstop that normal issuance can no
-longer reach (one code per 2 minutes is about 8 per 15 minutes).
+maps the status through the same `refuseInactiveTenant` helper as `activeTenant()`
+(`pending_deletion` and `suspended` → `forbidden`, `deleting` → `notFound`). For any other
+scope, or an active tenant, it reads for a recent unused code to choose between silence
+(`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is
+what actually bounds mail volume; the 20-per-address cap is now a defence-in-depth backstop
+that normal issuance can no longer reach (one code per 2 minutes is about 8 per 15
+minutes).
 
 ### Verify: candidates and budgets
 

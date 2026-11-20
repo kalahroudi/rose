@@ -7,7 +7,12 @@ import { createHandoff, createSession } from "../src/control/sessions";
 import { requestTenantDeletion, type TenantStatus } from "../src/control/tenants";
 import { createTestTenant } from "../src/testing";
 
-const FORBIDDEN = "This workspace is scheduled for deletion.";
+type NonActiveStatus = Exclude<TenantStatus, "active">;
+const REFUSAL: Record<NonActiveStatus, string> = {
+  pending_deletion: "This workspace is scheduled for deletion.",
+  suspended: "This workspace is suspended. Contact support.",
+  deleting: "Not found.",
+};
 
 const count = (table: string, scope: string) =>
   env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE scope = ?`).bind(scope).first<{ n: number }>().then((r) => r?.n ?? 0);
@@ -16,14 +21,14 @@ const setStatus = (id: string, status: TenantStatus) => env.DB.prepare("UPDATE t
 
 const site = (scope: string): PasskeySite => ({ scope, rpId: "login.rose.test", origin: "https://login.rose.test", rpName: "Test" });
 
-const nonActiveStatuses: TenantStatus[] = ["pending_deletion", "suspended", "deleting"];
+const nonActiveStatuses: NonActiveStatus[] = ["pending_deletion", "suspended", "deleting"];
 
 describe("no credential row is created for a non-active tenant (adversarial)", () => {
   it.each(nonActiveStatuses)("createSession refuses a %s tenant and inserts no row", async (status) => {
     const a = await createTestTenant(env, SELF);
     await setStatus(a.id, status);
     const before = await count("sessions", a.id);
-    await expect(createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" })).rejects.toThrow(FORBIDDEN);
+    await expect(createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" })).rejects.toThrow(REFUSAL[status]);
     expect(await count("sessions", a.id)).toBe(before);
   });
 
@@ -31,7 +36,7 @@ describe("no credential row is created for a non-active tenant (adversarial)", (
     const a = await createTestTenant(env, SELF);
     await setStatus(a.id, status);
     const before = await count("handoffs", a.id);
-    await expect(createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id })).rejects.toThrow(FORBIDDEN);
+    await expect(createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id })).rejects.toThrow(REFUSAL[status]);
     expect(await count("handoffs", a.id)).toBe(before);
   });
 
@@ -39,7 +44,7 @@ describe("no credential row is created for a non-active tenant (adversarial)", (
     const a = await createTestTenant(env, SELF);
     await setStatus(a.id, status);
     const before = await count("login_codes", a.id);
-    await expect(issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1")).rejects.toThrow(FORBIDDEN);
+    await expect(issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1")).rejects.toThrow(REFUSAL[status]);
     expect(await count("login_codes", a.id)).toBe(before);
   });
 
@@ -47,7 +52,7 @@ describe("no credential row is created for a non-active tenant (adversarial)", (
     const a = await createTestTenant(env, SELF);
     await setStatus(a.id, status);
     const before = await count("webauthn_challenges", a.id);
-    await expect(beginLogin(env.DB, site(a.id))).rejects.toThrow(FORBIDDEN);
+    await expect(beginLogin(env.DB, site(a.id))).rejects.toThrow(REFUSAL[status]);
     expect(await count("webauthn_challenges", a.id)).toBe(before);
   });
 
@@ -102,5 +107,21 @@ describe("credentials for active tenants and non-tenant scopes still work", () =
     const second = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1");
     expect(second).toBeUndefined();
     expect(await count("login_codes", a.id)).toBe(1);
+  });
+});
+
+describe("deletion racing credential creation (adversarial)", () => {
+  it("no session or login code survives for the pending tenant", async () => {
+    const a = await createTestTenant(env, SELF);
+    await Promise.allSettled(
+      Array.from({ length: 20 }, () => [
+        requestTenantDeletion(env.DB, a.id),
+        createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" }),
+        issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1"),
+      ]).flat(),
+    );
+    expect(await env.DB.prepare("SELECT status FROM tenants WHERE id = ?").bind(a.id).first<{ status: string }>()).toEqual({ status: "pending_deletion" });
+    expect(await count("sessions", a.id)).toBe(0);
+    expect(await count("login_codes", a.id)).toBe(0);
   });
 });

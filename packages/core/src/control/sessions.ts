@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { sha256Hex } from "../crypto";
-import { forbidden, notFound, reauthRequired } from "../errors";
+import { notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
 import { RATE_LIMIT_WINDOW_MS } from "./rate-limit";
+import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
 import type { OperatorRole, Role } from "./users";
 
 export const SESSION_TTL = 7 * 86_400_000;
@@ -32,11 +33,14 @@ export async function createSession(
     .prepare(
       `INSERT INTO sessions (id_hash, public_id, user_id, scope, method, ip, user_agent, created_at, last_seen_at, expires_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
+       WHERE ${ACTIVE_TENANT_GUARD}`,
     )
     .bind(await sha256Hex(token), newId("ses"), input.userId, input.scope, input.method, input.ip ?? null, (input.userAgent ?? "").slice(0, 200), t, t, expiresAt, input.scope, input.scope)
     .run();
-  if (res.meta.changes === 0) throw forbidden("This workspace is scheduled for deletion.");
+  if (res.meta.changes === 0) {
+    const status = await tenantStatus(db, input.scope);
+    throw refuseInactiveTenant(status);
+  }
   return { token, expiresAt };
 }
 
@@ -107,11 +111,14 @@ export async function createHandoff(db: D1Database, input: { purpose: "session" 
     .prepare(
       `INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at)
        SELECT ?, ?, ?, ?, ?
-       WHERE (? IN ('platform', 'root') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`,
+       WHERE ${ACTIVE_TENANT_GUARD}`,
     )
     .bind(await sha256Hex(token), input.purpose, input.userId, input.scope, now() + (input.ttlMs ?? 60_000), input.scope, input.scope)
     .run();
-  if (res.meta.changes === 0) throw forbidden("This workspace is scheduled for deletion.");
+  if (res.meta.changes === 0) {
+    const status = await tenantStatus(db, input.scope);
+    throw refuseInactiveTenant(status);
+  }
   return token;
 }
 
