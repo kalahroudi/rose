@@ -39,7 +39,7 @@ export interface JobEnv {
 export const ADMIN_JOB_TYPES: ReadonlySet<string> = new Set(["domain.verify"]);
 const MAX_QUEUE_DELAY_S = 12 * 3600;
 
-async function notify(env: JobEnv, job: { id: string; type: string }, delayMs = 0): Promise<void> {
+export async function notifyJob(env: JobEnv, job: { id: string; type: string }, delayMs = 0): Promise<void> {
   const queue = ADMIN_JOB_TYPES.has(job.type) ? env.ADMIN_JOBS : env.APP_JOBS;
   if (!queue) return;
   try {
@@ -60,7 +60,7 @@ export async function enqueueJob(
     .bind(id, input.type, input.scope, input.title, JSON.stringify(input.payload ?? {}), t + (input.delayMs ?? 0), input.createdBy ?? null, t, t)
     .run();
   const row = (await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first<JobRow>())!;
-  await notify(env, row, input.delayMs);
+  await notifyJob(env, row, input.delayMs);
   return row;
 }
 
@@ -86,7 +86,7 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
       await env.DB.prepare(`UPDATE jobs SET status = 'succeeded', payload = '{}', result = ?, error = NULL, updated_at = ? ${owned}`).bind(JSON.stringify(outcome.result ?? null), now(), job.id, token).run();
     } else {
       const r = await env.DB.prepare(`UPDATE jobs SET status = 'queued', run_after = ?, error = ?, updated_at = ? ${owned}`).bind(now() + outcome.retryInMs, outcome.note ?? null, now(), job.id, token).run();
-      if (r.meta.changes > 0) await notify(env, job, outcome.retryInMs);
+      if (r.meta.changes > 0) await notifyJob(env, job, outcome.retryInMs);
     }
   } catch (err) {
     const message = err instanceof AppError ? err.message : "Something went wrong on our side. Try again.";
@@ -99,7 +99,7 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
       .prepare(`UPDATE jobs SET status = ?, payload = CASE WHEN ? = 'failed' THEN '{}' ELSE payload END, error = ?, run_after = ?, updated_at = ? ${owned}`)
       .bind(final ? "failed" : "queued", final ? "failed" : "queued", message.slice(0, 500), now() + backoff, now(), job.id, token)
       .run();
-    if (!final && r.meta.changes > 0) await notify(env, job, backoff);
+    if (!final && r.meta.changes > 0) await notifyJob(env, job, backoff);
   }
   return true;
 }
@@ -181,5 +181,5 @@ export async function listJobs(db: D1Database, scope: string | null, f: ListQuer
 export async function retryJob(env: JobEnv, id: string, scope: string): Promise<void> {
   const r = await env.DB.prepare("UPDATE jobs SET status = 'queued', attempts = 0, error = NULL, run_after = ?, updated_at = ? WHERE id = ? AND scope = ? AND status = 'failed' RETURNING type").bind(now(), now(), id, scope).first<{ type: string }>();
   if (!r) throw notFound();
-  await notify(env, { id, type: r.type });
+  await notifyJob(env, { id, type: r.type });
 }

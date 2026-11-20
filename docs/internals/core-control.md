@@ -13,13 +13,14 @@ the caller before they are enqueued; this area stores the sealed string and pass
 the handler without inspecting it.
 
 Most caps and claims in this area come from one conditional statement, so a check and its
-write cannot interleave. Cloudflare runs many isolates against one D1 database, and a
-check followed by a separate write is a race. That is why the login-code caps, the
-workspace cap, the rate-limit counter and the job claim are conditional
-`INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE` and conditional
-`UPDATE ... WHERE` statements rather than read-then-write code. Some paths still read and
-then write in separate statements: the deletion request and cancel, and the last-owner
-checks. The Known limits section lists the races they leave open.
+write cannot interleave. Cloudflare runs many isolates against one D1 database, and an
+unguarded read followed by a separate write is a race. That is why the login-code caps,
+the workspace cap, the rate-limit counter, the job claim, the last-owner and role guards,
+and the deletion request and cancel use conditional `INSERT ... SELECT`, conditional
+`INSERT ... ON CONFLICT DO UPDATE` and conditional `UPDATE ... WHERE` / `DELETE ... WHERE`
+statements (with compare-and-set on the observed state where a preceding read authorises
+the write). The `last_seen_at` refresh still reads and then writes without a guard; the
+Known limits section lists what that leaves open.
 
 ## `audit.ts`
 
@@ -64,11 +65,26 @@ rules that are not expressible as a database constraint:
 - a workspace keeps at least one owner, so demoting or removing the last owner is a
   conflict, not a silent lockout.
 
+Both functions read the target's role first to authorise the actor (and the member routes
+in `tenant-app.ts` pass the role they used for their `freshForOwnerChange` check as
+`expectedRole`), then guard every write—demotions, promotions and removals—with
+`AND role = ?` alongside the last-owner predicate
+(`role != 'owner' OR (SELECT COUNT(*) FROM ... WHERE role = 'owner') > 1`) on demotions
+and removals. That prevents both a concurrent last-owner lockout and a stale-role bypass
+such as an admin removing or demoting a member who was just promoted to owner. When the
+guarded statement changes zero rows, the function reads the row again: if it is gone it
+throws `notFound()`, if an owner was being demoted or removed and is still an owner it
+throws the last-owner `conflict`, and otherwise it throws `conflict` asking the caller to
+reload.
+
 `removeMember` deletes the membership, that user's sessions in that tenant and that
-user's passkeys in that tenant in one batch. Removing someone therefore ends their
-access on the next request rather than at their next sign-in. The session and passkey
-deletion is not covered by a test. The owner and last-owner rules are covered by "only
-owners can invite owners or change owner access; last owner is protected"
+user's passkeys in that tenant in one batch, guarding the session and passkey deletes with
+`NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?)` so a
+refused removal leaves the staying member's sessions and passkeys intact while a committed
+removal ends access on the next request rather than at the next sign-in. Covered by
+`packages/core/test/control-users.test.ts` (including concurrent cross-removal,
+cross-demotion, double-removal, admin-removal-vs-promotion and promotion-vs-removal races)
+and "only owners can invite owners or change owner access; last owner is protected"
 (`packages/core/test/auth.test.ts`).
 
 ### Invitations
@@ -95,12 +111,16 @@ invitation in one workspace does not admit (or audit) the person in another"
 sessions, passkeys and challenges use that literal like a tenant id, so the same session
 code serves both realms without
 sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
-NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` refuses
-to remove the last platform owner and, in one batch, deletes the operator row, the
-platform session rows and the platform passkey rows for that user. The session and
-passkey deletion is not covered by a test. The owner and last-owner rules are covered by
-"only owners manage operators and connections; the last owner can not be removed"
-(`apps/admin/worker/test/admin.test.ts`).
+NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` reads
+the operator's role first, guards the conditional `DELETE` on `operators` with
+`AND role = ?` and the last-owner predicate, and guards the platform session and passkey
+deletes in the same batch with `NOT EXISTS (SELECT 1 FROM operators WHERE user_id = ?)`.
+On zero changed rows it reads the row again to distinguish `notFound()`, a concurrent
+role change (`conflict`), and the last-owner `conflict`, so concurrent removal of the
+last two platform owners always leaves one owner with intact sessions and passkeys and a
+double removal returns `notFound()` to the loser. Covered by
+`packages/core/test/control-users.test.ts` and "only owners manage operators and
+connections; the last owner can not be removed" (`apps/admin/worker/test/admin.test.ts`).
 
 ## `tenants.ts`
 
@@ -153,14 +173,21 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
 
 - `DELETE_GRACE_MS` is 48 hours. `delete_after` is the epoch-ms deadline; `prior_status`
   records what to restore if the deletion is cancelled.
-- `requestTenantDeletion` refuses a missing tenant or one already `deleting`. For requests
-  that arrive one after the other, a second request while `pending_deletion` returns the
-  original deadline and writes nothing, so a retry cannot extend or shorten the grace
-  period. Two requests that arrive at the same time are not covered; see Known limits. The
-  first request moves the tenant to `pending_deletion`, stores the previous status, deletes
-  every session for the scope and deletes the tenant's queued jobs (their `scope` is the
-  tenant id). Work a tenant queued
-  must not outlive it; the purge job itself has scope `"platform"`, so it survives.
+- `requestTenantDeletion` runs the transition and the purge-job insert in one `db.batch`:
+  a conditional `UPDATE tenants ... WHERE id = ? AND status IN ('active', 'suspended')`
+  moves the tenant to `pending_deletion` and records `prior_status` and `delete_after`; an
+  immediately following `INSERT INTO jobs (...) SELECT ... WHERE changes() = 1` inserts the
+  platform-scoped `tenant.purge` job only for the request whose `UPDATE` actually matched;
+  the same batch deletes the tenant's sessions and tenant-scoped jobs (guarded on
+  `status = 'pending_deletion' AND delete_after = ?`, leaving the `"platform"`-scoped
+  purge job intact) and reads back `status, delete_after`. When the `UPDATE` matched
+  (`created: true`), it returns `{ deleteAfter, created: true, jobId }`; when another
+  request already moved the tenant to `pending_deletion`, it returns `{ deleteAfter,
+  created: false }` with the stored deadline from the batch read-back (refusing missing or
+  `deleting` tenants with 404). Callers call `notifyJob` and write the
+  `tenant.delete.requested` audit row only when `created` is true, so concurrent delete
+  requests converge on one purge job, one audit entry, one queue notification and the same
+  stored deadline.
 - The tenant stops serving authenticated requests immediately: the session query joins
   the tenant and requires `status = 'active'`. Host-level routing can lag by the host
   cache TTL on other isolates, which is why the tenant-app owner-deletion route also
@@ -170,14 +197,21 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   and authenticated access is refused immediately"
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
-- `cancelTenantDeletion` restores `prior_status` (or `active` when it is null), clears the
-  deadline and the stored status, and only then deletes anything issued during the grace
-  period: sessions, login codes, handoffs and WebAuthn challenges for the scope, plus any
-  queued `tenant.purge` job whose payload names this tenant. A conditional `UPDATE ... AND
-  status = 'pending_deletion'` decides the winner, so a cancel that races the purge
-  returns false instead of reviving a tenant that is already being destroyed. Covered by
-  "cancel restores the tenant with its data, and members can sign in again" and "cancel
-  refuses a tenant whose purge already began".
+- `cancelTenantDeletion` performs no pre-check and runs a single atomic `db.batch`. Before
+  the status transition, guarded deletes (`AND EXISTS (SELECT 1 FROM tenants WHERE id = ?
+  AND status = 'pending_deletion')`) clear sessions, login codes, handoffs and WebAuthn
+  challenges for the scope as well as the queued `tenant.purge` job (`DELETE FROM jobs WHERE
+  type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?`),
+  so a losing cancel leaves rows untouched once the tenant is no longer `pending_deletion`.
+  The batch then reads `delete_after` and finishes with the conditional `UPDATE tenants ...
+  WHERE id = ? AND status = 'pending_deletion' RETURNING status` (restoring `prior_status`
+  via `CASE` and clearing `delete_after` and `prior_status`), returning
+  `{ status, deleteAfter } | null`. Because both `requestTenantDeletion` and
+  `cancelTenantDeletion` pair the status update and purge-job mutation in a single
+  transaction, racing deletes and cancels cannot strand a `pending_deletion` tenant without
+  a queued purge job or leave a stray queued purge job on an active/suspended tenant.
+  Covered by the concurrent race tests in `packages/core/test/deletion.adversarial.test.ts`
+  and `apps/admin/worker/test/deletion.adversarial.test.ts`.
 - `beginTenantPurge` is the only writer of `status = 'deleting'`. Its single statement
   requires `pending_deletion`, a non-null deadline and `delete_after <= now`, so an
   early, forged or repeated purge attempt writes nothing. The tenant worker's
@@ -463,7 +497,7 @@ job reads the row; a message is just a wake-up call.
 runs locally and in tests, where the sweep does the work a queue would have woken.
 
 `enqueueJob` inserts a `queued` row with `run_after = now + delayMs`, reads it back and
-then calls `notify`. `notify` is best effort: it picks the queue by ownership
+then calls `notifyJob`. `notifyJob` is best effort: it picks the queue by ownership
 (`ADMIN_JOB_TYPES`, currently only `domain.verify`, goes to `ADMIN_JOBS`; everything else
 runs in the tenant worker and goes to `APP_JOBS`), and a missing binding or a failed send
 is logged and ignored. A lost or missing message is not fatal, because the job row stays
@@ -545,33 +579,10 @@ claim token is used for ownership.
 
 ## Known limits
 
-- **Last-owner checks are not atomic.** `changeMemberRole`, `removeMember` and
-  `removeOperator` count owners and then write. No database constraint enforces either
-  rule. Two concurrent demotions of the last two owners can both pass the count and leave
-  the workspace (or the platform) with no owner. The race needs two simultaneous owner
-  actions and is not reachable by one person through the UI, but the inline comment "a
-  workspace always keeps at least one owner" is stronger than the code guarantees.
 - **The `last_seen_at` refresh is check-then-write.** `readSession` reads the row, then
   writes a fresh `last_seen_at` in a separate statement when the row is older than
   `TOUCH_INTERVAL`. Parallel requests that read the same old value each pass the check and
   each write, so "at most once" holds only for a single request at a time.
-- **A cancel can strip a delete request's purge job.** `cancelTenantDeletion` restores the
-  tenant status in one statement and deletes the queued `tenant.purge` job in a second.
-  Neither step reads the other's result. A delete request that lands between them sets the
-  tenant back to `pending_deletion` and enqueues a job. The cancel's cleanup deletes that
-  job if it runs afterwards. The tenant is then pending with no job. A later delete
-  request on a pending tenant returns the stored deadline and adds no job. No sweep creates
-  one either, so the tenant stays pending until someone cancels the deletion and requests
-  it again. Tracked as Noty bug 17887EA7.
-- **Two delete requests at once make two purge jobs.** Both delete routes read the tenant
-  status to decide whether to enqueue, then call `requestTenantDeletion`. Two concurrent
-  requests can both read `active` before either writes. One guarded `UPDATE` sets
-  `pending_deletion`; the other changes no row but still returns its own `deleteAfter`,
-  computed as `now + DELETE_GRACE_MS`, so that response carries a deadline that does not
-  match the stored one. Each request then enqueues a `tenant.purge` job and writes a
-  `tenant.delete.requested` audit row. The duplicate does no harm: `beginTenantPurge` moves
-  the tenant to `deleting` once, and a purge that runs twice only deletes storage and rows
-  that are already gone. Tracked as Noty bug E55E9FFF.
 - **Host routing lags on other isolates.** A pending or suspended tenant is refused
   immediately by `readSession`, but another isolate may route its host from a cached
   lookup until the host cache TTL expires. Only the tenant-app owner deletion, the
@@ -591,15 +602,8 @@ claim token is used for ownership.
 
 ## Corrections to inline comments
 
-- `changeMemberRole`'s "a workspace always keeps at least one owner" and
-  `removeOperator`'s "The platform needs at least one owner" describe an intention that
-  the check-then-write implementation does not hold under concurrency; see Known limits.
 - `requestTenantDeletion`'s "the tenant stops serving" is true for authenticated access
   at once and for host resolution only after the cache TTL on other isolates; see Known
   limits.
-- `apps/admin/worker/index.ts` line 214, "Already pending: report the existing state; no
-  second job, no second audit row", holds only for a request that arrives after the tenant
-  is already pending. Two requests that read the tenant at the same moment both see
-  `active`, so both enqueue and both audit; see Known limits.
 - No other comment in this area was found stale. The claim that `beginTenantPurge` is the
   only path into `deleting` was checked against every write to that column.

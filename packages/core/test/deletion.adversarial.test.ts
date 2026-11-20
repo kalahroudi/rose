@@ -3,9 +3,10 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createTestTenant, type TestTenant } from "../src/testing";
-import { tenantJobHandlers, tenantTick } from "../src";
+import { createTenantApp, tenantJobHandlers, tenantTick } from "../src";
+import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
 import { createSession } from "../src/control/sessions";
-import { cancelTenantDeletion, requestTenantDeletion } from "../src/control/tenants";
+import { beginTenantPurge, cancelTenantDeletion, requestTenantDeletion } from "../src/control/tenants";
 import { invalidateHostCache } from "../src/tenancy/resolve";
 import { modules } from "./worker";
 
@@ -64,7 +65,7 @@ describe("purge never runs before delete_after (adversarial)", () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/m/notes", { body: { title: "keep" } });
     await requestTenantDeletion(env.DB, a.id);
-    expect(await cancelTenantDeletion(env.DB, a.id)).toBe(true);
+    expect(await cancelTenantDeletion(env.DB, a.id)).toMatchObject({ status: "active" });
     const out = await tenantJobHandlers(modules)["tenant.purge"]!(env, {} as never, { tenantId: a.id });
     expect(out.done).toBe(true);
     expect((await tenantRow(a.id))!.status).toBe("active");
@@ -84,8 +85,26 @@ describe("purge never runs before delete_after (adversarial)", () => {
     const a = await createTestTenant(env, SELF);
     const first = await requestTenantDeletion(env.DB, a.id);
     const second = await requestTenantDeletion(env.DB, a.id);
-    expect(second).toBe(first);
-    expect((await tenantRow(a.id))!.delete_after).toBe(first);
+    expect(first.created).toBe(true);
+    expect(first.jobId).toBeTruthy();
+    expect(second.created).toBe(false);
+    expect(second.jobId).toBeUndefined();
+    expect(second.deleteAfter).toBe(first.deleteAfter);
+    expect((await tenantRow(a.id))!.delete_after).toBe(first.deleteAfter);
+  });
+
+  it("a repeat delete on a pending tenant leaves a session inserted after the first request untouched", async () => {
+    const a = await createTestTenant(env, SELF);
+    const first = await requestTenantDeletion(env.DB, a.id);
+    expect(first.created).toBe(true);
+    await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(first.deleteAfter - 1000, a.id).run();
+    await createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" });
+    const inserted = await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(a.id).first<{ public_id: string }>();
+    expect(inserted).not.toBeNull();
+    const second = await requestTenantDeletion(env.DB, a.id);
+    expect(second.created).toBe(false);
+    expect(second.deleteAfter).toBe(first.deleteAfter - 1000);
+    expect(await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(a.id).first<{ public_id: string }>()).toEqual(inserted);
   });
 
   it("delete, cancel, delete again gives a fresh 48h deadline, not the old one", async () => {
@@ -95,7 +114,8 @@ describe("purge never runs before delete_after (adversarial)", () => {
     await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
     await cancelTenantDeletion(env.DB, a.id);
     const again = await requestTenantDeletion(env.DB, a.id);
-    expect(again).toBeGreaterThan(Date.now() + 47 * 3_600_000);
+    expect(again.created).toBe(true);
+    expect(again.deleteAfter).toBeGreaterThan(Date.now() + 47 * 3_600_000);
   });
 });
 
@@ -201,7 +221,7 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/m/notes", { body: { title: "survivor" } });
     expect((await a.fetch("/api/workspace/delete", { body: { confirm: a.slug } })).status).toBe(202);
-    expect(await cancelTenantDeletion(env.DB, a.id)).toBe(true);
+    expect(await cancelTenantDeletion(env.DB, a.id)).toMatchObject({ status: "active" });
     invalidateHostCache();
     expect(await tenantRow(a.id)).toEqual({ status: "active", delete_after: null });
     expect(await purgeJob(a.id)).toBeNull();
@@ -217,7 +237,186 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
   it("cancel refuses a tenant whose purge already began", async () => {
     const a = await createTestTenant(env, SELF);
     await env.DB.prepare("UPDATE tenants SET status = 'deleting' WHERE id = ?").bind(a.id).run();
-    expect(await cancelTenantDeletion(env.DB, a.id)).toBe(false);
+    expect(await cancelTenantDeletion(env.DB, a.id)).toBeNull();
     expect((await tenantRow(a.id))!.status).toBe("deleting");
+  });
+});
+
+describe("concurrent deletion request and cancel races (adversarial)", () => {
+  const queuedPurgeJobs = (id: string) =>
+    env.DB
+      .prepare("SELECT id, run_after FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?")
+      .bind(id)
+      .all<{ id: string; run_after: number }>();
+
+  it("20 parallel requestTenantDeletion calls create one purge job and return the stored deleteAfter", async () => {
+    const a = await createTestTenant(env, SELF);
+    const results = await Promise.all(Array.from({ length: 20 }, () => requestTenantDeletion(env.DB, a.id)));
+    const stored = await tenantRow(a.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    expect(results.filter((r) => r.created)).toHaveLength(1);
+    expect(results.filter((r) => !r.created)).toHaveLength(19);
+    for (const r of results) expect(r.deleteAfter).toBe(stored!.delete_after);
+    const winner = results.find((r) => r.created)!;
+    const jobs = (await queuedPurgeJobs(a.id)).results;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.id).toBe(winner.jobId);
+    expect(jobs[0]!.run_after).toBe(stored!.delete_after);
+  });
+
+  it("20 parallel owner /api/workspace/delete requests create one purge job, one audit row, one queue notify and match stored deleteAfter", async () => {
+    const a = await createTestTenant(env, SELF);
+    const sent: { body: { jobId: string }; delaySeconds?: number }[] = [];
+    const app = createTenantApp({ modules });
+    const qenv = {
+      ...env,
+      APP_JOBS: {
+        send: (body: { jobId: string }, o?: { delaySeconds?: number }) => {
+          sent.push(o?.delaySeconds === undefined ? { body } : { body, delaySeconds: o.delaySeconds });
+          return Promise.resolve();
+        },
+      },
+    };
+    const cookies = await Promise.all(Array.from({ length: 20 }, () => cookieFor(a, "code")));
+    const responses = await Promise.all(
+      cookies.map((cookie) =>
+        Promise.resolve(
+          app.fetch(
+            new Request(`https://${a.host}/api/workspace/delete`, {
+              method: "POST",
+              headers: { Origin: `https://${a.host}`, Cookie: cookie, "Content-Type": "application/json" },
+              body: JSON.stringify({ confirm: a.slug }),
+            }),
+            qenv,
+          ),
+        ),
+      ),
+    );
+    for (const r of responses) expect([202, 401, 403]).toContain(r.status);
+    const accepted = responses.filter((r) => r.status === 202);
+    expect(accepted.length).toBeGreaterThanOrEqual(1);
+    const stored = await tenantRow(a.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    for (const r of accepted) {
+      const body = await r.json<{ ok: boolean; deleteAfter: number }>();
+      expect(body.ok).toBe(true);
+      expect(body.deleteAfter).toBe(stored!.delete_after);
+    }
+    const jobs = (await queuedPurgeJobs(a.id)).results;
+    expect(jobs).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body.jobId).toBe(jobs[0]!.id);
+    expect(sent[0]!.delaySeconds).toBeGreaterThan(0);
+    const audits = await env.DB
+      .prepare("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.delete.requested' AND target = ?")
+      .bind(a.id)
+      .first<{ n: number }>();
+    expect(audits!.n).toBe(1);
+  });
+
+  it("50 rounds of parallel requestTenantDeletion and cancelTenantDeletion always end in a consistent status and purge-job count", async () => {
+    const a = await createTestTenant(env, SELF);
+    for (let i = 0; i < 50; i++) {
+      if (i === 25) {
+        const cur = await tenantRow(a.id);
+        if (cur!.status === "pending_deletion") await cancelTenantDeletion(env.DB, a.id);
+        await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
+      } else if (i % 2 === 1 && (await tenantRow(a.id))!.status !== "pending_deletion") {
+        await requestTenantDeletion(env.DB, a.id);
+      }
+      if (i % 2 === 0) {
+        await Promise.all([requestTenantDeletion(env.DB, a.id), cancelTenantDeletion(env.DB, a.id)]);
+      } else {
+        await Promise.all([cancelTenantDeletion(env.DB, a.id), requestTenantDeletion(env.DB, a.id)]);
+      }
+      const state = await tenantRow(a.id);
+      const jobs = (await queuedPurgeJobs(a.id)).results;
+      if (state!.status === "pending_deletion") {
+        expect(state!.delete_after).not.toBeNull();
+        expect(jobs).toHaveLength(1);
+      } else {
+        expect(["active", "suspended"]).toContain(state!.status);
+        expect(state!.delete_after).toBeNull();
+        expect(jobs).toHaveLength(0);
+      }
+    }
+  });
+
+  const withBatchGate = (db: D1Database) => {
+    let arrived!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => {
+      arrived = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const wrapped: D1Database = {
+      prepare: (query: string) => db.prepare(query),
+      batch: async <T = unknown>(statements: D1PreparedStatement[]) => {
+        arrived();
+        await gate;
+        return db.batch<T>(statements);
+      },
+      exec: (query: string) => db.exec(query),
+      dump: () => db.dump(),
+      withSession: (constraintOrBookmark?: string) => db.withSession(constraintOrBookmark),
+    };
+    return { db: wrapped, reached, release };
+  };
+
+  it("two concurrent cancels: a session and sign-in code created after the winner survive the loser", async () => {
+    const a = await createTestTenant(env, SELF);
+    const del = await requestTenantDeletion(env.DB, a.id);
+    const gated = withBatchGate(env.DB);
+    const loserPromise = cancelTenantDeletion(gated.db, a.id);
+    await gated.reached;
+    const winner = await cancelTenantDeletion(env.DB, a.id);
+    expect(winner).toEqual({ status: "active", deleteAfter: del.deleteAfter });
+    const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" });
+    const loginCode = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1");
+    gated.release();
+    const loser = await loserPromise;
+    expect(loser).toBeNull();
+    expect(await tenantRow(a.id)).toEqual({ status: "active", delete_after: null });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions WHERE scope = ?").bind(a.id).first<{ n: number }>()).toEqual({ n: 1 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ?").bind(a.id).first<{ n: number }>()).toEqual({ n: 1 });
+    invalidateHostCache();
+    expect((await a.fetch("/api/m/notes", { cookie: `__Host-rose_session=${token}` })).status).toBe(200);
+    expect(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, loginCode, "127.0.0.1")).toBe(true);
+  });
+
+  it("a losing cancel against a deleting tenant leaves its queued purge job intact", async () => {
+    const a = await createTestTenant(env, SELF);
+    const del = await requestTenantDeletion(env.DB, a.id);
+    expect((await queuedPurgeJobs(a.id)).results).toHaveLength(1);
+    const gated = withBatchGate(env.DB);
+    const loserPromise = cancelTenantDeletion(gated.db, a.id);
+    await gated.reached;
+    await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
+    expect(await beginTenantPurge(env.DB, a.id)).toBe(true);
+    gated.release();
+    expect(await loserPromise).toBeNull();
+    expect((await tenantRow(a.id))!.status).toBe("deleting");
+    const jobs = (await queuedPurgeJobs(a.id)).results;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.id).toBe(del.jobId);
+  });
+
+  it("a delete/cancel race on a suspended tenant returns status suspended", async () => {
+    const a = await createTestTenant(env, SELF);
+    await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
+    const gated = withBatchGate(env.DB);
+    const cancelPromise = cancelTenantDeletion(gated.db, a.id);
+    await gated.reached;
+    const del = await requestTenantDeletion(env.DB, a.id);
+    expect(del.created).toBe(true);
+    gated.release();
+    const cancelled = await cancelPromise;
+    expect(cancelled).toEqual({ status: "suspended", deleteAfter: del.deleteAfter });
+    expect(await tenantRow(a.id)).toEqual({ status: "suspended", delete_after: null });
+    expect((await queuedPurgeJobs(a.id)).results).toEqual([]);
   });
 });

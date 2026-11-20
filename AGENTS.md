@@ -74,6 +74,11 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 Do not run `pnpm deploy`, `pnpm setup --production`, `wrangler secret`, or `git push`
 unless the user asked for exactly that.
 
+Work in your own git worktree, never in the main checkout or on `main`:
+`git worktree add ../<repo>-wt-<slug> -b <branch> main`, then edit, test and commit there.
+The main checkout may hold the maintainer's own branch and uncommitted files. Merging to
+`main` is the maintainer's step.
+
 ## Recipe: add a feature (a module)
 
 Full walkthrough with code: `docs/adding-a-module.md`. Skill: `.claude/skills/add-module`.

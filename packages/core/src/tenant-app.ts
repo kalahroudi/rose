@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAuthRoutes, checkCode, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
-import { enqueueJob, listJobs, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
+import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
@@ -360,7 +360,8 @@ export function createTenantApp(options: TenantAppOptions) {
     const { role } = await readJson(c, z.object({ role: roleSchema }));
     const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
     if (role === "owner" || target?.role === "owner") await freshForOwnerChange(c, actor);
-    await changeMemberRole(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), role);
+    if (!target) throw notFound();
+    await changeMemberRole(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), role, target.role);
     await audit(c, "member.role", c.req.param("userId"), { role });
     return c.json({ ok: true });
   });
@@ -368,7 +369,8 @@ export function createTenantApp(options: TenantAppOptions) {
     const actor = need(c, "members:manage");
     const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
     if (target?.role === "owner") await freshForOwnerChange(c, actor);
-    await removeMember(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"));
+    if (!target) throw notFound();
+    await removeMember(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), target.role);
     await audit(c, "member.remove", c.req.param("userId"));
     return c.json({ ok: true });
   });
@@ -450,13 +452,12 @@ export function createTenantApp(options: TenantAppOptions) {
     // A recent sign-in is required; people who registered a passkey must have used it.
     const hasPasskey = (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0;
     assertFreshSession(session, { passkey: hasPasskey });
-    const already = (await getTenant(c.env.DB, t.id))?.status === "pending_deletion";
-    const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
+    const res = await requestTenantDeletion(c.env.DB, t.id, { title: `Delete workspace ${t.slug}`, createdBy: actor.label });
     invalidateHostCache();
-    if (already) return c.json({ ok: true, deleteAfter }, 202);
-    await enqueueJob(c.env, { type: "tenant.purge", scope: "platform", title: `Delete workspace ${t.slug}`, payload: { tenantId: t.id }, createdBy: actor.label, delayMs: Math.max(0, deleteAfter - now()) });
-    await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner", deleteAfter }, ip: clientIp(c) });
-    return c.json({ ok: true, deleteAfter }, 202);
+    if (!res.created) return c.json({ ok: true, deleteAfter: res.deleteAfter }, 202);
+    await notifyJob(c.env, { id: res.jobId, type: "tenant.purge" }, Math.max(0, res.deleteAfter - now()));
+    await writePlatformAudit(c.env.DB, { actor: actor.label, action: "tenant.delete.requested", target: t.id, meta: { slug: t.slug, by: "owner", deleteAfter: res.deleteAfter }, ip: clientIp(c) });
+    return c.json({ ok: true, deleteAfter: res.deleteAfter }, 202);
   });
 
   // ── Modules ───────────────────────────────────────────────────────────────────
