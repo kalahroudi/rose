@@ -91,9 +91,8 @@ invitation in one workspace does not admit (or audit) the person in another"
 
 ### Operators
 
-`PLATFORM_SCOPE` is exported but unused; the code uses the literal `"platform"`. Operator
-sessions, passkeys and challenges use that literal like a tenant id, so the same session
-code serves both realms without
+Operator sessions, passkeys and challenges use the literal `"platform"` like a tenant id,
+so the same session code serves both realms without
 sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
 NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` refuses
 to remove the last platform owner and, in one batch, deletes the operator row, the

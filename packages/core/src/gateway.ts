@@ -65,7 +65,6 @@ export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, 
     const target = new URL(upstream.origin);
     target.pathname = path.replace(/^[/\\]+/, "/");
     target.search = url.search;
-    if (target.origin !== upstream.origin) throw notFound();
     res = await fetch(target, init);
   }
   const out = new Response(res.body, res);

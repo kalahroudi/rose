@@ -34,7 +34,7 @@ export const requestContext: MiddlewareHandler<{ Bindings: CoreEnv; Variables: B
 /**
  * CSRF defence for cookie-authenticated requests: a state-changing request must come
  * from this exact origin. Bearer-token requests are exempt because browsers never attach
- * those automatically (and cookies are ignored whenever a bearer token is present).
+ * those automatically.
  */
 export const csrfGuard: MiddlewareHandler = async (c, next) => {
   const m = c.req.method;

@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, verifyJwtHs256, wrapDek } from "../src/crypto";
+import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, wrapDek } from "../src/crypto";
+import { fromB64Url, fromUtf8, utf8 } from "../src/encoding";
 import { createTestTenant } from "../src/testing";
+
+// The gateway only signs. This checks the token the test just watched go out; it is not a JWT verifier for callers.
+async function signedClaims(secret: string, token: string): Promise<Record<string, unknown> | null> {
+  const [head, body, sig] = token.split(".");
+  if (!head || !body || !sig) return null;
+  const key = await crypto.subtle.importKey("raw", utf8(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  const ok = await crypto.subtle.verify("HMAC", key, fromB64Url(sig), utf8(`${head}.${body}`));
+  if (!ok) return null;
+  const claims = JSON.parse(fromUtf8(fromB64Url(body))) as Record<string, unknown>;
+  if (typeof claims.exp !== "number" || claims.exp * 1000 < Date.now()) return null;
+  return claims;
+}
 
 const K1 = env.ROSE_MASTER_KEY;
 const K2 = "//79/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi4eA=";
@@ -108,9 +121,9 @@ describe("upstream gateway", () => {
     expect(seen!.headers.get("Cookie")).toBeNull();
     expect(seen!.headers.get("Authorization")).toBeNull();
     expect(seen!.headers.get("X-Rose-Tenant-Id")).toBe(a.id);
-    const claims = await verifyJwtHs256(env.UPSTREAM_SIGNING_SECRET!, seen!.headers.get("X-Rose-Tenant-Token")!);
+    const claims = await signedClaims(env.UPSTREAM_SIGNING_SECRET!, seen!.headers.get("X-Rose-Tenant-Token")!);
     expect(claims).toMatchObject({ tid: a.id, tslug: a.slug, sub: a.userId, role: "owner", aud: "upstream" });
-    expect(await verifyJwtHs256("wrong-secret-wrong-secret-wrong-secret", seen!.headers.get("X-Rose-Tenant-Token")!)).toBeNull();
+    expect(await signedClaims("wrong-secret-wrong-secret-wrong-secret", seen!.headers.get("X-Rose-Tenant-Token")!)).toBeNull();
   });
 
   it("requires authentication", async () => {
