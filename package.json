@@ -24,12 +24,14 @@
     "ci:local": "node scripts/ci-local.mjs",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
+    "formal": "node scripts/formal.mjs",
     "deploy": "node scripts/deploy.mjs",
     "knip": "knip",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
     "knip": "6.45.1",
+    "oxc-parser": "0.156.0",
     "oxlint": "1.94.0",
     "oxlint-tsgolint": "7.0.2007",
     "typescript": "^7.0.2"
