@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Web module manifest, mirroring worker/modules/index.ts. A module that is listed here
-// and installed on the server gets a menu entry and a route; nothing else needs editing.
+// and installed on the server gets a menu entry and a route.
 import type { NavItem } from "@rose/ui";
 import type { JSX } from "react";
 import { ContactsPage } from "./contacts/ContactsPage";
 
-export interface WebModule {
+interface WebModule {
   /** Must equal the server module id. */
   id: string;
   nav: NavItem;

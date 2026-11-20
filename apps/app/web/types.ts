@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shapes of the tenant API responses the SPA reads.
 
 export type Role = "owner" | "admin" | "member";
 
@@ -14,7 +13,7 @@ export interface SessionView {
 export interface TenantView {
   name: string;
   slug: string;
-  status: "active" | "suspended" | "pending_deletion" | "deleting";
+  status: "active" | "suspended" | "pending_deletion";
   /** Set while pending_deletion: when the data will be destroyed (epoch ms). */
   deleteAfter?: number | null;
 }

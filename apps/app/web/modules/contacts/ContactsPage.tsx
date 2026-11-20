@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, Badge, Button, Callout, Copy, DataTable, Drawer, errorMessage, Field, FormDrawer, Gate, IconButton, Input, Page, Select, Skeleton, Textarea, Time, useConfirm, useListState, useTab, useToast, type Column, type PageData, type Selection, type Tone } from "@rose/ui";
+import { api, Badge, Button, Callout, Copy, DataTable, errorMessage, Field, FormDrawer, Gate, IconButton, Input, Page, Select, Textarea, Time, useConfirm, useListState, useTab, useToast, type Column, type FormApi, type PageData, type Selection, type Tone } from "@rose/ui";
 import { useState } from "react";
 import { useInvalidate } from "../../invalidation";
 import { useWorkspace } from "../../session";
@@ -14,7 +14,6 @@ interface Contact {
   email: string;
   status: Status;
   createdAt: number;
-  updatedAt: number;
 }
 interface ContactDetail extends Contact {
   notes: string;
@@ -41,7 +40,7 @@ const validate = (v: FormValues) => {
   return errors;
 };
 
-function ContactFields({ f }: { f: Parameters<Parameters<typeof FormDrawer<FormValues>>[0]["children"]>[0] }) {
+function ContactFields({ f }: { f: FormApi<FormValues> }) {
   return (
     <>
       <Field label="Name" error={f.errors.name}>
@@ -211,17 +210,12 @@ export function ContactsPage() {
         {(f) => <ContactFields f={f} />}
       </FormDrawer>
 
-      {/* Editing needs the notes, which the list does not carry: load the record, then show the form. */}
-      {editingId && !detail.data ? (
-        <Drawer open onClose={() => setEditingId(null)} title="Edit contact">
-          {detail.error ? <Callout tone="bad">{errorMessage(detail.error)}</Callout> : <Skeleton kind="form" />}
-        </Drawer>
-      ) : null}
       <FormDrawer<FormValues>
-        open={!!editingId && !!detail.data}
+        open={!!editingId}
         onClose={() => setEditingId(null)}
         title="Edit contact"
         subtitle={detail.data?.name}
+        loading={!detail.data && !detail.error}
         initial={detail.data ? { name: detail.data.name, company: detail.data.company, email: detail.data.email, status: detail.data.status, notes: detail.data.notes } : blank}
         submitLabel="Save changes"
         validate={validate}
@@ -232,7 +226,7 @@ export function ContactsPage() {
           toast.success("Contact saved.");
         }}
       >
-        {(f) => <ContactFields f={f} />}
+        {(f) => (detail.error ? <Callout tone="bad">{errorMessage(detail.error)}</Callout> : <ContactFields f={f} />)}
       </FormDrawer>
 
       <FormDrawer
