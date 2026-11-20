@@ -8,8 +8,9 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { fromB64Url, toB64Url, utf8 } from "../encoding";
-import { notFound, unauthorized } from "../errors";
+import { conflict, notFound, unauthorized } from "../errors";
 import { newId, now } from "../ids";
+import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "../control/tenant-guard";
 
 const CHALLENGE_TTL = 5 * 60_000;
 
@@ -22,10 +23,19 @@ export interface PasskeySite {
 
 async function saveChallenge(db: D1Database, kind: "register" | "login", site: PasskeySite, challenge: string, userId: string | null): Promise<string> {
   const id = newId("ch");
-  await db
-    .prepare("INSERT INTO webauthn_challenges (id, challenge, kind, scope, user_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .bind(id, challenge, kind, site.scope, userId, now() + CHALLENGE_TTL)
+  const res = await db
+    .prepare(
+      `INSERT INTO webauthn_challenges (id, challenge, kind, scope, user_id, expires_at)
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE ${ACTIVE_TENANT_GUARD}`,
+    )
+    .bind(id, challenge, kind, site.scope, userId, now() + CHALLENGE_TTL, site.scope, site.scope)
     .run();
+  if (res.meta.changes === 0) {
+    const status = await tenantStatus(db, site.scope);
+    if (status === "active") throw conflict("Workspace status changed. Try again.");
+    throw refuseInactiveTenant(status);
+  }
   return id;
 }
 

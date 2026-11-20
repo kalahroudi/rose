@@ -167,7 +167,10 @@ either way.
   it asks for no attestation and stores no vendor data.
 - **Challenges are single use and short lived.** A challenge is a row in
   `webauthn_challenges`, keyed by id, kind (`register` or `login`), scope and, for
-  registration, user id, with a 5-minute expiry (`CHALLENGE_TTL`). `takeChallenge` reads
+  registration, user id, with a 5-minute expiry (`CHALLENGE_TTL`). `saveChallenge` writes
+  the row only while the scope is `"platform"` or `"root"`, or the tenant is `active`,
+  matching the other credential inserts (see Deletion lifecycle in `core-control.md`).
+  `takeChallenge` reads
   and deletes the row in one statement, so two concurrent verifies can not both use the
   same challenge. Expiry is checked in the same statement (`expires_at > now`), so an
   expired challenge is refused; the row stays in the table until `sweepExpired`

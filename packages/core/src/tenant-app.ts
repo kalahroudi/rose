@@ -8,6 +8,7 @@ import { writePlatformAudit } from "./control/audit";
 import { normalizeKey } from "./control/otp";
 import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
+import { ROOT_SCOPE, refuseInactiveTenant } from "./control/tenant-guard";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, recoverStuckPurges, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
   changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
@@ -27,7 +28,6 @@ import { createApiKey, listApiKeys, listTenantAudit, revokeApiKey, verifyApiKey,
 import { CORE_TENANT_MIGRATIONS, type TenantMigration } from "./tenancy/tenant-do";
 
 const SESSION_COOKIE = "rose_session";
-const ROOT_SCOPE = "root";
 
 interface Vars extends BaseVars {
   host: HostResolution;
@@ -57,6 +57,7 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
     // data key), then removes its identity records. Idempotent, so retries are safe.
     "tenant.purge": idempotent(async (env, _job, payload) => {
       const tenantId = typeof payload.tenantId === "string" ? payload.tenantId : "";
+      if (!tenantId) throw conflict("This deletion task has no workspace id.");
       const row = await getTenant(env.DB, tenantId);
       if (row) {
         // Never purge early: the job and the hourly sweep both come through here, so this
@@ -198,9 +199,8 @@ export function createTenantApp(options: TenantAppOptions) {
   /** The active tenant for this host, or 404. Suspended and deleting tenants serve nothing. */
   const activeTenant = (c: Ctx): TenantRow => {
     const host = c.get("host");
-    if (host.kind !== "tenant" || host.tenant.status === "deleting") throw notFound();
-    if (host.tenant.status === "pending_deletion") throw forbidden("This workspace is scheduled for deletion.");
-    if (host.tenant.status !== "active") throw forbidden("This workspace is suspended. Contact support.");
+    if (host.kind !== "tenant") throw notFound();
+    if (host.tenant.status !== "active") throw refuseInactiveTenant(host.tenant.status);
     return host.tenant;
   };
 
@@ -318,7 +318,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (authz !== undefined) {
       // API keys bypass the session query, so re-check tenant status against the database here.
       const fresh = await getTenant(c.env.DB, row.id);
-      if (fresh?.status !== "active") throw forbidden(fresh?.status === "pending_deletion" ? "This workspace is scheduled for deletion." : "This workspace is suspended.");
+      if (fresh?.status !== "active") throw refuseInactiveTenant(fresh?.status);
       const key = /^Bearer\s+\S/.test(authz) ? await verifyApiKey(db, authz.replace(/^Bearer\s+/, "").trim()) : null;
       if (key) actor = { type: "api_key", id: key.id, label: `key:${key.name}`, role: key.role };
       // Only failed attempts spend rate-limit budget, so legitimate API traffic is never throttled by it.

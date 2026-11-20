@@ -41,6 +41,7 @@ const jobHandlers: Record<string, JobHandler<PlatformWorkerEnv>> = {
   /** Registers a custom domain with Cloudflare for SaaS, then polls until its certificate is live. */
   "domain.verify": idempotent(async (env, job, payload) => {
     const hostname = typeof payload.hostname === "string" ? payload.hostname : "";
+    if (!hostname) throw conflict("This verification task has no domain name.");
     const row = await getDomain(env.DB, hostname);
     if (!row) return { done: true, result: { skipped: "removed" } };
     const conn = await cfConnection(env);

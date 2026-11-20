@@ -2,6 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { createInvitation, createTenant } from "@rose/core/platform";
 import { describe, expect, it } from "vitest";
+import worker from "../index";
 
 const ORIGIN = "https://admin.rose.test";
 const call = (path: string, init: { method?: string; body?: unknown; cookie?: string; origin?: string } = {}) =>
@@ -215,6 +216,39 @@ describe("operator console", () => {
     expect((await call(`/api/jobs/${id}/retry`, { cookie })).status).toBe(404);
     expect(await env.DB.prepare("SELECT status, attempts, error, scope FROM jobs WHERE id = ?").bind(id).first()).toEqual({ status: "failed", attempts: 4, error, scope: t.id });
     expect(await env.DB.prepare("SELECT 1 FROM platform_audit WHERE action = 'job.retry' AND target = ?").bind(id).first()).toBeNull();
+  });
+
+  it("a legacy wiped domain.verify job is retried, then fails honestly when it runs", async () => {
+    const cookie = await root();
+    const id = `job_${crypto.randomUUID().replace(/-/g, "")}`;
+    const ts = Date.now();
+    await env.DB
+      .prepare("INSERT INTO jobs (id, type, scope, title, status, payload, error, attempts, run_after, created_by, created_at, updated_at) VALUES (?, 'domain.verify', 'platform', 'Verify a domain', 'failed', '{}', 'verify failed', 5, ?, NULL, ?, ?)")
+      .bind(id, ts, ts, ts)
+      .run();
+
+    const res = await call(`/api/jobs/${id}/retry`, { cookie, method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(id).first()).toEqual({ status: "queued", attempts: 0, error: null });
+    expect(await env.DB.prepare("SELECT 1 FROM platform_audit WHERE action = 'job.retry' AND target = ?").bind(id).first()).not.toBeNull();
+
+    for (let i = 0; i < 5; i++) {
+      await env.DB.prepare("UPDATE jobs SET run_after = 0 WHERE id = ?").bind(id).run();
+      await worker.queue({ messages: [{ body: { jobId: id }, ack() {} }] }, env);
+    }
+    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(id).first()).toEqual({ status: "failed", attempts: 5, error: "This verification task has no domain name." });
+  });
+
+  it("a domain.verify job with an empty payload is re-queued with an error instead of succeeding", async () => {
+    const id = `job_${crypto.randomUUID().replace(/-/g, "")}`;
+    const ts = Date.now() - 5_000;
+    await env.DB
+      .prepare("INSERT INTO jobs (id, type, scope, title, payload, run_after, created_by, created_at, updated_at) VALUES (?, 'domain.verify', 'platform', 'Verify a domain', '{}', ?, NULL, ?, ?)")
+      .bind(id, ts, ts, ts)
+      .run();
+
+    await worker.queue({ messages: [{ body: { jobId: id }, ack() {} }] }, env);
+    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(id).first()).toEqual({ status: "queued", attempts: 1, error: "This verification task has no domain name." });
   });
 });
 

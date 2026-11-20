@@ -107,10 +107,10 @@ invitation in one workspace does not admit (or audit) the person in another"
 
 ### Operators
 
-`PLATFORM_SCOPE` is exported but unused; the code uses the literal `"platform"`. Operator
-sessions, passkeys and challenges use that literal like a tenant id, so the same session
-code serves both realms without
-sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
+`PLATFORM_SCOPE` names the `"platform"` realm and is used with `ROOT_SCOPE` by
+`tenant-guard.ts` to build the shared tenant-active guard.
+Operator sessions, passkeys and challenges use that literal like a tenant id, so the same
+session code serves both realms without sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
 NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` reads
 the operator's role first, guards the conditional `DELETE` on `operators` with
 `AND role = ?` and the last-owner predicate, and guards the platform session and passkey
@@ -197,6 +197,26 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   and authenticated access is refused immediately"
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
+- Credential creation is gated in SQL, never checked then created. `createSession`,
+  `createHandoff`, `issueLoginCode` and the passkey `saveChallenge` share one guard
+  fragment (`ACTIVE_TENANT_GUARD` in `tenant-guard.ts`): the insert runs only while the
+  scope is `"platform"` or `"root"`, or while no tenant row for that id has a status other
+  than `active`. The conditional insert closes the gap the host cache leaves open: a cached
+  `active` can let `activeTenant()` pass after the row is already `pending_deletion`,
+  `suspended` or `deleting`, and an unguarded read then write would race. When the insert
+  writes no row, each site reads the tenant status and maps it through one shared helper
+  (`refuseInactiveTenant`), the same one `activeTenant()` uses: `pending_deletion` and
+  `suspended` become `forbidden` ("This workspace is scheduled for deletion." and
+  "This workspace is suspended. Contact support.") and `deleting` becomes `notFound()`.
+  A re-read that finds `active` (the status changed back between the insert and the read)
+  throws `conflict` ("Workspace status changed. Try again.") so the site never misreports
+  a live workspace as missing. `issueLoginCode` does the same read before falling back to
+  its rate-limit answer, so an
+  active tenant keeps its existing rate-limit behaviour. `"platform"` and `"root"` are not
+  tenants and bypass the check, and a scope with no tenant row does too, which keeps the
+  sign-in code unit tests working on synthetic scopes; making that no-row case fail closed
+  is tracked separately. Covered by
+  `packages/core/test/credentials-pending.adversarial.test.ts`.
 - `cancelTenantDeletion` performs no pre-check and runs a single atomic `db.batch`. Before
   the status transition, guarded deletes (`AND EXISTS (SELECT 1 FROM tenants WHERE id = ?
   AND status = 'pending_deletion')`) clear sessions, login codes, handoffs and WebAuthn
@@ -252,7 +272,9 @@ verification job record a provider id once and leave it alone on later status up
 A session is created for exactly one scope: a tenant id, or `"platform"`. `createSession`
 generates a random token, stores only its SHA-256 in `id_hash` and returns the token to
 the caller, so a database leak does not yield usable sessions. The raw token is the
-cookie value and exists only on the client. Covered by "stores only keyed hashes of codes
+cookie value and exists only on the client. The insert carries the tenant-active guard, so
+a session is never written for a tenant whose status is not `active` (see Deletion
+lifecycle). Covered by "stores only keyed hashes of codes
 and hashes of session tokens" (`packages/core/test/auth.test.ts`).
 
 `readSession` resolves a token for a scope the caller supplies, and that scope comes from
@@ -291,7 +313,8 @@ path" suite, including "last_seen_at is written at most every TOUCH_INTERVAL" an
 A handoff is a single-use, short-lived token that carries a verified identity across
 hosts: a signup on the root host handing a session to the tenant host, or a session
 transfer with purpose `"session"`. `createHandoff` stores the SHA-256 of the token, the
-purpose, user id, scope and an expiry (60 seconds by default).
+purpose, user id, scope and an expiry (60 seconds by default). It carries the same
+tenant-active guard, so a ticket is not minted for a tenant whose status is not `active`.
 
 `consumeHandoff` deletes the row with `DELETE ... WHERE token_hash = ? AND purpose = ?
 AND scope = ? AND expires_at > now RETURNING user_id`. Reading and deleting in one
@@ -359,14 +382,17 @@ any address)" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 ### Request caps
 
-`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has three
-`WHERE` subqueries: at most `MAX_CODES_PER_EMAIL` (20) rows for the address in the last
+`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has four
+`WHERE` predicates: at most `MAX_CODES_PER_EMAIL` (20) rows for the address in the last
 15 minutes, at most `MAX_CODES_PER_REQUESTER` (5) rows for the same requester and address
-in that window, and no code at all for the address in the last `SEND_GAP_MS` (2 minutes).
-If the insert changes no rows the caller gets `tooMany`. In development that surfaces as
-a 429; in production `requestCode` runs the issue inside `waitUntil` after answering, so
-a request past the cap is refused silently and the person still sees the same
-`{ ok: true }` as everyone else. Doing the count and the insert together means parallel
+in that window, no code at all for the address in the last `SEND_GAP_MS` (2 minutes), and
+a tenant-active guard that passes for `"platform"` and `"root"` and for any scope with no
+non-`active` tenant row.
+When the insert changes no rows the answer is resolved after the insert (see below). In
+development a rate-limit refusal surfaces as a 429; in production `requestCode` runs the
+issue inside `waitUntil` after answering, so a request past the cap is refused silently
+and the person still sees the same `{ ok: true }` as everyone else. Doing the count and
+the insert together means parallel
 requests cannot all pass the cap check. The per-address cap is a mail-bomb backstop and
 sits well above what one requester can reach, so one client cannot spend the whole
 address budget. Covered by "parallel requests from many requesters do not overshoot the
@@ -375,10 +401,15 @@ per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 The 2-minute gap is enforced by the `INSERT ... SELECT` guard, so two parallel requests
 cannot both send a mail in the same 2-minute window. Only after the insert is refused does
-`issueLoginCode` read for a recent unused code, and only to choose between silence
-(`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is what actually bounds mail volume;
-the 20-per-address cap is now a defence-in-depth backstop that normal issuance can no
-longer reach (one code per 2 minutes is about 8 per 15 minutes).
+`issueLoginCode` decide the answer. It re-reads the tenant status first and maps a
+non-active status through the same `refuseInactiveTenant` helper as `activeTenant()`
+(`pending_deletion` and `suspended` → `forbidden`, `deleting` → `notFound`). For an
+active tenant, or a `"platform"` / `"root"` scope (whose read is null), it reads for a
+recent unused code to choose between silence
+(`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is
+what actually bounds mail volume; the 20-per-address cap is now a defence-in-depth backstop
+that normal issuance can no longer reach (one code per 2 minutes is about 8 per 15
+minutes).
 
 ### Verify: candidates and budgets
 
@@ -572,9 +603,12 @@ A handler returns `{ done: true, result? }` or
 - A retry writes `status = 'queued'`, sets `run_after = now + retryInMs`, records the
   note as the error and re-notifies. The handler chooses the wait.
 - A thrown error is retried with backoff `2 ** attempts * 15 s` (using the attempt count
-  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed` and its payload
-  is cleared. An `AppError` stores its message, cut to 500 characters. Anything else stores
-  a fixed sentence and the detail is only logged. A final failure is not re-notified.
+  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed`. A final failure
+  wipes the payload to `{}` for tenant-scoped jobs (scope != `platform`) so sealed tenant
+  data does not linger, but keeps it for platform jobs (scope = `platform`), which hold no
+  tenant secrets, so the operator console can still retry them. An `AppError` stores its
+  message, cut to 500 characters. Anything else stores a fixed sentence and the detail is
+  only logged. A final failure is not re-notified.
 
 `runJobMessages` always acknowledges, including for a malformed body, a missing row, a
 job that is already done, or a handler that threw. Retries are scheduled by this code
@@ -595,11 +629,19 @@ Activity and the overview count only platform work. The status filter is an allo
 The response also carries `active`, the count of queued and running jobs for the scope,
 so the UI can show pending work without a second query.
 
-`retryJob` resets only a `failed` job in the given scope: `status = 'queued'`,
-`attempts = 0`, no error, a fresh `run_after`, returning the type so the right queue
-can be notified. A job that is not failed, or not in that scope, is 404 and unchanged.
-The operator console passes `"platform"`. The reset attempt count is exactly why the
-claim token is used for ownership.
+`retryJob` re-queues a `failed` job in the given scope in one conditional update:
+`status = 'queued'`, `attempts = 0`, no error, a fresh `run_after`, returning the type
+so the right queue can be notified. A job that is not failed, or not in that scope, is
+404 and unchanged. The operator console passes `"platform"`, where payloads are kept on
+failure, so a retry re-queues the job with its details intact. The reset attempt count
+is exactly why the claim token is used for ownership.
+
+The two platform handlers read their target from the payload, so each also fails closed
+on an empty payload before doing any work: `tenant.purge` refuses a missing `tenantId`
+("This deletion task has no workspace id.") and `domain.verify` refuses a missing
+`hostname`, so neither can ever run against the empty string. A legacy row already wiped
+to `{}` by older code is retried and then fails honestly through that guard, instead of
+succeeding or purging against the empty string.
 
 ## Known limits
 
