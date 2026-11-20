@@ -8,7 +8,7 @@ import { test } from "node:test";
 import {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_SECONDS,
-  MISE_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
   TLC_EXIT_TABLE,
   cfgFlags,
   describeOutcome,
@@ -724,7 +724,7 @@ test("findJava checks $JAVA then $JAVA_HOME before spawning mise, and gives mise
 
   assert.equal(findJava({ env: {}, existsSync: (p) => p === "/mise/java/bin/java", spawnSync: spyMise }), "/mise/java/bin/java");
   assert.equal(miseCalls, 1);
-  assert.equal(miseOpts.timeout, MISE_TIMEOUT_MS);
+  assert.equal(miseOpts.timeout, PROBE_TIMEOUT_MS);
 
   const noMise = (cmd, args) => {
     if (cmd === "mise") return { status: 1, stdout: "" };

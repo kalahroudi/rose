@@ -13,7 +13,7 @@ export const TLA_TOOLS_URL = `https://github.com/tlaplus/tlaplus/releases/downlo
 export const TLA_TOOLS_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88";
 export const DEFAULT_TIMEOUT_MS = 120_000;
 export const MAX_TIMEOUT_SECONDS = 3600;
-export const MISE_TIMEOUT_MS = 5_000;
+export const PROBE_TIMEOUT_MS = 5_000;
 export const DOWNLOAD_TIMEOUT_MS = 60_000;
 export const MAX_JAR_BYTES = 32 * 1024 * 1024;
 export const MUTANTS = "MUTANTS";
@@ -69,7 +69,7 @@ export const defaultCacheDir = () => process.env.ROSE_FORMAL_CACHE ?? join(homed
 export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 
 function runsJava(candidate, spawnImpl, env) {
-  const probe = spawnImpl(candidate, ["-version"], { timeout: MISE_TIMEOUT_MS, encoding: "utf8", env });
+  const probe = spawnImpl(candidate, ["-version"], { timeout: PROBE_TIMEOUT_MS, encoding: "utf8", env });
   return !probe.error && probe.status === 0;
 }
 
@@ -79,7 +79,7 @@ export function findJava({ env = process.env, existsSync: exists = existsSync, s
     const jh = join(env.JAVA_HOME, "bin", "java");
     if (exists(jh) && runsJava(jh, spawnImpl, env)) return jh;
   }
-  const mise = spawnImpl("mise", ["where", "java@temurin-25"], { encoding: "utf8", env, timeout: MISE_TIMEOUT_MS });
+  const mise = spawnImpl("mise", ["where", "java@temurin-25"], { encoding: "utf8", env, timeout: PROBE_TIMEOUT_MS });
   if (!mise.error && mise.status === 0 && mise.stdout) {
     const line = mise.stdout.trim().split(/\r?\n/)[0];
     if (line) {

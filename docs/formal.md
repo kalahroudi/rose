@@ -37,7 +37,7 @@ A flow lands only when all seven hold:
 3. Findings stay findings. If the current code breaks a rule, report it as a bug task with the trace in code words. Never weaken a rule or the model to get green.
 4. Honest scope. The manifest states bounds, assumptions and what is not modelled.
 5. Readable without TLA+. Each rule is one plain sentence plus one sentence of harm. The owner approves the sentences, not the TLA+.
-6. Tied to the code. Each mutant's trace is replayed against the real code as a test, and the real code must block it at the guarded step. Remove the guard and the test fails. Covered files are hashed; a change to them makes `pnpm formal` fail until someone re-checks the model and resyncs.
+6. Tied to the code. Each mutant's trace is replayed against the real code as a test, and the real code must block it at the guarded step. Remove the guard and the test fails. The harness checks that `traceTest` names a file but does not run it: the reviewer checks this item. Covered files are hashed; a change to them makes `pnpm formal` fail until someone re-checks the model and resyncs.
 7. Cheap to rerun. One command, pinned tool version, under 60 s per flow.
 
 ## Adding a flow
@@ -51,8 +51,9 @@ A flow lands only when all seven hold:
 4. Run `pnpm formal`. A new flow reports stale until a human runs
    `pnpm formal --resync <flow>`, which fills the hashes only after the flow passes.
 5. The harness already runs every mutant against the model automatically. To prove the
-   real code blocks it, if the flow has a `traceTest`, temporarily remove the guard in
-   the code, run that test, confirm it fails, then revert.
+   real code blocks it (quality bar 6), set `traceTest` to the flow's trace test; a flow
+   does not land without one. For each guard, temporarily remove it in the code, run that
+   test, confirm it fails, then revert.
 
 Manifest keys, config placement, exit codes, and drift hashing are covered in
 [docs/internals/formal-harness.md](internals/formal-harness.md).
