@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { notFound } from "../errors";
+import { AppError, notFound } from "../errors";
 import { offsetOf, type ListQuery, type Page } from "../http/pagination";
 import { newId, now } from "../ids";
 
@@ -89,7 +89,10 @@ async function runOne<E extends JobEnv>(env: E, handlers: Record<string, JobHand
       if (r.meta.changes > 0) await notify(env, job, outcome.retryInMs);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = err instanceof AppError ? err.message : "Something went wrong on our side. Try again.";
+    if (!(err instanceof AppError)) {
+      console.error(JSON.stringify({ level: "error", at: "jobs.run", job: job.id, error: err instanceof Error ? err.stack ?? err.message : String(err) }));
+    }
     const final = claimed >= MAX_ATTEMPTS;
     const backoff = 2 ** job.attempts * 15_000;
     const r = await env.DB

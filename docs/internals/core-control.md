@@ -514,10 +514,9 @@ A handler returns `{ done: true, result? }` or
 - A retry writes `status = 'queued'`, sets `run_after = now + retryInMs`, records the
   note as the error and re-notifies. The handler chooses the wait.
 - A thrown error is retried with backoff `2 ** attempts * 15 s` (using the attempt count
-  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed`, its payload
-  is cleared, and the error is cut to 500 characters. The `error` column holds the
-  exception message and nothing taken from the payload. A final failure is not
-  re-notified.
+  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed` and its payload
+  is cleared. An `AppError` stores its message, cut to 500 characters. Anything else stores
+  a fixed sentence and the detail is only logged. A final failure is not re-notified.
 
 `runJobMessages` always acknowledges, including for a malformed body, a missing row, a
 job that is already done, or a handler that threw. Retries are scheduled by this code
