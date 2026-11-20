@@ -59,8 +59,7 @@ export async function forwardToUpstream(env: TenantWorkerEnv, request: Request, 
   } else {
     if (!env.UPSTREAM_ORIGIN) throw misconfigured("UPSTREAM_ORIGIN is not set.");
     // Never resolve the client's path against the origin: `//host/x` or `\host` would
-    // replace the host and send the tenant token to it. Set it as a pathname instead and
-    // refuse anything that does not stay on the configured origin.
+    // replace the host and send the tenant token to it. Set it as a pathname instead.
     const upstream = new URL(env.UPSTREAM_ORIGIN);
     const target = new URL(upstream.origin);
     target.pathname = path.replace(/^[/\\]+/, "/");

@@ -325,10 +325,6 @@ page states what it does.
   set only when the response does not already carry them.
 - `csrfGuard` says a request must come from "this exact origin". The code compares
   `URL.host`, so the port counts and the scheme does not.
-- `csrfGuard` says "cookies are ignored whenever a bearer token is present". That holds
-  only in the tenant app. The console's `currentSession` reads the session cookie even
-  when a `Bearer` header is present, and is safe only because a browser can not send that
-  header cross-site without a CORS preflight the console refuses.
 - `requesterKey` says IPv4 is unchanged and unparseable input is returned as-is. The
   input is trimmed, lower-cased and zone-stripped first, and a colon-free value is
   returned without IPv4 validation.
