@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { getSetting, operatorCount } from "@rose/core/platform";
-import type { PlatformWorkerEnv } from "@rose/core";
+import { emailConfig, type PlatformWorkerEnv } from "@rose/core";
 
 interface SetupCheck {
   id: string;
@@ -46,7 +46,7 @@ export async function setupStatus(env: PlatformWorkerEnv): Promise<SetupStatus> 
     get("cloudflare.zone_id"), get("cloudflare.zone_name"), get("github.repo"), get("github.branch"), get("github.token"), operatorCount(env.DB),
   ]);
   const ci = repo ? await latestCi(repo, ghToken) : null;
-  const emailOk = env.EMAIL_PROVIDER === "resend" && !!env.RESEND_API_KEY && !!env.EMAIL_FROM;
+  const email = emailConfig(env);
   const localDomain = /(^|\.)localhost$|\.test$|^example\.com$/.test(env.APP_BASE_DOMAIN);
 
   const checks: SetupCheck[] = [
@@ -58,8 +58,14 @@ export async function setupStatus(env: PlatformWorkerEnv): Promise<SetupStatus> 
     },
     {
       id: "email", label: "Email delivery",
-      status: emailOk ? "ok" : prod ? "fail" : "warn",
-      detail: emailOk ? `Sending as ${env.EMAIL_FROM}.` : prod ? "No email provider is configured, so nobody can receive sign-in codes." : "Development mode: codes are printed in the terminal and shown on the sign-in screen.",
+      status: email.delivers ? "ok" : prod ? "fail" : "warn",
+      detail: email.delivers
+        ? `Sending with ${email.name} as ${env.EMAIL_FROM}.`
+        : email.provider !== "console"
+          ? `${email.name} is selected but not ready, so nobody can receive sign-in codes. ${email.problem}`
+          : prod
+            ? "No email provider is configured, so nobody can receive sign-in codes."
+            : "Development mode: codes are printed in the terminal and shown on the sign-in screen.",
       why: "People sign in with a one-time code sent by email until they add a passkey.",
     },
     {
