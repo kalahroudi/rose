@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendEmail } from "../src/email";
+import { emailConfig, sendEmail } from "../src/email";
 import type { CoreEnv } from "../src/env";
 
 const mail = { to: "someone@acme.app", subject: "123456 is your code", text: "Your code is 123456" };
@@ -79,5 +79,46 @@ describe("sendEmail: reserved recipient domains are never sent", () => {
 
   it("does not hide a missing provider configuration", async () => {
     await expect(sendEmail(cf(undefined), { ...mail, to: "a@pentest.example" })).rejects.toMatchObject({ code: "misconfigured" });
+  });
+});
+
+describe("emailConfig: one rule for sendEmail and the Setup page", () => {
+  // Overrides may unset a binding, so `undefined` is allowed explicitly.
+  const prod = (extra: { [K in keyof CoreEnv]?: CoreEnv[K] | undefined }) => ({ ...env, ENVIRONMENT: "production", EMAIL_FROM: "login@acme.app", ...extra }) as CoreEnv;
+  const dev: CoreEnv = { ...env, ENVIRONMENT: "development", EMAIL_PROVIDER: "console" };
+
+  it("cloudflare delivers with the binding and a sender, and is a problem without either", () => {
+    expect(emailConfig(prod({ EMAIL_PROVIDER: "cloudflare", EMAIL: fakeSender() }))).toEqual({ provider: "cloudflare", name: "Cloudflare Email", delivers: true, problem: null });
+    const noBinding = emailConfig(prod({ EMAIL_PROVIDER: "cloudflare", EMAIL: undefined }));
+    expect(noBinding.delivers).toBe(false);
+    expect(noBinding.problem).toContain("send_email binding");
+    expect(emailConfig(prod({ EMAIL_PROVIDER: "cloudflare", EMAIL: fakeSender(), EMAIL_FROM: "" })).delivers).toBe(false);
+  });
+
+  it("resend needs the API key and a sender", () => {
+    expect(emailConfig(prod({ EMAIL_PROVIDER: "resend", RESEND_API_KEY: "re_test_key" }))).toEqual({ provider: "resend", name: "Resend", delivers: true, problem: null });
+    const noKey = emailConfig(prod({ EMAIL_PROVIDER: "resend" }));
+    expect(noKey.delivers).toBe(false);
+    expect(noKey.problem).toContain("RESEND_API_KEY");
+  });
+
+  it("console never delivers, is fine in development and a problem in production", () => {
+    const d = emailConfig(dev);
+    expect([d.provider, d.delivers, d.problem]).toEqual(["console", false, null]);
+    expect(emailConfig(prod({ EMAIL_PROVIDER: "console" })).problem).not.toBeNull();
+    const unset = emailConfig(prod({ EMAIL_PROVIDER: undefined }));
+    expect([unset.provider, unset.problem === null]).toEqual(["console", false]);
+  });
+
+  it("sendEmail refuses exactly when emailConfig reports a problem", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const cases = [
+      prod({ EMAIL_PROVIDER: "cloudflare", EMAIL: fakeSender() }), prod({ EMAIL_PROVIDER: "cloudflare" }),
+      prod({ EMAIL_PROVIDER: "resend" }), prod({ EMAIL_PROVIDER: "console" }), dev,
+    ];
+    for (const e of cases) {
+      const refused = await sendEmail(e, mail).then(() => false, () => true);
+      expect(refused).toBe(emailConfig(e).problem !== null);
+    }
   });
 });

@@ -29,15 +29,41 @@ function parseFrom(from: string): string | { email: string; name: string } {
   return name ? { email, name } : email;
 }
 
+const PROVIDER_NAMES = { cloudflare: "Cloudflare Email", resend: "Resend", console: "the terminal (development only)" } as const;
+
+export interface EmailConfig {
+  provider: keyof typeof PROVIDER_NAMES;
+  /** Human name of the provider, for status pages. */
+  name: string;
+  /** True when mail actually leaves this worker (a real provider with everything it needs). */
+  delivers: boolean;
+  /** Why sending would fail, or null when `sendEmail` will not refuse for configuration reasons. */
+  problem: string | null;
+}
+
 /**
- * Deliver a transactional email. Add a provider by adding a branch here; nothing else
- * in the codebase knows how mail is sent.
+ * The single rule for "can this worker send mail?". `sendEmail` refuses exactly when
+ * `problem` is set, and the console Setup page reports the same result, so they can not drift.
+ */
+export function emailConfig(env: Pick<CoreEnv, "ENVIRONMENT" | "EMAIL_PROVIDER" | "EMAIL_FROM" | "EMAIL" | "RESEND_API_KEY">): EmailConfig {
+  const provider = env.EMAIL_PROVIDER === "cloudflare" || env.EMAIL_PROVIDER === "resend" ? env.EMAIL_PROVIDER : "console";
+  const name = PROVIDER_NAMES[provider];
+  let problem: string | null = null;
+  if (provider === "cloudflare" && (!env.EMAIL || !env.EMAIL_FROM)) problem = "Add the EMAIL send_email binding and set EMAIL_FROM to send email.";
+  else if (provider === "resend" && (!env.RESEND_API_KEY || !env.EMAIL_FROM)) problem = "Set RESEND_API_KEY and EMAIL_FROM to send email.";
+  // Console delivery prints sign-in codes, so it must never run in production.
+  else if (provider === "console" && !isDev(env)) problem = "No email provider configured. Set EMAIL_PROVIDER.";
+  return { provider, name, delivers: provider !== "console" && !problem, problem };
+}
+
+/**
+ * Deliver a transactional email. Add a provider by adding a branch here and in
+ * `emailConfig`; nothing else in the codebase knows how mail is sent.
  */
 export async function sendEmail(env: CoreEnv, mail: Email): Promise<void> {
-  const provider = env.EMAIL_PROVIDER ?? "console";
+  const { provider, problem } = emailConfig(env);
+  if (problem) throw misconfigured(problem);
   if (provider === "cloudflare" || provider === "resend") {
-    if (provider === "cloudflare" && (!env.EMAIL || !env.EMAIL_FROM)) throw misconfigured("Add the EMAIL send_email binding and set EMAIL_FROM to send email.");
-    if (provider === "resend" && (!env.RESEND_API_KEY || !env.EMAIL_FROM)) throw misconfigured("Set RESEND_API_KEY and EMAIL_FROM to send email.");
     if (isReservedRecipient(mail.to)) {
       // Logged without the address or content: both may be personal data.
       console.log(JSON.stringify({ level: "info", at: "email", skipped: "reserved-domain" }));
@@ -61,7 +87,5 @@ export async function sendEmail(env: CoreEnv, mail: Email): Promise<void> {
     if (!res.ok) throw new Error(`Email provider responded ${res.status}`);
     return;
   }
-  // Console delivery prints sign-in codes, so it must never run in production.
-  if (!isDev(env)) throw misconfigured("No email provider configured. Set EMAIL_PROVIDER.");
   if (env.ENVIRONMENT === "development") console.log(`\n✉  To: ${mail.to}\n   ${mail.subject}\n   ${mail.text.replace(/\n/g, "\n   ")}\n`);
 }
