@@ -55,10 +55,12 @@ the fixed `"platform"` scope of the console worker (`SCOPE` in
   This branch never runs in production.
 - **Rate-limit keys are per requester only.** `requestCode` spends `code-ip:<requester>`
   and `code:<scope>:<email>:<requester>`; `checkCode` spends `verify-ip:<requester>` and
-  `verify:<scope>:<email>:<requester>`. The requester is the client IPv4 address or the
-  IPv6 /64 prefix (`requesterKey`). There is no address-only key, on purpose: one client's
-  flood or run of wrong guesses must not spend the budget that the address's real user
-  needs to sign in.
+  `verify:<scope>:<email>:<requester>`. Every rate-limit key (`code`, `code-ip`, `verify`,
+  `verify-ip`, `pk-ip`, `slug-ip`, `key-fail`) is keyed on the requester — the client IPv4
+  address or IPv6 /64 prefix via `requesterKey` (IPv4-mapped IPv6 counts as IPv4) — never
+  the raw client IP. For email codes there is no address-only key, on purpose: one
+  client's flood or run of wrong guesses must not spend the budget that the address's real
+  user needs to sign in.
 - **One error string.** `checkCode` throws `BAD_CODE` ("That code is not valid or has
   expired.") for every failure, so a caller can not tell a wrong code from an expired one
   from a locked one. The per-code guess budgets, the expiry and the lockout all live in
@@ -106,7 +108,9 @@ deletion. Covered by "a stale session can not enrol or remove passkeys"
 ## Passkey routes (routes.ts)
 
 - `POST /passkey/login/options` and `/passkey/login/verify` are unauthenticated; the
-  challenge row is the only state. Login options are rate limited per client IP.
+  challenge row is the only state. Login options are rate limited per requester
+  (`pk-ip:<requester>`, using `requesterKey`: IPv4 address or IPv6 /64 prefix, not the raw
+  IP).
 - `POST /passkey/register/options`, `/passkey/register/verify` and
   `DELETE /passkeys/:id` require a session plus a fresh, passkey-backed sign-in when a
   passkey exists.

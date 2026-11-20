@@ -17,7 +17,7 @@ import { sendEmail } from "./email";
 import { assertEnvironment, guardFetch, isDev, maxWorkspacesPerUser, type TenantWorkerEnv } from "./env";
 import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
 import { forwardToUpstream } from "./gateway";
-import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";
+import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, requesterKey, type BaseVars } from "./http/base";
 import { listQuerySchema } from "./http/pagination";
 import { buildPermissions, permissionsOf, type Actor, type ModuleContext, type ModuleDefinition } from "./modules";
 import { bindTenant, purgeTenantStorage, tenantCrypto, TenantDb, type TenantContext } from "./tenancy/context";
@@ -242,7 +242,7 @@ export function createTenantApp(options: TenantAppOptions) {
 
   app.get("/api/root/slug", async (c) => {
     rootOnly(c);
-    await rateLimit(c, `slug-ip:${clientIp(c) ?? "unknown"}`);
+    await rateLimit(c, `slug-ip:${requesterKey(clientIp(c))}`);
     return c.json({ available: await slugAvailable(c.env.DB, c.req.query("slug") ?? "") });
   });
 
@@ -306,7 +306,7 @@ export function createTenantApp(options: TenantAppOptions) {
       const key = /^Bearer\s+\S/.test(authz) ? await verifyApiKey(db, authz.replace(/^Bearer\s+/, "").trim()) : null;
       if (key) actor = { type: "api_key", id: key.id, label: `key:${key.name}`, role: key.role };
       // Only failed attempts spend rate-limit budget, so legitimate API traffic is never throttled by it.
-      else await rateLimit(c, `key-fail:${clientIp(c) ?? "unknown"}`);
+      else await rateLimit(c, `key-fail:${requesterKey(clientIp(c))}`);
     } else {
       const s = await currentSession(c, { scope: row.id, cookie: SESSION_COOKIE });
       if (s) actor = { type: "user", id: s.userId, label: s.email, role: s.role as Role, sessionId: s.publicId, name: s.name };
