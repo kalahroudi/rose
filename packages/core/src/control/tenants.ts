@@ -223,22 +223,33 @@ export async function requestTenantDeletion(
   return { deleteAfter: row.delete_after, created: false };
 }
 
-export async function cancelTenantDeletion(db: D1Database, id: string): Promise<boolean> {
-  const cur = await db.prepare("SELECT status FROM tenants WHERE id = ?").bind(id).first<{ status: TenantStatus }>();
-  if (!cur || cur.status !== "pending_deletion") return false;
-  const [r] = await db.batch([
+export interface TenantDeletionCancellation {
+  status: "active" | "suspended";
+  deleteAfter: number | null;
+}
+
+export async function cancelTenantDeletion(db: D1Database, id: string): Promise<TenantDeletionCancellation | null> {
+  const [, , , , , before, upd] = await db.batch([
+    db.prepare("DELETE FROM sessions WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')").bind(id, id),
+    db.prepare("DELETE FROM login_codes WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')").bind(id, id),
+    db.prepare("DELETE FROM handoffs WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')").bind(id, id),
+    db.prepare("DELETE FROM webauthn_challenges WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')").bind(id, id),
     db
       .prepare(
-        "UPDATE tenants SET status = CASE WHEN prior_status = 'suspended' THEN 'suspended' ELSE 'active' END, delete_after = NULL, prior_status = NULL, updated_at = ? WHERE id = ? AND status = 'pending_deletion'",
+        "DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')",
+      )
+      .bind(id, id),
+    db.prepare("SELECT delete_after FROM tenants WHERE id = ? AND status = 'pending_deletion'").bind(id),
+    db
+      .prepare(
+        "UPDATE tenants SET status = CASE WHEN prior_status = 'suspended' THEN 'suspended' ELSE 'active' END, delete_after = NULL, prior_status = NULL, updated_at = ? WHERE id = ? AND status = 'pending_deletion' RETURNING status",
       )
       .bind(now(), id),
-    db.prepare("DELETE FROM sessions WHERE scope = ?").bind(id),
-    db.prepare("DELETE FROM login_codes WHERE scope = ?").bind(id),
-    db.prepare("DELETE FROM handoffs WHERE scope = ?").bind(id),
-    db.prepare("DELETE FROM webauthn_challenges WHERE scope = ?").bind(id),
-    db.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?").bind(id),
   ]);
-  return (r?.meta.changes ?? 0) > 0;
+  const updated = upd?.results[0] as { status: "active" | "suspended" } | undefined;
+  if (!updated) return null;
+  const prev = before?.results[0] as { delete_after: number | null } | undefined;
+  return { status: updated.status, deleteAfter: prev?.delete_after ?? null };
 }
 
 export async function beginTenantPurge(db: D1Database, id: string): Promise<boolean> {

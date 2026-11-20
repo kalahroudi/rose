@@ -219,11 +219,10 @@ app.post("/api/tenants/:id/delete", async (c) => {
 app.post("/api/tenants/:id/delete/cancel", async (c) => {
   freshOwnerOnly(c);
   const t = await tenantOr404(c, c.req.param("id"));
-  const before = t.delete_after;
-  const restored = t.prior_status === "suspended" ? "suspended" : "active";
-  if (!(await cancelTenantDeletion(c.env.DB, t.id))) throw conflict("This tenant is not waiting to be deleted.");
-  await audit(c, "tenant.delete.cancelled", t.id, { slug: t.slug, deleteAfter: before, restoredStatus: restored });
-  return c.json({ ok: true, status: restored });
+  const cancelled = await cancelTenantDeletion(c.env.DB, t.id);
+  if (!cancelled) throw conflict("This tenant is not waiting to be deleted.");
+  await audit(c, "tenant.delete.cancelled", t.id, { slug: t.slug, deleteAfter: cancelled.deleteAfter, restoredStatus: cancelled.status });
+  return c.json({ ok: true, status: cancelled.status });
 });
 
 app.get("/api/tenants/:id/members", async (c) => {

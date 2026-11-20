@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Adversarial tests for operator-side tenant deletion and cancellation.
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { createTenant } from "@rose/core/platform";
 import { describe, expect, it } from "vitest";
+import worker from "../index";
 
 const ORIGIN = "https://admin.rose.test";
 const call = (path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>
@@ -249,5 +250,120 @@ describe("operator tenant deletion (adversarial)", () => {
         expect(queued).toHaveLength(0);
       }
     }
+  });
+
+  const withBatchGate = (db: D1Database) => {
+    let arrived!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => {
+      arrived = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const wrapped: D1Database = {
+      prepare: (query: string) => db.prepare(query),
+      batch: async <T = unknown>(statements: D1PreparedStatement[]) => {
+        arrived();
+        await gate;
+        return db.batch<T>(statements);
+      },
+      exec: (query: string) => db.exec(query),
+      dump: () => db.dump(),
+      withSession: (constraintOrBookmark?: string) => db.withSession(constraintOrBookmark),
+    };
+    return { db: wrapped, reached, release };
+  };
+
+  const fetchWithDb = async (db: D1Database, path: string, cookie: string, body: unknown) => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(ORIGIN + path, {
+        method: "POST",
+        headers: { Origin: ORIGIN, Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      { ...env, DB: db },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return res;
+  };
+
+  it("two concurrent cancels: a session and sign-in code created after the winner survive the loser", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    const delRes = await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } });
+    expect(delRes.status).toBe(202);
+    const { deleteAfter } = await delRes.json<{ deleteAfter: number }>();
+    const gated = withBatchGate(env.DB);
+    const loserPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    const winnerRes = await call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} });
+    expect(winnerRes.status).toBe(200);
+    expect(await winnerRes.json()).toEqual({ ok: true, status: "active" });
+    const ts = Date.now();
+    const userId = `us_${uniq()}`;
+    await env.DB.prepare("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)").bind(userId, `${userId}@tenant.test`, ts).run();
+    const sesId = `ses_${uniq()}`;
+    await env.DB
+      .prepare("INSERT INTO sessions (id_hash, public_id, user_id, scope, method, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, 'code', ?, ?, ?)")
+      .bind(`hash_${uniq()}`, sesId, userId, t.id, ts, ts, ts + 86_400_000)
+      .run();
+    const codeId = `lc_${uniq()}`;
+    await env.DB
+      .prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(codeId, `${userId}@tenant.test`, t.id, `ch_${uniq()}`, ts + 600_000, ts)
+      .run();
+    gated.release();
+    const loserRes = await loserPromise;
+    expect(loserRes.status).toBe(409);
+    expect(await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(t.id).first<{ public_id: string }>()).toEqual({ public_id: sesId });
+    expect(await env.DB.prepare("SELECT id FROM login_codes WHERE scope = ?").bind(t.id).first<{ id: string }>()).toEqual({ id: codeId });
+    const audits = await env.DB
+      .prepare("SELECT meta FROM platform_audit WHERE action = 'tenant.delete.cancelled' AND target = ?")
+      .bind(t.id)
+      .all<{ meta: string }>();
+    expect(audits.results).toHaveLength(1);
+    expect(JSON.parse(audits.results[0]!.meta)).toEqual({ slug: t.slug, deleteAfter, restoredStatus: "active" });
+  });
+
+  it("a losing cancel against a deleting tenant leaves its queued purge job intact", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    expect((await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })).status).toBe(202);
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toHaveLength(1);
+    const gated = withBatchGate(env.DB);
+    const loserPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    await env.DB.prepare("UPDATE tenants SET status = 'deleting' WHERE id = ?").bind(t.id).run();
+    gated.release();
+    const loserRes = await loserPromise;
+    expect(loserRes.status).toBe(409);
+    expect((await row(t.id))!.status).toBe("deleting");
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toHaveLength(1);
+  });
+
+  it("a delete/cancel race on a suspended tenant returns status suspended", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(t.id).run();
+    const gated = withBatchGate(env.DB);
+    const cancelPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    const delRes = await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } });
+    expect(delRes.status).toBe(202);
+    const { deleteAfter } = await delRes.json<{ deleteAfter: number }>();
+    gated.release();
+    const cancelRes = await cancelPromise;
+    expect(cancelRes.status).toBe(200);
+    expect(await cancelRes.json()).toEqual({ ok: true, status: "suspended" });
+    expect(await row(t.id)).toEqual({ status: "suspended", delete_after: null });
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toEqual([]);
+    const auditRow = await env.DB
+      .prepare("SELECT meta FROM platform_audit WHERE action = 'tenant.delete.cancelled' AND target = ?")
+      .bind(t.id)
+      .first<{ meta: string }>();
+    expect(JSON.parse(auditRow!.meta)).toEqual({ slug: t.slug, deleteAfter, restoredStatus: "suspended" });
   });
 });
