@@ -13,3 +13,6 @@ coverage/
 *.tsbuildinfo
 wrangler.dev.jsonc
 wrangler.production.jsonc
+formal/tools/*.jar
+formal/tenant-deletion/out/
+states/
