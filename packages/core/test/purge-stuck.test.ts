@@ -149,4 +149,42 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(second).toHaveLength(1);
     expect(second[0]!.tenantId).toBe("tn_order_101");
   });
+
+  it("audit and job inserts pick the same tenants when many share one updated_at", async () => {
+    const t = Date.now();
+    await env.DB
+      .prepare(
+        `WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 150)
+         INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at)
+         SELECT 'tn_tie_' || n, 'tie' || n, 'Tie ' || n, 'deleting', 'free', ?, ?
+         FROM c`,
+      )
+      .bind(t, t)
+      .run();
+
+    const jobs = await recoverStuckPurges(env.DB);
+    const audited = await env.DB
+      .prepare("SELECT target FROM platform_audit WHERE action = 'tenant.purge_recovered' AND target LIKE 'tn_tie_%'")
+      .all<{ target: string }>();
+
+    expect(jobs).toHaveLength(100);
+    expect(new Set(audited.results.map((r) => r.target))).toEqual(new Set(jobs.map((j) => j.tenantId)));
+
+    await recoverStuckPurges(env.DB);
+  });
+
+  it("concurrent sweeps enqueue one job and audit once per stuck tenant", async () => {
+    const t = Date.now();
+    await env.DB
+      .prepare("INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at) VALUES ('tn_race', 'race', 'Race', 'deleting', 'free', ?, ?)")
+      .bind(t, t)
+      .run();
+
+    const [first, second] = await Promise.all([recoverStuckPurges(env.DB), recoverStuckPurges(env.DB)]);
+    const combined = [...first, ...second];
+
+    expect(combined).toHaveLength(1);
+    expect(await purgeJobs("tn_race")).toEqual({ n: 1 });
+    expect(await recoveredAudits("tn_race")).toEqual({ n: 1 });
+  });
 });

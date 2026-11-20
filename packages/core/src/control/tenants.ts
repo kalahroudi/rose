@@ -295,7 +295,7 @@ export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurge
          SELECT 'au_' || lower(hex(randomblob(12))), ?, 'system', 'tenant.purge_recovered', t.id, NULL, NULL
          FROM tenants t
          WHERE ${stuck}
-         ORDER BY t.updated_at ASC
+         ORDER BY t.updated_at ASC, t.id ASC
          LIMIT 100`,
       )
       .bind(t, t),
@@ -306,7 +306,7 @@ export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurge
                 json_object('tenantId', t.id), ?, 'system', ?, ?
          FROM tenants t
          WHERE ${stuck}
-         ORDER BY t.updated_at ASC
+         ORDER BY t.updated_at ASC, t.id ASC
          LIMIT 100
          RETURNING id, json_extract(payload, '$.tenantId') AS tenant_id`,
       )
