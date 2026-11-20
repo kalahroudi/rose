@@ -11,7 +11,6 @@ import { notes } from "./worker";
 const KEY = env.ROSE_MASTER_KEY;
 const wrongOf = (code: string) => (code === "000000" ? "111111" : "000000");
 const uniq = () => crypto.randomUUID().slice(0, 8);
-const tick = () => new Promise((r) => setTimeout(r, 3));
 
 describe("sign-in code guess budgets", () => {
   it("a flood of wrong guesses from another requester does not invalidate the owner's code", async () => {
@@ -50,7 +49,6 @@ describe("sign-in code guess budgets", () => {
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "owner")).toBe(true);
     await ageOut(scope);
     const { code: code2 } = (await issueLoginCode(env.DB, KEY, scope, email, "owner2"))!;
-    await tick();
     for (let i = 0; i < 5; i++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code2), "owner2");
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code2, "owner2")).toBe(false);
   });

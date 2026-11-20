@@ -340,8 +340,8 @@ deliver it. Covered by "stores only keyed hashes of codes and hashes of session 
 (`packages/core/test/auth.test.ts`).
 
 Every code also carries a sign-in key: 100 random bits, encoded as 20 Crockford base32
-characters (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, no I/L/O/U). Rejection sampling keeps the
-distribution uniform. The row stores an HMAC of the key (`link_hash`), bound to
+characters (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, no I/L/O/U). Each random byte is masked to 5 bits (`b & 31`), which is
+uniform because 32 divides 256. The row stores an HMAC of the key (`link_hash`), bound to
 `scope\0email\0key` under the label `login-link/v1`, so a key for one tenant or address
 is useless on another. The key shares the row's `consumed_at` and `expires_at`, so using
 either the code or the key kills both. The mail carries the key as
@@ -373,10 +373,10 @@ address budget. Covered by "parallel requests from many requesters do not oversh
 per-email cap" and "parallel requests from one requester do not overshoot the
 per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
-The 2-minute gap is checked twice: a preceding read returns `undefined` so `requestCode`
-stays silent (no mail, same `{ ok: true }` as an ineligible address), and the same
-predicate appears in the `INSERT ... SELECT` guard so two parallel requests cannot both
-send a mail in the same 2-minute window. The gap is what actually bounds mail volume;
+The 2-minute gap is enforced by the `INSERT ... SELECT` guard, so two parallel requests
+cannot both send a mail in the same 2-minute window. Only after the insert is refused does
+`issueLoginCode` read for a recent unused code, and only to choose between silence
+(`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is what actually bounds mail volume;
 the 20-per-address cap is now a defence-in-depth backstop that normal issuance can no
 longer reach (one code per 2 minutes is about 8 per 15 minutes).
 
@@ -422,7 +422,7 @@ The comparison and the spend are separate on purpose:
 At the cap, a correct code answers `false` like any wrong code and spends nothing.
 Covered by the `otp-guess-cap`, `otp-cap-edge`, `otp-verify` and `otp-verify.adversarial`
 suites, including "at 10 the correct code is refused and nothing is spent or consumed",
-"at 98 with two candidates a wrong guess spends on both (no free comparisons) and reaches
+"at 8 with two candidates a wrong guess spends on both (no free comparisons) and reaches
 the cap", "owner and stranger both sending the right code in parallel: exactly one
 succeeds" and "after the owner's newest code is consumed, its older code is dead".
 
