@@ -283,23 +283,37 @@ export interface RecoveredPurgeJob {
 
 export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurgeJob[]> {
   const t = now();
-  const r = await db
-    .prepare(
-      `INSERT INTO jobs (id, type, scope, title, payload, run_after, created_by, created_at, updated_at)
-       SELECT 'job_' || lower(hex(randomblob(12))), 'tenant.purge', 'platform', 'Delete tenant ' || t.id,
-              json_object('tenantId', t.id), ?, 'system', ?, ?
-       FROM tenants t
-       WHERE (t.status = 'deleting' OR (t.status = 'pending_deletion' AND t.delete_after IS NOT NULL AND t.delete_after <= ?))
-         AND NOT EXISTS (
-           SELECT 1 FROM jobs j
-           WHERE j.type = 'tenant.purge' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.tenantId') = t.id
-         )
-       LIMIT 100
-       RETURNING id, json_extract(payload, '$.tenantId') AS tenant_id`,
-    )
-    .bind(t, t, t, t)
-    .all<{ id: string; tenant_id: string }>();
-  return r.results.map((row) => ({ id: row.id, tenantId: row.tenant_id }));
+  const stuck = `(t.status = 'deleting' OR (t.status = 'pending_deletion' AND t.delete_after IS NOT NULL AND t.delete_after <= ?))
+     AND NOT EXISTS (
+       SELECT 1 FROM jobs j
+       WHERE j.type = 'tenant.purge' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.tenantId') = t.id
+     )`;
+  const [, inserted] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO platform_audit (id, at, actor, action, target, meta, ip)
+         SELECT 'au_' || lower(hex(randomblob(12))), ?, 'system', 'tenant.purge_recovered', t.id, NULL, NULL
+         FROM tenants t
+         WHERE ${stuck}
+         ORDER BY t.updated_at ASC
+         LIMIT 100`,
+      )
+      .bind(t, t),
+    db
+      .prepare(
+        `INSERT INTO jobs (id, type, scope, title, payload, run_after, created_by, created_at, updated_at)
+         SELECT 'job_' || lower(hex(randomblob(12))), 'tenant.purge', 'platform', 'Delete tenant ' || t.id,
+                json_object('tenantId', t.id), ?, 'system', ?, ?
+         FROM tenants t
+         WHERE ${stuck}
+         ORDER BY t.updated_at ASC
+         LIMIT 100
+         RETURNING id, json_extract(payload, '$.tenantId') AS tenant_id`,
+      )
+      .bind(t, t, t, t),
+  ]);
+  const rows = (inserted?.results ?? []) as { id: string; tenant_id: string }[];
+  return rows.map((row) => ({ id: row.id, tenantId: row.tenant_id }));
 }
 
 export async function tenantCounts(db: D1Database): Promise<Record<TenantStatus | "total", number>> {

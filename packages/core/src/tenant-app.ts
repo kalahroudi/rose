@@ -104,13 +104,12 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
 }
 
 export async function tenantTick(env: TenantWorkerEnv, modules: ModuleDefinition[]): Promise<void> {
+  await runDueJobs(env, tenantJobHandlers(modules));
+  await sweepExpired(env.DB);
   const recovered = await recoverStuckPurges(env.DB);
   for (const job of recovered) {
     await notifyJob(env, { id: job.id, type: "tenant.purge" }, 0);
-    await writePlatformAudit(env.DB, { actor: "system", action: "tenant.purge_recovered", target: job.tenantId, meta: { tenantId: job.tenantId } });
   }
-  await runDueJobs(env, tenantJobHandlers(modules));
-  await sweepExpired(env.DB);
 }
 
 /** The complete tenant worker: `export default createTenantWorker({ modules })`. */

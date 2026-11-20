@@ -9,6 +9,7 @@ import { modules } from "./worker";
 
 const tenantRow = (id: string) => env.DB.prepare("SELECT status, delete_after FROM tenants WHERE id = ?").bind(id).first<{ status: string; delete_after: number | null }>();
 const purgeJobs = (id: string) => env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type = 'tenant.purge' AND json_extract(payload, '$.tenantId') = ?").bind(id).first<{ n: number }>();
+const recoveredAudits = (id: string) => env.DB.prepare("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.purge_recovered' AND target = ?").bind(id).first<{ n: number }>();
 const storageAlive = async (id: string) => {
   const stub = env.TENANT_DO.get(env.TENANT_DO.idFromName(id));
   const tables = await stub.exec(id, { sql: "SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'notes'" });
@@ -44,8 +45,13 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(await storageAlive(a.id)).toBe(0);
 
     await tenantTick(env, modules);
+    expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).not.toBeNull();
+    expect(await recoveredAudits(a.id)).toEqual({ n: 1 });
+
+    await tenantTick(env, modules);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).toBeNull();
     expect(await env.DB.prepare("SELECT 1 FROM memberships WHERE tenant_id = ?").bind(a.id).first()).toBeNull();
+    expect(await recoveredAudits(a.id)).toEqual({ n: 1 });
   });
 
   it("a tenant whose purge job row was lost is recovered by the sweep", async () => {
@@ -60,7 +66,11 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     await tenantTick(qenv, modules);
 
     expect(sent).toHaveLength(1);
+    expect(await recoveredAudits(a.id)).toEqual({ n: 1 });
+
+    await tenantTick(qenv, modules);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).toBeNull();
+    expect(await recoveredAudits(a.id)).toEqual({ n: 1 });
   });
 
   it("a cancelled tenant is never re-enqueued", async () => {
@@ -117,5 +127,26 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(second).toHaveLength(1);
     expect(first.every((j) => j.id.startsWith("job_") && j.tenantId.startsWith("tn_stuck_"))).toBe(true);
     expect(new Set([...first, ...second].map((j) => j.tenantId)).size).toBe(101);
+  });
+
+  it("the sweep recovers the oldest stuck tenants first", async () => {
+    const t = Date.now();
+    await env.DB
+      .prepare(
+        `WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 101)
+         INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at)
+         SELECT 'tn_order_' || n, 'order' || n, 'Order ' || n, 'deleting', 'free', ?, ? + n
+         FROM c`,
+      )
+      .bind(t, t)
+      .run();
+
+    const first = await recoverStuckPurges(env.DB);
+    const second = await recoverStuckPurges(env.DB);
+
+    expect(first).toHaveLength(100);
+    expect(first.every((j) => j.tenantId !== "tn_order_101")).toBe(true);
+    expect(second).toHaveLength(1);
+    expect(second[0]!.tenantId).toBe("tn_order_101");
   });
 });

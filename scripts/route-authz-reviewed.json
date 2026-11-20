@@ -43,7 +43,7 @@
   },
   "./tenancy/resolve:hostnameOf": {
     "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
-    "packages/core/src/control/tenants.ts": "32c4510a563bcabd1c1da5dc561192e3",
+    "packages/core/src/control/tenants.ts": "a05826e6176732cbba5c8c8ff06f710e",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
@@ -52,7 +52,7 @@
   },
   "./tenancy/resolve:resolveHost": {
     "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
-    "packages/core/src/control/tenants.ts": "32c4510a563bcabd1c1da5dc561192e3",
+    "packages/core/src/control/tenants.ts": "a05826e6176732cbba5c8c8ff06f710e",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
