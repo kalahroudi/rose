@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { sha256Hex } from "../crypto";
-import { notFound, reauthRequired } from "../errors";
+import { conflict, notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
 import { RATE_LIMIT_WINDOW_MS } from "./rate-limit";
 import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
@@ -39,6 +39,7 @@ export async function createSession(
     .run();
   if (res.meta.changes === 0) {
     const status = await tenantStatus(db, input.scope);
+    if (status === "active") throw conflict("Workspace status changed. Try again.");
     throw refuseInactiveTenant(status);
   }
   return { token, expiresAt };
@@ -117,6 +118,7 @@ export async function createHandoff(db: D1Database, input: { purpose: "session" 
     .run();
   if (res.meta.changes === 0) {
     const status = await tenantStatus(db, input.scope);
+    if (status === "active") throw conflict("Workspace status changed. Try again.");
     throw refuseInactiveTenant(status);
   }
   return token;

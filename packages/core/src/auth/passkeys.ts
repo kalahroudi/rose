@@ -8,7 +8,7 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { fromB64Url, toB64Url, utf8 } from "../encoding";
-import { notFound, unauthorized } from "../errors";
+import { conflict, notFound, unauthorized } from "../errors";
 import { newId, now } from "../ids";
 import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "../control/tenant-guard";
 
@@ -33,6 +33,7 @@ async function saveChallenge(db: D1Database, kind: "register" | "login", site: P
     .run();
   if (res.meta.changes === 0) {
     const status = await tenantStatus(db, site.scope);
+    if (status === "active") throw conflict("Workspace status changed. Try again.");
     throw refuseInactiveTenant(status);
   }
   return id;

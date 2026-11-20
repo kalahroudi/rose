@@ -5,12 +5,10 @@ import { PLATFORM_SCOPE } from "./users";
 
 export const ROOT_SCOPE = "root";
 
-export const nonTenantScope = (scope: string): boolean => scope === PLATFORM_SCOPE || scope === ROOT_SCOPE;
-
 export const ACTIVE_TENANT_GUARD =
   `(? IN ('${PLATFORM_SCOPE}', '${ROOT_SCOPE}') OR NOT EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status != 'active'))`;
 
-export function refuseInactiveTenant(status: TenantStatus | null | undefined): AppError {
+export function refuseInactiveTenant(status: Exclude<TenantStatus, "active"> | null | undefined): AppError {
   if (status === "pending_deletion") return forbidden("This workspace is scheduled for deletion.");
   if (status === "suspended") return forbidden("This workspace is suspended. Contact support.");
   return notFound();

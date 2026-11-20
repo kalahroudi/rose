@@ -2,7 +2,7 @@
 import { deriveHmacKey, hmacHex, timingSafeEqual } from "../crypto";
 import { tooMany } from "../errors";
 import { newId, now, randomDigits } from "../ids";
-import { ACTIVE_TENANT_GUARD, nonTenantScope, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
+import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
 
 const CODE_TTL = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
@@ -60,10 +60,8 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
     )
     .run();
   if (res.meta.changes === 0) {
-    if (!nonTenantScope(scope)) {
-      const status = await tenantStatus(db, scope);
-      if (status && status !== "active") throw refuseInactiveTenant(status);
-    }
+    const status = await tenantStatus(db, scope);
+    if (status && status !== "active") throw refuseInactiveTenant(status);
     const recent = await db.prepare("SELECT 1 AS x FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL").bind(email, scope, t - SEND_GAP_MS).first();
     if (recent) return undefined;
     throw tooMany("Too many codes requested. Wait a few minutes and try again.");

@@ -125,3 +125,31 @@ describe("deletion racing credential creation (adversarial)", () => {
     expect(await count("login_codes", a.id)).toBe(0);
   });
 });
+
+describe("requestTenantDeletion clears pending credential rows (adversarial)", () => {
+  it("clears login codes, handoffs and passkey challenges for the scope", async () => {
+    const a = await createTestTenant(env, SELF);
+    await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1");
+    await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id });
+    await beginLogin(env.DB, site(a.id));
+    expect(await count("login_codes", a.id)).toBe(1);
+    expect(await count("handoffs", a.id)).toBe(1);
+    expect(await count("webauthn_challenges", a.id)).toBe(1);
+    await requestTenantDeletion(env.DB, a.id);
+    expect(await count("login_codes", a.id)).toBe(0);
+    expect(await count("handoffs", a.id)).toBe(0);
+    expect(await count("webauthn_challenges", a.id)).toBe(0);
+  });
+});
+
+describe("credential creation reports a conflict when the tenant turns active again (adversarial)", () => {
+  it("createSession throws a conflict when the insert is refused but the re-read finds active", async () => {
+    const makeStmt = (): unknown => ({
+      bind: () => makeStmt(),
+      run: async () => ({ meta: { changes: 0 } }),
+      first: async () => ({ status: "active" }),
+    });
+    const fakeDb = { prepare: () => makeStmt() } as unknown as D1Database;
+    await expect(createSession(fakeDb, { userId: "u1", scope: "t1", method: "code" })).rejects.toThrow("Workspace status changed. Try again.");
+  });
+});

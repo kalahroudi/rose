@@ -108,7 +108,7 @@ invitation in one workspace does not admit (or audit) the person in another"
 ### Operators
 
 `PLATFORM_SCOPE` names the `"platform"` realm and is used with `ROOT_SCOPE` by
-`tenant-guard.ts` to build the `nonTenantScope` check and the shared tenant-active guard.
+`tenant-guard.ts` to build the shared tenant-active guard.
 Operator sessions, passkeys and challenges use that literal like a tenant id, so the same
 session code serves both realms without sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
 NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` reads
@@ -208,7 +208,10 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   (`refuseInactiveTenant`), the same one `activeTenant()` uses: `pending_deletion` and
   `suspended` become `forbidden` ("This workspace is scheduled for deletion." and
   "This workspace is suspended. Contact support.") and `deleting` becomes `notFound()`.
-  `issueLoginCode` does the same read before falling back to its rate-limit answer, so an
+  A re-read that finds `active` (the status changed back between the insert and the read)
+  throws `conflict` ("Workspace status changed. Try again.") so the site never misreports
+  a live workspace as missing. `issueLoginCode` does the same read before falling back to
+  its rate-limit answer, so an
   active tenant keeps its existing rate-limit behaviour. `"platform"` and `"root"` are not
   tenants and bypass the check, and a scope with no tenant row does too, which keeps the
   sign-in code unit tests working on synthetic scopes; making that no-row case fail closed
@@ -398,10 +401,11 @@ per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 The 2-minute gap is enforced by the `INSERT ... SELECT` guard, so two parallel requests
 cannot both send a mail in the same 2-minute window. Only after the insert is refused does
-`issueLoginCode` decide the answer. For a tenant scope it re-reads the tenant first and
-maps the status through the same `refuseInactiveTenant` helper as `activeTenant()`
-(`pending_deletion` and `suspended` → `forbidden`, `deleting` → `notFound`). For any other
-scope, or an active tenant, it reads for a recent unused code to choose between silence
+`issueLoginCode` decide the answer. It re-reads the tenant status first and maps a
+non-active status through the same `refuseInactiveTenant` helper as `activeTenant()`
+(`pending_deletion` and `suspended` → `forbidden`, `deleting` → `notFound`). For an
+active tenant, or a `"platform"` / `"root"` scope (whose read is null), it reads for a
+recent unused code to choose between silence
 (`undefined`: no mail, same `{ ok: true }` as an ineligible address) and a 429. The gap is
 what actually bounds mail volume; the 20-per-address cap is now a defence-in-depth backstop
 that normal issuance can no longer reach (one code per 2 minutes is about 8 per 15
