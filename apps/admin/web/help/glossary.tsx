@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 
 export const glossary = {
   tenant: "A customer of your product: one company or team. Each tenant has its own address, members, private database and encryption key.",
-  workspace: "What a tenant is called inside the app their people use. Tenant and workspace are the same thing seen from two sides.",
   address: "The short name in a tenant's URL, for example acme in acme.example.com. It can not be changed later because sign-in cookies and passkeys are tied to it.",
   operator: "A member of your own staff who can use this console. Operators manage tenants but can not open tenant data.",
   platformOwner: "An operator who can also add or remove operators and change connections.",
@@ -31,7 +30,6 @@ export const terms = (...keys: (keyof typeof glossary)[]) =>
 
 const labels: Record<keyof typeof glossary, string> = {
   tenant: "Tenant",
-  workspace: "Workspace",
   address: "Address",
   operator: "Operator",
   platformOwner: "Platform owner",

@@ -53,7 +53,7 @@ const jobHandlers: Record<string, JobHandler<PlatformWorkerEnv>> = {
       return { done: true };
     }
     const h = row.provider_id ? await cloudflare.getCustomHostname(conn, row.provider_id) : await cloudflare.createCustomHostname(conn, hostname);
-    const detail = JSON.stringify({ records: h.records, errors: h.errors, ssl: h.sslStatus });
+    const detail = JSON.stringify({ records: h.records, errors: h.errors });
     if (h.status === "active" && h.sslStatus === "active") {
       await setDomainState(env.DB, hostname, { status: "active", providerId: h.id, detail });
       return { done: true };
@@ -112,7 +112,7 @@ app.get("/api/bootstrap", async (c) => {
   const base = { app: { name: c.env.APP_NAME, baseDomain: c.env.APP_BASE_DOMAIN, appUrlTemplate: c.env.APP_URL_TEMPLATE ?? "https://{host}" }, dev: isDev(c.env) };
   if (!s) return c.json({ ...base, session: null });
   const passkeys = await listPasskeys(c.env.DB, s.userId, SCOPE);
-  return c.json({ ...base, session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, hasPasskey: passkeys.length > 0, method: s.method } });
+  return c.json({ ...base, session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, hasPasskey: passkeys.length > 0 } });
 });
 
 app.route("/api/auth", createAuthRoutes((c) => Promise.resolve(realm(c as unknown as Ctx))) as never);
@@ -171,12 +171,11 @@ app.get("/api/overview", async (c) => {
   return c.json({ tenants, users, domains, failedJobs: jobs.total, series, attention });
 });
 
-// Tenants
 const statusFilter = (c: Ctx) => {
   const s = c.req.query("status");
   return s === "active" || s === "suspended" || s === "pending_deletion" || s === "deleting" ? s : "";
 };
-app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), ...(statusFilter(c) !== undefined && { status: statusFilter(c) }) })));
+app.get("/api/tenants", async (c) => c.json(await listTenants(c.env.DB, { ...listQ(c), status: statusFilter(c) })));
 
 app.get("/api/tenants/:id", async (c) => c.json(await tenantOr404(c, c.req.param("id"))));
 
@@ -230,7 +229,6 @@ app.get("/api/tenants/:id/members", async (c) => {
   return c.json(await listMembers(c.env.DB, c.req.param("id"), { ...listQ(c), ...(c.req.query("role") !== undefined && { role: c.req.query("role") }) }));
 });
 
-// Custom domains (Cloudflare for SaaS)
 app.get("/api/domains", async (c) => c.json(await listDomains(c.env.DB, {
     ...listQ(c),
     ...(c.req.query("status") !== undefined && { status: c.req.query("status") }),
@@ -266,7 +264,6 @@ app.delete("/api/domains/:hostname", async (c) => {
   return c.json({ ok: true });
 });
 
-// Operators
 app.get("/api/operators", async (c) => c.json(await listOperators(c.env.DB, listQ(c))));
 app.post("/api/operators", async (c) => {
   freshOwnerOnly(c);
@@ -282,7 +279,6 @@ app.delete("/api/operators/:userId", async (c) => {
   return c.json({ ok: true });
 });
 
-// Audit & activity
 app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), ...(c.req.query("action") !== undefined && { action: c.req.query("action") }) })));
 app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, SCOPE, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
 app.post("/api/jobs/:id/retry", async (c) => {
@@ -291,7 +287,6 @@ app.post("/api/jobs/:id/retry", async (c) => {
   return c.json({ ok: true });
 });
 
-// Setup & connections
 app.get("/api/setup", async (c) => c.json(await setupStatus(c.env)));
 
 app.put("/api/setup/cloudflare", async (c) => {
