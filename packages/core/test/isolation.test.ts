@@ -229,7 +229,7 @@ describe("job queue", () => {
       await env.DB.prepare("UPDATE jobs SET run_after = 0 WHERE id = ?").bind(bad.id).run();
       await runJobMessages(qenv, boom, batchOf([bad.id]));
     }
-    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(bad.id).first()).toEqual({ status: "failed", attempts: 5, error: "boom" });
+    expect(await env.DB.prepare("SELECT status, attempts, error FROM jobs WHERE id = ?").bind(bad.id).first()).toEqual({ status: "failed", attempts: 5, error: "Something went wrong on our side. Try again." });
     const before = app.sent.length;
     await runJobMessages(qenv, boom, batchOf([bad.id]));
     expect(app.sent.length).toBe(before);
