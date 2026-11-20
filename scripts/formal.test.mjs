@@ -12,6 +12,7 @@ import {
   TLC_EXIT_TABLE,
   cfgFlags,
   describeOutcome,
+  discoverFlows,
   distinctStates,
   downloadJar,
   ensureJar,
@@ -137,7 +138,7 @@ test("non-timeout signals are reported as their own signal outcome, distinct fro
   assert.equal(r.timedOut, false);
   assert.deepEqual(runOutcome(r), { kind: "signal", signal: "SIGKILL" });
 
-  // A mutant killed by a signal is never counted as a killed mutant
+  // runTlc marks an ETIMEDOUT error as timedOut, classified as timeout rather than signal
   const tlcTimeout = runTlc("/fake/java", "/fake.jar", join(TOY, "Toy.tla"), {
     configPath: join(TOY, "Toy.cfg"),
     spawnSync: () => ({ status: null, signal: "SIGTERM", error: Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" }),
@@ -181,7 +182,7 @@ test("parseCfg is CRLF-safe, keyword-driven (not indentation-driven) and ignores
     { keyword: "SPECIFICATION", args: ["Spec"] },
     { keyword: "CONSTANTS", args: ["N = 3", 'TYPE = "a"', "MUTANTS = {}"] },
     { keyword: "VIEW", args: ["MyView"] },
-    { keyword: "INVARIANTS", args: ["TypeOK CounterLeqBound", "ExtraInv"] },
+    { keyword: "INVARIANTS", args: ["TypeOK", "CounterLeqBound", "ExtraInv"] },
     { keyword: "CONSTRAINT", args: ["StateBound"] },
   ]);
 
@@ -189,6 +190,56 @@ test("parseCfg is CRLF-safe, keyword-driven (not indentation-driven) and ignores
   assert.equal(flags.hasSymmetry, false);
   assert.equal(flags.hasProperty, false);
   assert.deepEqual(flags.invariants, new Set(["CounterLeqBound", "ExtraInv", "TypeOK"]));
+});
+
+test("parseCfg splits on whitespace so keywords start sections anywhere on a line and one-line CONSTANTS are kept", () => {
+  const inline = "SPECIFICATION Spec CONSTANTS a = 1 b = {t1, t2} MUTANTS = {} INVARIANT TypeOK ExtraInv SYMMETRY Symm PROPERTY Live";
+  const sections = parseCfg(inline);
+  assert.deepEqual(sections, [
+    { keyword: "SPECIFICATION", args: ["Spec"] },
+    { keyword: "CONSTANTS", args: ["a = 1", "b = {t1, t2}", "MUTANTS = {}"] },
+    { keyword: "INVARIANT", args: ["TypeOK", "ExtraInv"] },
+    { keyword: "SYMMETRY", args: ["Symm"] },
+    { keyword: "PROPERTY", args: ["Live"] },
+  ]);
+  const flags = cfgFlags(sections);
+  assert.equal(flags.hasSymmetry, true);
+  assert.equal(flags.hasProperty, true);
+  assert.deepEqual(flags.invariants, new Set(["TypeOK", "ExtraInv"]));
+  assert.deepEqual(flags.properties, new Set(["Live"]));
+
+  // validateManifest catches inline SYMMETRY + PROPERTY on the same line
+  assert.throws(
+    () => validateManifest(toyManifest(), {
+      dirName: "toy",
+      cfgTexts: { "Toy.cfg": "SPECIFICATION Spec CONSTANT MUTANTS = {} INVARIANT CounterLeqBound SYMMETRY Symm PROPERTY Live\n" },
+    }),
+    /SYMMETRY is refused/,
+  );
+
+  // One-line CONSTANTS keep non-MUTANTS entries in mutant cfg
+  const mutant = generateMutantCfg("SPECIFICATION Spec CONSTANTS a = 1 b = {t1, t2} MUTANTS = {} INVARIANT TypeOK", "m1", { id: "TypeOK", kind: "safety" });
+  assert.match(mutant, /a = 1/);
+  assert.match(mutant, /b = \{t1, t2\}/);
+  assert.doesNotMatch(mutant, /MUTANTS = \{\}/);
+  assert.match(mutant, /MUTANTS = \{"m1"\}/);
+});
+
+test("generateMutantCfg strips MUTANTS <- ... as well as MUTANTS = ...", () => {
+  const cfg = [
+    "SPECIFICATION Spec",
+    "CONSTANTS a = 1 MUTANTS <- EmptySet b = 2",
+    "CONSTANT",
+    "  MUTANTS <- [Mod] OtherEmpty",
+    "  c = 3",
+    "INVARIANT TypeOK",
+  ].join("\n");
+  const mutant = generateMutantCfg(cfg, "m1", { id: "TypeOK", kind: "safety" });
+  assert.match(mutant, /a = 1/);
+  assert.match(mutant, /b = 2/);
+  assert.match(mutant, /c = 3/);
+  assert.doesNotMatch(mutant, /MUTANTS\s*<-/);
+  assert.match(mutant, /MUTANTS = \{"m1"\}/);
 });
 
 test("mutant cfg keeps constants, VIEW and other keywords; strips SYMMETRY for liveness only", () => {
@@ -469,8 +520,133 @@ test("expression-bodied arrows fail loudly instead of scanning into the next fun
     () => extractDefinitions("export const f = (x: number): number => x + 1\nexport function g() { return 2; }\n", "f"),
     /brace-delimited body/,
   );
-  assert.throws(() => extractDefinitions("export const f = () => ({ a: 1 });\n", "f"), /brace-delimited body/);
+  assert.throws(() => extractDefinitions("export const f = () => (1 + 2);\n", "f"), /brace-delimited body/);
+  assert.throws(() => extractDefinitions("export const f = () => ({ a: 1 }).a;\n", "f"), /brace-delimited body/);
   assert.throws(() => extractDefinitions('const m = { "f": () => 1 };\n', "f"), /brace-delimited body/);
+});
+
+test("extractDefinitions and normalize fail closed on ambiguous slash (tokenizeSafe), handle readonly return types, and skip type/interface spans", () => {
+  // Repro 1: ambiguous `/` fails closed in both extractDefinitions and normalize
+  const ambiguous = "export function f(a: number) { const x = a++ / 1; return /; }\n";
+  assert.throws(() => extractDefinitions(ambiguous, "f"), /Ambiguous `\/`/);
+  assert.throws(() => normalize("{ const x = a++ / 1; return /; }"), /Ambiguous `\/`/);
+
+  // Repro 2: readonly in return type must not stop at the type's `{`
+  const readonlySrc = "export function getItems(n: number): readonly { id: string; count: number }[] {\n  return [{ id: 'a', count: n }];\n}\n";
+  const readonlyBodies = extractDefinitions(readonlySrc, "getItems");
+  assert.equal(readonlyBodies.length, 1);
+  assert.ok(readonlyBodies[0].includes("return [{ id: 'a', count: n }]"), `got: ${readonlyBodies[0]}`);
+  assert.ok(!readonlyBodies[0].includes("id: string"));
+
+  // Repro 3: quoted keys inside `type X = ...` and `interface X { ... }` are never read as bodies
+  const typeAndInterfaceOnly = [
+    'type Handlers = {',
+    '  "tenant.purge": (env: unknown) => { done: boolean };',
+    '};',
+    'export type UnionHandlers<T extends { id: string }> =',
+    '  | { "tenant.purge": (x: T) => { ok: true } }',
+    '  | { other: number }',
+    'export interface HandlerMap extends Record<string, unknown> {',
+    '  "tenant.purge": (env: unknown) => { done: boolean };',
+    '}',
+  ].join("\n");
+  assert.deepEqual(extractDefinitions(typeAndInterfaceOnly, "tenant.purge"), []);
+
+  const withRealHandler = `${typeAndInterfaceOnly}\nconst handlers = {\n  "tenant.purge": async (env: unknown) => {\n    return { purged: true };\n  },\n};\n`;
+  const extracted = extractDefinitions(withRealHandler, "tenant.purge");
+  assert.equal(extracted.length, 1);
+  assert.ok(extracted[0].includes("return { purged: true }"));
+});
+
+test("nested const, let or var with the covered name that is not a function is skipped instead of throwing", () => {
+  const src = [
+    "export function other() {",
+    "  const target = computeTarget();",
+    "  let target2 = 1;",
+    "  if (target) {",
+    "    var target = null;",
+    "  }",
+    "  return target;",
+    "}",
+    "export function target(x: number) {",
+    "  return x + 1;",
+    "}",
+  ].join("\n");
+  const bodies = extractDefinitions(src, "target");
+  assert.equal(bodies.length, 1);
+  assert.ok(bodies[0].includes("return x + 1"));
+
+  const onlyNestedNonFn = "export function other() { const missing = 123; let missing2 = 'a'; var missing3 = {}; }\n";
+  assert.deepEqual(extractDefinitions(onlyNestedNonFn, "missing"), []);
+});
+
+test("covered functions support quoted object keys, nested const arrows, and reject duplicates naming file and name", () => {
+  // Quoted object keys (plain and wrapped in a call like idempotent(...))
+  const quotedSrc = [
+    "export function tenantJobHandlers() {",
+    "  const handlers = {",
+    '    "tenant.purge": idempotent(async (env, _job, payload) => {',
+    "      return { done: true, result: payload };",
+    "    }),",
+    '    "other.job": async () => { return { done: true }; },',
+    "  };",
+    "  return handlers;",
+    "}",
+  ].join("\n");
+  const purgeBodies = extractDefinitions(quotedSrc, "tenant.purge");
+  assert.equal(purgeBodies.length, 1);
+  assert.ok(purgeBodies[0].includes("return { done: true, result: payload }"));
+  const otherBodies = extractDefinitions(quotedSrc, "other.job");
+  assert.equal(otherBodies.length, 1);
+  assert.ok(otherBodies[0].includes("return { done: true }"));
+
+  // Const arrows declared inside another function (including parenthesized object-literal return)
+  const nestedArrowsSrc = [
+    "export function createTenantApp() {",
+    "  const realmFor = (c: Ctx, tenant: TenantRow): AuthRealm => ({",
+    "    scope: tenant.id,",
+    "    admit: async () => { return true; },",
+    "  });",
+    "  const activeTenant = (c: Ctx): TenantRow => {",
+    '    const host = c.get("host");',
+    "    return host.tenant;",
+    "  };",
+    "  const authenticate = async (c: Ctx, next: () => Promise<void>) => {",
+    "    const row = activeTenant(c);",
+    "    await next();",
+    "  };",
+    "  return { realmFor, activeTenant, authenticate };",
+    "}",
+  ].join("\n");
+  assert.equal(extractDefinitions(nestedArrowsSrc, "realmFor").length, 1);
+  assert.ok(extractDefinitions(nestedArrowsSrc, "realmFor")[0].includes("scope: tenant.id"));
+  assert.equal(extractDefinitions(nestedArrowsSrc, "activeTenant").length, 1);
+  assert.ok(extractDefinitions(nestedArrowsSrc, "activeTenant")[0].includes('c.get("host")'));
+  assert.equal(extractDefinitions(nestedArrowsSrc, "authenticate").length, 1);
+  assert.ok(extractDefinitions(nestedArrowsSrc, "authenticate")[0].includes("await next()"));
+
+  // Combined file with quoted handler + top-level function + nested const arrows hashes cleanly
+  const combined = `${quotedSrc}\nexport async function tenantTick() { return 1; }\n${nestedArrowsSrc}\n`;
+  const combinedHash = hashEntry(
+    { file: "src/tenant-app.ts", functions: ["tenant.purge", "tenantTick", "realmFor", "activeTenant", "authenticate"] },
+    () => combined,
+    "/",
+  );
+  assert.equal(combinedHash.found, true);
+  assert.match(combinedHash.sha256, /^[0-9a-f]{64}$/);
+
+  // Duplicate names (quoted object key and nested const arrow) error naming file and name
+  const dupQuoted = 'const a = { "tenant.purge": () => { return 1; } };\nconst b = { "tenant.purge": idempotent(async () => { return 2; }) };\n';
+  assert.throws(
+    () => hashEntry({ file: "src/tenant-app.ts", functions: ["tenant.purge"] }, () => dupQuoted, "/"),
+    /src\/tenant-app\.ts: "tenant\.purge" is defined 2 times/,
+  );
+
+  const dupNested = "function a() { const activeTenant = () => { return 1; }; }\nfunction b() { const activeTenant = () => { return 2; }; }\n";
+  assert.throws(
+    () => hashEntry({ file: "src/tenant-app.ts", functions: ["activeTenant"] }, () => dupNested, "/"),
+    /src\/tenant-app\.ts: "activeTenant" is defined 2 times/,
+  );
 });
 
 test("comment-only edits (including inside template expressions) do not change the hash; body and template text edits do", (t) => {
@@ -528,7 +704,7 @@ test("a mutant that survives, violates the wrong invariant, or deadlocks fails t
   assert.ok(deadlock.errLines.join("\n").includes("deadlock"));
 });
 
-test("a covered file that changed fails with skill hint, resync command, and docs pointer", async (t) => {
+test("a covered file that changed fails with re-check hint, resync command, and docs pointer", async (t) => {
   const dir = tempToy(t);
   const manifest = JSON.parse(read(join(dir, "toy", "formal.json")));
   manifest.covered[0].sha256 = "0".repeat(64);
@@ -537,9 +713,8 @@ test("a covered file that changed fails with skill hint, resync command, and doc
   assert.equal(r.code, 1);
   const text = errLines.join("\n");
   assert.ok(text.includes("covered code changed"));
-  assert.ok(text.includes("/maintain-formal-verification-skill"));
-  assert.ok(text.includes("--resync toy"));
-  assert.ok(text.includes("see docs/internals/formal-harness.md"));
+  assert.ok(!text.includes("/maintain-formal-verification-skill"));
+  assert.ok(text.includes("re-check the model against the changed code (docs/internals/formal-harness.md), then pnpm formal --resync toy"));
 });
 
 test("--resync updates only covered hashes after a green run and refuses when a mutant survives", async (t) => {
@@ -574,6 +749,30 @@ test("CLI rejects bare --flows and --resync and prints each flow error exactly o
   const bareResync = await runHarness(["--flows", FIXTURES, "--resync"]);
   assert.equal(bareResync.r.code, 1);
   assert.match(bareResync.errLines.join("\n"), /--resync requires/);
+
+  const unknownFlag = await runHarness(["--bogus"]);
+  assert.equal(unknownFlag.r.code, 1);
+  assert.match(unknownFlag.errLines.join("\n"), /unknown flag: --bogus/);
+
+  const unknownFlagVal = await runHarness(["--flows", FIXTURES, "--extra=1"]);
+  assert.equal(unknownFlagVal.r.code, 1);
+  assert.match(unknownFlagVal.errLines.join("\n"), /unknown flag: --extra/);
+
+  const positional = await runHarness(["toy"]);
+  assert.equal(positional.r.code, 1);
+  assert.match(positional.errLines.join("\n"), /unexpected positional argument: toy/);
+
+  const shortFlag = await runHarness(["-f"]);
+  assert.equal(shortFlag.r.code, 1);
+  assert.match(shortFlag.errLines.join("\n"), /unexpected positional argument: -f/);
+
+  const extraPositional = await runHarness(["--flows", FIXTURES, "extra"]);
+  assert.equal(extraPositional.r.code, 1);
+  assert.match(extraPositional.errLines.join("\n"), /unexpected positional argument: extra/);
+
+  const missingFlows = await runHarness(["--flows", join(makeTempDir(t), "does-not-exist")]);
+  assert.equal(missingFlows.r.code, 1);
+  assert.match(missingFlows.errLines.join("\n"), /flows directory does not exist/);
 
   // A flow throwing during validation must print the error once, not twice
   const dir = tempToy(t);
@@ -688,6 +887,57 @@ test("validateManifest rejects unknown keys, missing mutants, and mutant ids abs
   const typoMutant = JSON.parse(JSON.stringify(manifest));
   typoMutant.mutants = [{ id: "drop-gard", breaks: "CounterLeqBound", code: "x#f" }];
   assert.throws(() => validateManifest(typoMutant, { specText: read(join(TOY, "Toy.tla")), dirName: "toy" }), /drop-gard/);
+
+  // covered[].functions entries must each be a non-empty string
+  for (const badFn of ["", "   ", 123, null]) {
+    const badFns = JSON.parse(JSON.stringify(manifest));
+    badFns.covered[0].functions = [badFn];
+    assert.throws(() => validateManifest(badFns, { dirName: "toy" }), /"functions" must be a non-empty string/);
+  }
+});
+
+test("discoverFlows refuses non-object manifests with an error prefixed by the flow name", (t) => {
+  for (const raw of ["null", "[]", '"hello"', "42", "true"]) {
+    const dir = makeTempDir(t);
+    const flowDir = join(dir, "bad-flow");
+    cpSync(TOY, flowDir, { recursive: true });
+    writeFileSync(join(flowDir, "formal.json"), raw);
+    assert.throws(() => discoverFlows(dir), /^Error: bad-flow: formal\.json must be an object$/);
+  }
+});
+
+test("validateManifest supports optional assumptions, optional notModelled, and optional mutant change while rejecting unknown keys", () => {
+  const base = toyManifest();
+
+  // Optional notModelled may be omitted, or an array of strings (including empty)
+  const noNotModelled = JSON.parse(JSON.stringify(base));
+  delete noNotModelled.notModelled;
+  assert.doesNotThrow(() => validateManifest(noNotModelled, { dirName: "toy" }));
+  assert.doesNotThrow(() => validateManifest({ ...base, notModelled: [] }, { dirName: "toy" }));
+  assert.throws(() => validateManifest({ ...base, notModelled: "nope" }, { dirName: "toy" }), /"notModelled" must be an array of strings/);
+  assert.throws(() => validateManifest({ ...base, notModelled: [123] }, { dirName: "toy" }), /"notModelled" must be an array of strings/);
+
+  // Optional assumptions must be an array of non-empty strings
+  assert.doesNotThrow(() => validateManifest({ ...base, assumptions: ["One tick >= cache TTL"] }, { dirName: "toy" }));
+  assert.throws(() => validateManifest({ ...base, assumptions: "not-array" }, { dirName: "toy" }), /"assumptions" must be an array of non-empty strings/);
+  assert.throws(() => validateManifest({ ...base, assumptions: [""] }, { dirName: "toy" }), /"assumptions" must be an array of non-empty strings/);
+  assert.throws(() => validateManifest({ ...base, assumptions: ["   "] }, { dirName: "toy" }), /"assumptions" must be an array of non-empty strings/);
+  assert.throws(() => validateManifest({ ...base, assumptions: [42] }, { dirName: "toy" }), /"assumptions" must be an array of non-empty strings/);
+
+  // Optional mutant change must be a non-empty string
+  const withChange = JSON.parse(JSON.stringify(base));
+  withChange.mutants[0].change = "drop guard condition";
+  assert.doesNotThrow(() => validateManifest(withChange, { dirName: "toy" }));
+  for (const badChange of ["", "   ", 123, null]) {
+    const m = JSON.parse(JSON.stringify(base));
+    m.mutants[0].change = badChange;
+    assert.throws(() => validateManifest(m, { dirName: "toy" }), /"change" must be a non-empty string/);
+  }
+
+  // Unknown keys are still rejected on manifest and mutant
+  const badMutantKey = JSON.parse(JSON.stringify(base));
+  badMutantKey.mutants[0].extra = "x";
+  assert.throws(() => validateManifest(badMutantKey, { dirName: "toy" }), /unknown mutant key "extra"/);
 });
 
 test("distinctStates parses TLC state counts", () => {

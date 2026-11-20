@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT, parseArgs } from "./lib.mjs";
-import { tokenize } from "./route-authz-scan.mjs";
+import { tokenizeSafe } from "./route-authz-scan.mjs";
 
 export const TLA_TOOLS_VERSION = "1.7.4";
 export const TLA_TOOLS_URL = `https://github.com/tlaplus/tlaplus/releases/download/v${TLA_TOOLS_VERSION}/tla2tools.jar`;
@@ -131,14 +131,18 @@ export async function ensureJar({ cacheDir = defaultCacheDir(), url = TLA_TOOLS_
   return jar;
 }
 
-// ── Drift detection (reuses tokenize from scripts/route-authz-scan.mjs) ───────────
+// ── Drift detection (reuses tokenizeSafe from scripts/route-authz-scan.mjs) ───────
 
 const isP = (t, v) => t?.type === "punct" && (v === undefined || t.value === v);
 const isId = (t, v) => t?.type === "id" && (v === undefined || t.value === v);
 const isPropAccess = (toks, i) => isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#");
 
 const TYPE_EXPECTS_BRACE_PUNCT = new Set([":", "|", "&", "=>", "?"]);
-const TYPE_EXPECTS_BRACE_KW = new Set(["is", "extends", "keyof"]);
+const TYPE_EXPECTS_BRACE_KW = new Set(["is", "extends", "keyof", "readonly"]);
+const TYPE_CONT_BEFORE = new Set(["=", ":", "|", "&", "=>", "?", ".", "-"]);
+const TYPE_CONT_BEFORE_KW = new Set(["is", "extends", "keyof", "readonly", "typeof", "infer", "unique", "asserts", "new", "abstract"]);
+const TYPE_CONT_START = new Set(["|", "&", "?", ":", "=>", ".", "[", "<"]);
+const TYPE_CONT_START_KW = new Set(["extends", "is"]);
 const STMT_START_KW = new Set(["export", "import", "function", "const", "let", "var", "class", "interface", "type", "return", "if", "for", "while", "switch", "try"]);
 
 function matchDelim(toks, openIdx, openVal, closeVal) {
@@ -263,8 +267,81 @@ function findFunctionBody(toks, fnKwIdx) {
   return -1;
 }
 
-/** Parse RHS of `const name [: Type] = <rhs>` or `"name": <rhs>` as a function expression or arrow function. */
-function parseRhsFunction(toks, start) {
+/** Skip a `type X [<...>] = ...` alias span, returning its last token index or -1 if not a type alias. */
+function skipTypeAlias(toks, typeKwIdx) {
+  let j = typeKwIdx + 1;
+  if (!isId(toks[j]) || toks[j].line !== toks[typeKwIdx].line) return -1;
+  j++;
+  if (isP(toks[j], "<")) {
+    j = skipAngle(toks, j);
+    if (j < 0) return -1;
+  }
+  if (!isP(toks[j], "=")) return -1;
+  let prev = toks[j];
+  j++;
+  while (j < toks.length) {
+    const t = toks[j];
+    if (isP(t, ";")) return j;
+    if (isP(t, "}") || isP(t, ")") || isP(t, "]")) return j - 1;
+    if (t.line > prev.line) {
+      const prevCont = (prev.type === "punct" && TYPE_CONT_BEFORE.has(prev.value))
+        || (prev.type === "id" && TYPE_CONT_BEFORE_KW.has(prev.value));
+      const currCont = (t.type === "punct" && TYPE_CONT_START.has(t.value))
+        || (t.type === "id" && TYPE_CONT_START_KW.has(t.value));
+      if (!prevCont && !currCont) return j - 1;
+    }
+    if (isP(t, "(") || isP(t, "[") || isP(t, "{")) {
+      const next = skipBalanced(toks, j);
+      if (next < 0) return -1;
+      prev = toks[next - 1];
+      j = next;
+      continue;
+    }
+    if (isP(t, "<")) {
+      const next = skipAngle(toks, j);
+      if (next < 0) return -1;
+      prev = toks[next - 1];
+      j = next;
+      continue;
+    }
+    prev = t;
+    j++;
+  }
+  return toks.length - 1;
+}
+
+/** Skip an `interface X [<...>] [extends ...] { ... }` span, returning its closing `}` index or -1. */
+function skipInterface(toks, ifaceKwIdx) {
+  let j = ifaceKwIdx + 1;
+  if (!isId(toks[j]) || toks[j].line !== toks[ifaceKwIdx].line) return -1;
+  j++;
+  if (isP(toks[j], "<")) {
+    j = skipAngle(toks, j);
+    if (j < 0) return -1;
+  }
+  if (isId(toks[j], "extends")) {
+    j++;
+    while (j < toks.length && !isP(toks[j], "{")) {
+      if (isP(toks[j], ";")) return -1;
+      if (isP(toks[j], "<")) {
+        j = skipAngle(toks, j);
+        if (j < 0) return -1;
+        continue;
+      }
+      if (isP(toks[j], "(") || isP(toks[j], "[")) {
+        j = skipBalanced(toks, j);
+        if (j < 0) return -1;
+        continue;
+      }
+      j++;
+    }
+  }
+  if (!isP(toks[j], "{")) return -1;
+  return matchDelim(toks, j, "{", "}");
+}
+
+/** Parse RHS of `const name [: Type] = <rhs>` or `"name": <rhs>` as a function expression, arrow function, or wrapper(fn). */
+function parseRhsFunction(toks, start, allowWrap = true) {
   let i = start;
   if (isId(toks[i], "async")) i++;
   if (isId(toks[i], "function")) {
@@ -286,18 +363,44 @@ function parseRhsFunction(toks, start) {
     if (!isP(toks[i], "=>")) return { kind: "not-fn" };
   } else if (isId(toks[i]) && isP(toks[i + 1], "=>")) {
     i += 1;
+  } else if (allowWrap && isId(toks[start]) && !isId(toks[start], "async")) {
+    let w = start + 1;
+    if (isP(toks[w], "<")) w = skipAngle(toks, w);
+    if (w >= 0 && isP(toks[w], "(")) {
+      const closeParen = matchDelim(toks, w, "(", ")");
+      if (closeParen < 0) return { kind: "not-fn" };
+      const inner = parseRhsFunction(toks, w + 1, false);
+      if (inner.kind === "body") {
+        const closeBrace = matchDelim(toks, inner.open, "{", "}");
+        if (closeBrace >= 0 && closeBrace < closeParen) return inner;
+      }
+      if (inner.kind === "expr-arrow") return inner;
+    }
+    return { kind: "not-fn" };
   } else {
     return { kind: "not-fn" };
   }
   const bodyIdx = i + 1;
   if (isP(toks[bodyIdx], "{")) return { kind: "body", open: bodyIdx };
+  if (isP(toks[bodyIdx], "(") && isP(toks[bodyIdx + 1], "{")) {
+    const closeBrace = matchDelim(toks, bodyIdx + 1, "{", "}");
+    if (closeBrace >= 0 && isP(toks[closeBrace + 1], ")")) {
+      const after = toks[closeBrace + 2];
+      const continues = after && after.line === toks[closeBrace + 1].line && (
+        (after.type === "punct" && ![";", ",", ")", "}", "]"].includes(after.value))
+        || (after.type === "id" && (after.value === "as" || after.value === "satisfies"))
+      );
+      if (!continues) return { kind: "body", open: bodyIdx + 1 };
+    }
+  }
   return { kind: "expr-arrow" };
 }
 
 export function extractDefinitions(src, name) {
-  const toks = tokenize(src);
+  const toks = tokenizeSafe(src, new Set([name, "type", "interface", "readonly", "is", "extends", "keyof"]));
   const bodies = [];
   const seenOpen = new Set();
+  let braceDepth = 0;
 
   const recordBody = (open) => {
     if (seenOpen.has(open)) return;
@@ -309,6 +412,28 @@ export function extractDefinitions(src, name) {
 
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
+    if (isP(t, "{")) {
+      braceDepth++;
+      continue;
+    }
+    if (isP(t, "}")) {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (isId(t, "type") && !isPropAccess(toks, i)) {
+      const end = skipTypeAlias(toks, i);
+      if (end >= i) {
+        i = end;
+        continue;
+      }
+    }
+    if (isId(t, "interface") && !isPropAccess(toks, i)) {
+      const end = skipInterface(toks, i);
+      if (end >= i) {
+        i = end;
+        continue;
+      }
+    }
     if (isId(t, "function") && !isPropAccess(toks, i)) {
       const nameIdx = isP(toks[i + 1], "*") ? i + 2 : i + 1;
       if (!isId(toks[nameIdx], name)) continue;
@@ -330,9 +455,12 @@ export function extractDefinitions(src, name) {
       if (rhs.kind === "expr-arrow") {
         throw new Error(`cannot find a brace-delimited body for "${name}" (expression-bodied arrow functions must use { ... })`);
       }
-      if (rhs.kind !== "body") throw new Error(`cannot find a brace-delimited body for "${name}"`);
+      if (rhs.kind !== "body") {
+        if (braceDepth > 0) continue;
+        throw new Error(`cannot find a brace-delimited body for "${name}"`);
+      }
       recordBody(rhs.open);
-    } else if (t.type === "str" && t.value === name && isP(toks[i + 1], ":")) {
+    } else if (t.type === "str" && t.value === name && isP(toks[i + 1], ":") && !isP(toks[i - 1], "?") && !isId(toks[i - 1], "case")) {
       const rhs = parseRhsFunction(toks, i + 2);
       if (rhs.kind === "expr-arrow") {
         throw new Error(`cannot find a brace-delimited body for "${name}" (expression-bodied arrow functions must use { ... })`);
@@ -344,7 +472,7 @@ export function extractDefinitions(src, name) {
 }
 
 export function normalize(src) {
-  const toks = tokenize(src);
+  const toks = tokenizeSafe(src);
   const parts = [];
   const tmplStarts = [];
   for (const t of toks) {
@@ -408,26 +536,88 @@ function stripCfgComments(text) {
   return out;
 }
 
-export function parseCfg(text) {
+function tokenizeCfg(text) {
   const cleaned = stripCfgComments(text.replace(/\r\n?/g, "\n"));
+  const tokens = [];
+  let i = 0;
+  while (i < cleaned.length) {
+    while (i < cleaned.length && /\s/.test(cleaned[i])) i++;
+    if (i >= cleaned.length) break;
+    if (cleaned[i] === '"') {
+      let j = i + 1;
+      while (j < cleaned.length) {
+        if (cleaned[j] === "\\" && j + 1 < cleaned.length) { j += 2; continue; }
+        if (cleaned[j] === '"') { j++; break; }
+        j++;
+      }
+      tokens.push(cleaned.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (cleaned[i] === "<" && cleaned[i + 1] === "-") {
+      tokens.push("<-");
+      i += 2;
+      continue;
+    }
+    if (cleaned[i] === "=") {
+      tokens.push("=");
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (
+      j < cleaned.length
+      && !/\s/.test(cleaned[j])
+      && cleaned[j] !== '"'
+      && cleaned[j] !== "="
+      && !(cleaned[j] === "<" && cleaned[j + 1] === "-")
+    ) {
+      j++;
+    }
+    tokens.push(cleaned.slice(i, j));
+    i = j;
+  }
+  return tokens;
+}
+
+export function parseCfg(text) {
+  const tokens = tokenizeCfg(text);
   const sections = [];
   let current = null;
-  for (const rawLine of cleaned.split("\n")) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-    const m = /^([A-Z][A-Z0-9_]*)(?:\s+([\s\S]*))?$/.exec(trimmed);
-    const isConstAssign = current && CONST_KEYWORDS.has(current.keyword) && /^(?:=|<-)/.test(m?.[2] ?? "");
-    if (m && TLC_CFG_KEYWORDS.has(m[1]) && !isConstAssign) {
-      current = { keyword: m[1], args: [] };
-      const rest = m[2]?.trim();
-      if (rest) current.args.push(rest);
+  let constParts = null;
+
+  const flushConst = () => {
+    if (constParts && constParts.length > 0) {
+      current.args.push(constParts.join(" "));
+      constParts = null;
+    }
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const prev = tokens[i - 1];
+    const next = tokens[i + 1];
+    const inConst = current !== null && CONST_KEYWORDS.has(current.keyword);
+    const isConstAssign = inConst && (next === "=" || next === "<-" || prev === "=" || prev === "<-");
+    if (TLC_CFG_KEYWORDS.has(tok) && !isConstAssign) {
+      flushConst();
+      current = { keyword: tok, args: [] };
       sections.push(current);
+    } else if (inConst) {
+      if (next === "=" || next === "<-") {
+        flushConst();
+        constParts = [tok];
+      } else {
+        if (!constParts) constParts = [];
+        constParts.push(tok);
+      }
     } else if (current) {
-      current.args.push(trimmed);
+      current.args.push(tok);
     } else {
-      throw new Error(`unexpected cfg line before any TLC keyword: "${trimmed}"`);
+      throw new Error(`unexpected cfg token before any TLC keyword: "${tok}"`);
     }
   }
+  flushConst();
   return sections;
 }
 
@@ -458,7 +648,7 @@ export function generateMutantCfg(text, mutantId, rule) {
     if (RULE_KEYWORDS.has(s.keyword)) continue;
     if (rule.kind === "liveness" && s.keyword === "SYMMETRY") continue;
     if (CONST_KEYWORDS.has(s.keyword)) {
-      for (const a of s.args) if (!/^MUTANTS\s*=/.test(a)) constants.push(a);
+      for (const a of s.args) if (!/^MUTANTS\s*(?:=|<-)/.test(a)) constants.push(a);
       continue;
     }
     if (s.args.length === 0) out.push(s.keyword);
@@ -486,10 +676,10 @@ export function hashEntry(entry, read = readFileSync, root = ROOT) {
 
 // ── Manifest and config validation ────────────────────────────────────────────────
 
-const MANIFEST_KEYS = new Set(["flow", "spec", "config", "configs", "rules", "mutants", "covered", "bounds", "notModelled", "traceTest", "timeoutSeconds"]);
+const MANIFEST_KEYS = new Set(["flow", "spec", "config", "configs", "rules", "mutants", "covered", "bounds", "assumptions", "notModelled", "traceTest", "timeoutSeconds"]);
 const CONFIG_KEYS = new Set(["file", "rules"]);
 const RULE_KEYS = new Set(["id", "kind", "sentence", "harm"]);
-const MUTANT_KEYS = new Set(["id", "breaks", "code"]);
+const MUTANT_KEYS = new Set(["id", "breaks", "code", "change"]);
 const COVERED_KEYS = new Set(["file", "functions", "sha256"]);
 
 export function normalizeConfigs(manifest) {
@@ -503,7 +693,7 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
   };
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) bad("formal.json must be an object");
   for (const k of Object.keys(manifest)) if (!MANIFEST_KEYS.has(k)) bad(`unknown manifest key "${k}"`);
-  for (const k of ["flow", "spec", "rules", "mutants", "covered", "bounds", "notModelled"]) {
+  for (const k of ["flow", "spec", "rules", "mutants", "covered", "bounds"]) {
     if (manifest[k] === undefined) bad(`missing key "${k}"`);
   }
   if (typeof manifest.flow !== "string" || !manifest.flow) bad('"flow" must be a string');
@@ -513,7 +703,16 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
   if (manifest.config === undefined && manifest.configs === undefined) bad('must specify "config" or "configs"');
   if (manifest.config !== undefined && (typeof manifest.config !== "string" || !manifest.config)) bad('"config" must be a file name');
   if (typeof manifest.bounds !== "string" || !manifest.bounds) bad('"bounds" must be a string');
-  if (!Array.isArray(manifest.notModelled)) bad('"notModelled" must be an array');
+  if (manifest.assumptions !== undefined) {
+    if (!Array.isArray(manifest.assumptions) || !manifest.assumptions.every((s) => typeof s === "string" && s.trim().length > 0)) {
+      bad('"assumptions" must be an array of non-empty strings');
+    }
+  }
+  if (manifest.notModelled !== undefined) {
+    if (!Array.isArray(manifest.notModelled) || !manifest.notModelled.every((s) => typeof s === "string")) {
+      bad('"notModelled" must be an array of strings');
+    }
+  }
   if (manifest.traceTest !== undefined && (typeof manifest.traceTest !== "string" || !manifest.traceTest)) bad('"traceTest" must be a string');
   if (manifest.timeoutSeconds !== undefined) {
     if (typeof manifest.timeoutSeconds !== "number" || !Number.isFinite(manifest.timeoutSeconds) || manifest.timeoutSeconds <= 0 || manifest.timeoutSeconds > MAX_TIMEOUT_SECONDS) {
@@ -567,6 +766,7 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
     mutantIds.add(m.id);
     if (!ruleById.has(m.breaks)) bad(`mutant ${m.id}: "breaks" (${m.breaks}) is not a rule id`);
     if (m.code !== undefined && typeof m.code !== "string") bad(`mutant ${m.id}: "code" must be a string`);
+    if (m.change !== undefined && (typeof m.change !== "string" || !m.change.trim())) bad(`mutant ${m.id}: "change" must be a non-empty string`);
   }
   for (const id of ruleById.keys()) if (!manifest.mutants.some((m) => m.breaks === id)) bad(`rule ${id} has no mutant`);
 
@@ -576,6 +776,9 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
     for (const k of Object.keys(c)) if (!COVERED_KEYS.has(k)) bad(`unknown covered key "${k}"`);
     if (typeof c.file !== "string" || !c.file) bad("each covered entry needs a string file");
     if (!Array.isArray(c.functions) || c.functions.length === 0) bad(`covered ${c.file}: "functions" must be a non-empty array`);
+    for (const fn of c.functions) {
+      if (typeof fn !== "string" || !fn.trim()) bad(`covered ${c.file}: each entry in "functions" must be a non-empty string`);
+    }
     if (typeof c.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(c.sha256)) bad(`covered ${c.file}: "sha256" must be 64 hex characters`);
   }
 
@@ -616,6 +819,9 @@ export function discoverFlows(flowsDir, { readFileSync: read = readFileSync, rea
     const manifestPath = join(dir, "formal.json");
     if (!exists(manifestPath)) continue;
     const manifest = JSON.parse(read(manifestPath, "utf8"));
+    if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+      throw new Error(`${name}: formal.json must be an object`);
+    }
     const specPath = typeof manifest.spec === "string" && manifest.spec ? join(dir, manifest.spec) : null;
     out.push({ name, dir, manifestPath, manifest, specPath });
   }
@@ -657,31 +863,31 @@ export function runTlc(java, jar, spec, { configPath = null, configText = null, 
   const runRoot = join(ROOT, "formal-runs");
   mkdirSync(runRoot, { recursive: true });
   const dir = mkdtempSync(join(runRoot, "run-"));
-  const metadir = join(dir, "meta");
-  const specDir = resolve(dirname(spec));
-  let cfg;
-  if (configText !== null) {
-    cfg = join(dir, "mutant.cfg");
-    writeFileSync(cfg, configText);
-  } else {
-    cfg = resolve(configPath);
-  }
-  const args = [
-    `-DTLA-Library=${specDir}`,
-    "-cp",
-    jar,
-    "tlc2.TLC",
-    "-config",
-    cfg,
-    "-metadir",
-    metadir,
-    "-workers",
-    "auto",
-    basename(spec),
-  ];
   const started = Date.now();
   let r;
   try {
+    const metadir = join(dir, "meta");
+    const specDir = resolve(dirname(spec));
+    let cfg;
+    if (configText !== null) {
+      cfg = join(dir, "mutant.cfg");
+      writeFileSync(cfg, configText);
+    } else {
+      cfg = resolve(configPath);
+    }
+    const args = [
+      `-DTLA-Library=${specDir}`,
+      "-cp",
+      jar,
+      "tlc2.TLC",
+      "-config",
+      cfg,
+      "-metadir",
+      metadir,
+      "-workers",
+      "auto",
+      basename(spec),
+    ];
     r = spawnImpl(java, args, { cwd: dir, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -718,7 +924,7 @@ export function runFlow(flow, { java, jar, spawnSync: spawnImpl = spawnSync, rea
       if (!h.found || h.sha256 !== entry.sha256) stale.push(entry.file);
     }
     if (stale.length) {
-      errors.push(`covered code changed: ${stale.join(", ")}. Run /maintain-formal-verification-skill on ${flow.name}, then pnpm formal --resync ${flow.name} (see docs/internals/formal-harness.md).`);
+      errors.push(`covered code changed: ${stale.join(", ")}; re-check the model against the changed code (docs/internals/formal-harness.md), then pnpm formal --resync ${flow.name}.`);
       return { checks, errors, traces };
     }
   }
@@ -773,15 +979,29 @@ export function runFlow(flow, { java, jar, spawnSync: spawnImpl = spawnSync, rea
   return { checks, errors, traces };
 }
 
+const ALLOWED_FLAGS = new Set(["flows", "resync"]);
+
 export async function main(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
   const spawnImpl = opts.spawnSync ?? spawnSync;
   const read = opts.readFileSync ?? readFileSync;
+  const exists = opts.existsSync ?? existsSync;
   const log = opts.log ?? console.log;
   const err = opts.err ?? console.error;
   const cacheDir = opts.cacheDir ?? defaultCacheDir();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+  const unknownFlags = Object.keys(args).filter((k) => k !== "_" && !ALLOWED_FLAGS.has(k));
+  if (unknownFlags.length > 0) {
+    const msg = `unknown flag: --${unknownFlags[0]}`;
+    err(`✗ formal: ${msg}`);
+    return { code: 1, checks: [], errors: [msg] };
+  }
+  if (args._.length > 0) {
+    const msg = `unexpected positional argument: ${args._[0]}`;
+    err(`✗ formal: ${msg}`);
+    return { code: 1, checks: [], errors: [msg] };
+  }
   if (args.flows !== undefined && (typeof args.flows !== "string" || !args.flows.trim())) {
     const msg = "--flows requires a directory path";
     err(`✗ formal: ${msg}`);
@@ -792,12 +1012,17 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     err(`✗ formal: ${msg}`);
     return { code: 1, checks: [], errors: [msg] };
   }
+  if (args.flows !== undefined && !exists(args.flows)) {
+    const msg = `flows directory does not exist: ${args.flows}`;
+    err(`✗ formal: ${msg}`);
+    return { code: 1, checks: [], errors: [msg] };
+  }
 
   const flowsDir = args.flows ?? opts.flowsDir ?? join(ROOT, "formal");
 
   let flows;
   try {
-    flows = discoverFlows(flowsDir, { readFileSync: read });
+    flows = discoverFlows(flowsDir, { readFileSync: read, existsSync: exists });
   } catch (e) {
     err(`✗ formal: ${e.message}`);
     return { code: 1, checks: [], errors: [e.message] };

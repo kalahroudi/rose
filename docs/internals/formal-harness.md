@@ -4,8 +4,9 @@
 
 CLI options:
 
-- `--flows <dir>`: read flows from `<dir>` instead of `formal/`. Bare `--flows` without a path is rejected.
+- `--flows <dir>`: read flows from `<dir>` instead of `formal/`. Bare `--flows` without a path or a path that does not exist is rejected.
 - `--resync <flow>`: recompute and rewrite only the `sha256` fields for `<flow>`, and only after the flow passes every main config and every mutant. Bare `--resync` without a flow name is rejected.
+- Unknown flags and positional arguments are rejected.
 
 ## Manifest
 
@@ -17,9 +18,9 @@ Each `formal/<flow>/formal.json` names the model, its configs, its rules, its mu
   - `"config": "<x>.cfg"` names a single `.cfg` holding every rule.
   - `"configs": [{ "file": "<x>.cfg", "rules": ["<ruleId>", ...] }, ...]` lists multiple `.cfg` files (for example, a symmetric safety config and a non-symmetric liveness config).
 - `rules` has one entry per checked property. Each entry has `id`, `kind` (`safety` or `liveness`), `sentence`, and `harm`. The id is the TLA name TLC prints.
-- `mutants` has one entry per guard the model can switch off. `breaks` names the rule the mutant violates. Every rule needs at least one mutant.
-- `covered` lists the modelled files, the functions to hash, and the expected `sha256`.
-- `bounds`, `notModelled`, and `traceTest` record scope.
+- `mutants` has one entry per guard the model can switch off. `breaks` names the rule the mutant violates, with optional `code` and `change` (non-empty string). Every rule needs at least one mutant.
+- `covered` lists the modelled files, the functions to hash (each a non-empty string), and the expected `sha256`.
+- `bounds` records model bounds; optional `assumptions` (array of non-empty strings), `notModelled` (array of strings), and `traceTest` record scope.
 - `timeoutSeconds` overrides the 120-second default per TLC run for that flow. It must be a finite positive number up to 3600 (`MAX_TIMEOUT_SECONDS`).
 
 Unknown keys, specifying both or neither of `config`/`configs`, a rule not assigned to exactly one config, a rule missing from its config's `INVARIANT(S)` / `PROPERTY`/`PROPERTIES`, a rule with no mutant, a mutant id missing from the model, an out-of-range or non-finite `timeoutSeconds`, or a covered hash that is not 64 hex characters all fail.
@@ -63,17 +64,17 @@ Each mutant id must appear verbatim in the model as `"<id>" \in MUTANTS`. A miss
 
 ## Drift detection
 
-The harness hashes the covered function bodies, not the files. Comment-only edits must not force a resync. The repository runs TypeScript 7.0.2, whose module has no compiler API, and adding a parser dependency needs owner sign-off. `scripts/formal.mjs` reuses the `tokenize` lexer exported from `scripts/route-authz-scan.mjs` to find `function <name>` (including `function*`), `const`/`let`/`var <name> [: Type] =`, and `"<name>":` / `'<name>':`.
+The harness hashes the covered function bodies, not the files. Comment-only edits must not force a resync. The repository runs TypeScript 7.0.2, whose module has no compiler API, and adding a parser dependency needs owner sign-off. `scripts/formal.mjs` reuses the `tokenizeSafe` lexer exported from `scripts/route-authz-scan.mjs` to find `function <name>` (including `function*`), `const`/`let`/`var <name> [: Type] =` (including arrows declared inside another function), and `"<name>":` / `'<name>':` (including handlers wrapped in a call such as `idempotent(...)`).
 
-The extractor skips TypeScript generic parameter lists (`<T extends ...>`), variable type annotations, and return types, then extracts the brace-delimited `{ ... }` body while respecting strings, template literals, regex literals, comments, and postfix operators such as `a++ / b`. It normalizes the token stream (dropping comments and whitespace) and hashes the result.
+The extractor skips `type X = ...` and `interface X { ... }` spans, TypeScript generic parameter lists (`<T extends ...>`), variable type annotations, and return types (including `readonly { ... }`), then extracts the brace-delimited `{ ... }` body (or parenthesized object literal `({ ... })` immediately after `=>`) while respecting strings, template literals, regex literals, comments, and failing closed on ambiguous `/`. It normalizes the token stream (dropping comments and whitespace) and hashes the result.
 
-A missing function counts as stale. A name defined twice fails. Only brace-delimited bodies are accepted: for arrow functions, `{` must appear immediately after `=>`. An expression-bodied arrow (`const f = () => 1` or `const f = () => ({ a: 1 })`) fails loudly instead of scanning onward and hashing the wrong text.
+A missing function counts as stale. A name defined twice fails naming the file and the name. A nested `const`/`let`/`var` with the covered name that is not a function is skipped. Plain expression-bodied arrows (`const f = () => 1` or `const f = () => (x + 1)`) fail loudly instead of scanning onward and hashing the wrong text.
 
-When covered code drifts, the harness points you to `/maintain-formal-verification-skill` and `pnpm formal --resync <flow>` (and this document).
+When covered code drifts, the harness tells you to re-check the model against the changed code (`docs/internals/formal-harness.md`), then run `pnpm formal --resync <flow>`.
 
 ## Run layout
 
-Every TLC run gets a fresh `mkdtemp` directory under `formal-runs/` (git-ignored) and removes it afterward. TLC stores its `-metadir` state inside that temp directory, and generated mutant configs are written only inside that temp directory (never into tracked flow directories). TLC is invoked with the per-run temp directory as `cwd`, an absolute `-config` path, and `-DTLA-Library=<specDir>` so the flow's `.tla` directory is on the TLC module path. `.gitignore` also ignores `Mutant-*.cfg` as a safety net.
+Every TLC run gets a fresh `mkdtemp` directory under `formal-runs/` (git-ignored) and removes it afterward. TLC stores its `-metadir` state inside that temp directory, and generated mutant configs are written only inside that temp directory (never into tracked flow directories). TLC is invoked with the per-run temp directory as `cwd`, an absolute `-config` path, and `-DTLA-Library=<specDir>` so the flow's `.tla` directory is on the TLC module path.
 
 ## Toolchain and testing
 
