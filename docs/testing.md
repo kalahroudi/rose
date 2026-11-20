@@ -1,7 +1,7 @@
 # Testing
 
 ```sh
-pnpm verify      # guard + lint + knip + script tests + typecheck + every suite. Run before every commit and PR.
+pnpm verify      # guard + lint + knip + script tests + formal + typecheck + every suite. Run before every commit and PR.
 ```
 
 ## Lint
@@ -28,6 +28,11 @@ behaviour, so they are tracked as follow-up task Q15.
 worker and web code is left with browser globals enabled so `Request`, `Response`,
 `fetch`, `crypto`, `URL`, `Headers`, `console` and timers resolve in one shared set,
 matching the Workers runtime they run on.
+
+## Formal models
+
+`pnpm formal` runs the TLC models of the tenant-isolation rules and is part of
+`pnpm verify`. See [formal.md](formal.md).
 
 ## Run CI locally
 

@@ -20,7 +20,7 @@
     "guard": "node scripts/guard.mjs",
     "test:scripts": "node --test \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
     "test:scripts:coverage": "node -e \"require('fs').mkdirSync('scripts/coverage',{recursive:true})\" && node --test --experimental-test-coverage --test-coverage-include=\"scripts/**/*.mjs\" --test-coverage-include=\"examples/**/*.mjs\" --test-coverage-exclude=\"**/*.test.mjs\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=scripts/coverage/lcov.info \"scripts/*.test.mjs\" \"examples/**/*.test.mjs\"",
-    "verify": "pnpm guard && pnpm lint && pnpm knip && pnpm test:scripts && pnpm typecheck && pnpm test",
+    "verify": "pnpm guard && pnpm lint && pnpm knip && pnpm test:scripts && pnpm formal && pnpm typecheck && pnpm test",
     "ci:local": "node scripts/ci-local.mjs",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",

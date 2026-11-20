@@ -37,6 +37,7 @@ export const STEPS = [
   { job: "verify", name: "Lint", run: "pnpm lint" },
   { job: "verify", name: "Dead code", run: "pnpm knip" },
   { job: "verify", name: "Guard self-tests (with coverage)", run: "pnpm test:scripts:coverage" },
+  { job: "verify", name: "Formal models", run: "pnpm formal" },
   { job: "verify", name: "Typecheck", run: "pnpm typecheck" },
   { job: "verify", name: "Tests", run: "pnpm test:coverage" },
   { job: "verify", name: "Build", run: "pnpm build" },

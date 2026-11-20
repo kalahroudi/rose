@@ -35,6 +35,19 @@ jobs:
           cache: pnpm
       - name: Install (lockfile is authoritative; no lifecycle scripts beyond the allow-list)
         run: pnpm install --frozen-lockfile
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: TLA tools sha
+        id: tla-tools-sha
+        run: node --input-type=module -e "import('./scripts/formal.mjs').then(m=>console.log('sha='+m.TLA_TOOLS_SHA256))" >> "$GITHUB_OUTPUT"
+      - name: Cache TLA tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rose-formal
+          key: rose-formal-${{ steps.tla-tools-sha.outputs.sha }}
       - name: Guardrails (security invariants)
         run: pnpm guard
       - name: Lint
@@ -45,6 +58,8 @@ jobs:
         # File patterns, not directories: Node 22 does not accept a directory here.
         # Report only: no coverage thresholds. Writes scripts/coverage/lcov.info.
         run: pnpm test:scripts:coverage
+      - name: Formal models
+        run: pnpm formal
       - name: Typecheck
         run: pnpm typecheck
       - name: Tests (includes the tenant-isolation contract for every module)

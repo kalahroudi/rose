@@ -1,6 +1,6 @@
 # Formal harness
 
-`pnpm formal` runs `scripts/formal.mjs`. It checks every `formal/*/formal.json` flow with TLC, proves each mutant fails, and detects when modelled code changed. It is not yet run by `pnpm verify` or CI (T2 wires it).
+`pnpm formal` runs `scripts/formal.mjs`. It checks every `formal/*/formal.json` flow with TLC, proves each mutant fails, and detects when modelled code changed. It runs in `pnpm verify` (after `pnpm test:scripts`) and in the CI verify job.
 
 CLI options:
 
