@@ -178,8 +178,8 @@ export async function listJobs(db: D1Database, scope: string | null, f: ListQuer
   };
 }
 
-export async function retryJob(env: JobEnv, id: string): Promise<void> {
-  const r = await env.DB.prepare("UPDATE jobs SET status = 'queued', attempts = 0, error = NULL, run_after = ?, updated_at = ? WHERE id = ? AND status = 'failed' RETURNING type").bind(now(), now(), id).first<{ type: string }>();
+export async function retryJob(env: JobEnv, id: string, scope: string): Promise<void> {
+  const r = await env.DB.prepare("UPDATE jobs SET status = 'queued', attempts = 0, error = NULL, run_after = ?, updated_at = ? WHERE id = ? AND scope = ? AND status = 'failed' RETURNING type").bind(now(), now(), id, scope).first<{ type: string }>();
   if (!r) throw notFound();
   await notify(env, { id, type: r.type });
 }

@@ -157,7 +157,7 @@ const tenantOr404 = async (c: Ctx, id: string) => {
 app.get("/api/overview", async (c) => {
   const [tenants, users, domains, jobs, series] = await Promise.all([
     tenantCounts(c.env.DB), userCount(c.env.DB), domainCounts(c.env.DB),
-    listJobs(c.env.DB, null, { page: 1, pageSize: 5, q: "", sort: "", status: "failed" }), tenantSignupSeries(c.env.DB, 14),
+    listJobs(c.env.DB, SCOPE, { page: 1, pageSize: 5, q: "", sort: "", status: "failed" }), tenantSignupSeries(c.env.DB, 14),
   ]);
   const setup = await setupStatus(c.env);
   const attention: { id: string; severity: "high" | "medium"; title: string; detail: string; href: string }[] = [];
@@ -288,9 +288,9 @@ app.delete("/api/operators/:userId", async (c) => {
 
 // Audit & activity
 app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), ...(c.req.query("action") !== undefined && { action: c.req.query("action") }) })));
-app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, null, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
+app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, SCOPE, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
 app.post("/api/jobs/:id/retry", async (c) => {
-  await retryJob(c.env, c.req.param("id"));
+  await retryJob(c.env, c.req.param("id"), SCOPE);
   await audit(c, "job.retry", c.req.param("id"));
   return c.json({ ok: true });
 });
