@@ -533,15 +533,16 @@ runs each through the same claim.
 ### Listing and retry
 
 `listJobs` returns jobs for one scope, or every scope when the scope is `null`. The
-tenant route passes its own tenant id; the operator console passes `null`, which is why
-that sentence in the code says "operators only". The status filter is an allow-list. The
-response also carries `active`, the count of queued and running jobs for the scope, so
-the UI can show pending work without a second query.
+tenant route passes its own tenant id. The operator console passes `"platform"`, so
+Activity and the overview count only platform work. The status filter is an allow-list.
+The response also carries `active`, the count of queued and running jobs for the scope,
+so the UI can show pending work without a second query.
 
-`retryJob` resets only a `failed` job: `status = 'queued'`, `attempts = 0`, no error, a
-fresh `run_after`, returning the type so the right queue can be notified. Retrying a job
-that is not failed is 404, and the reset attempt count is exactly why the claim token is
-used for ownership.
+`retryJob` resets only a `failed` job in the given scope: `status = 'queued'`,
+`attempts = 0`, no error, a fresh `run_after`, returning the type so the right queue
+can be notified. A job that is not failed, or not in that scope, is 404 and unchanged.
+The operator console passes `"platform"`. The reset attempt count is exactly why the
+claim token is used for ownership.
 
 ## Known limits
 

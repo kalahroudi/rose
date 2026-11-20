@@ -150,7 +150,7 @@ describe("stale-run reclaim (adversarial)", () => {
     }
     expect((await row(job.id))?.status).toBe("failed");
     // Operator retries; a new run F claims it and is still working.
-    await retryJob(env, job.id);
+    await retryJob(env, job.id, "platform");
     const f = runJobMessages(env, s.handlers, msg(job.id));
     await s.entered(6);
     expect((await row(job.id))?.status).toBe("running");
