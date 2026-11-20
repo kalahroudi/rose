@@ -57,6 +57,7 @@ export function tenantJobHandlers(modules: ModuleDefinition[]): Record<string, J
     // data key), then removes its identity records. Idempotent, so retries are safe.
     "tenant.purge": idempotent(async (env, _job, payload) => {
       const tenantId = typeof payload.tenantId === "string" ? payload.tenantId : "";
+      if (!tenantId) throw conflict("This deletion task has no workspace id.");
       const row = await getTenant(env.DB, tenantId);
       if (row) {
         // Never purge early: the job and the hourly sweep both come through here, so this
