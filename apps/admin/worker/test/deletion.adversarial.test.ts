@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Adversarial tests for operator-side tenant deletion and cancellation.
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { createTenant } from "@rose/core/platform";
 import { describe, expect, it } from "vitest";
+import worker from "../index";
 
 const ORIGIN = "https://admin.rose.test";
 const call = (path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>
@@ -186,5 +187,183 @@ describe("operator tenant deletion (adversarial)", () => {
     });
     expect(r.status).toBe(403);
     expect((await row(t.id))!.status).toBe("active");
+  });
+
+  it("20 parallel delete requests create one purge job, one audit row and return the stored deleteAfter", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, () => call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })),
+    );
+    expect(responses.every((r) => r.status === 202)).toBe(true);
+    const bodies = await Promise.all(responses.map((r) => r.json<{ deleteAfter: number; jobId?: string; alreadyPending?: boolean }>()));
+    const stored = await row(t.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    for (const b of bodies) expect(b.deleteAfter).toBe(stored!.delete_after);
+    expect(bodies.filter((b) => b.jobId !== undefined && !b.alreadyPending)).toHaveLength(1);
+    expect(bodies.filter((b) => b.alreadyPending === true)).toHaveLength(19);
+    const queuedJobs = (await purgeJobs(t.id)).results.filter((j) => j.status === "queued");
+    expect(queuedJobs).toHaveLength(1);
+    const audits = await env.DB
+      .prepare("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.delete.requested' AND target = ?")
+      .bind(t.id)
+      .first<{ n: number }>();
+    expect(audits!.n).toBe(1);
+  });
+
+  it("50 rounds of parallel delete and cancel always end in a consistent status and purge-job count", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    for (let i = 0; i < 50; i++) {
+      if (i === 25) {
+        const cur = await row(t.id);
+        if (cur!.status === "pending_deletion") {
+          expect((await call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} })).status).toBe(200);
+        }
+        await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(t.id).run();
+      } else if (i % 2 === 1 && (await row(t.id))!.status !== "pending_deletion") {
+        expect((await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })).status).toBe(202);
+      }
+      const [first, second] =
+        i % 2 === 0
+          ? await Promise.all([
+              call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } }),
+              call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} }),
+            ])
+          : await Promise.all([
+              call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} }),
+              call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } }),
+            ]);
+      const delRes = i % 2 === 0 ? first : second;
+      const cancelRes = i % 2 === 0 ? second : first;
+      expect(delRes.status).toBe(202);
+      expect([200, 409]).toContain(cancelRes.status);
+      const state = await row(t.id);
+      const queued = (await purgeJobs(t.id)).results.filter((j) => j.status === "queued");
+      if (state!.status === "pending_deletion") {
+        expect(state!.delete_after).not.toBeNull();
+        expect(queued).toHaveLength(1);
+      } else {
+        expect(["active", "suspended"]).toContain(state!.status);
+        expect(state!.delete_after).toBeNull();
+        expect(queued).toHaveLength(0);
+      }
+    }
+  });
+
+  const withBatchGate = (db: D1Database) => {
+    let arrived!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => {
+      arrived = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const wrapped: D1Database = {
+      prepare: (query: string) => db.prepare(query),
+      batch: async <T = unknown>(statements: D1PreparedStatement[]) => {
+        arrived();
+        await gate;
+        return db.batch<T>(statements);
+      },
+      exec: (query: string) => db.exec(query),
+      dump: () => db.dump(),
+      withSession: (constraintOrBookmark?: string) => db.withSession(constraintOrBookmark),
+    };
+    return { db: wrapped, reached, release };
+  };
+
+  const fetchWithDb = async (db: D1Database, path: string, cookie: string, body: unknown) => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(ORIGIN + path, {
+        method: "POST",
+        headers: { Origin: ORIGIN, Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      { ...env, DB: db },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return res;
+  };
+
+  it("two concurrent cancels: a session and sign-in code created after the winner survive the loser", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    const delRes = await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } });
+    expect(delRes.status).toBe(202);
+    const { deleteAfter } = await delRes.json<{ deleteAfter: number }>();
+    const gated = withBatchGate(env.DB);
+    const loserPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    const winnerRes = await call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} });
+    expect(winnerRes.status).toBe(200);
+    expect(await winnerRes.json()).toEqual({ ok: true, status: "active" });
+    const ts = Date.now();
+    const userId = `us_${uniq()}`;
+    await env.DB.prepare("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)").bind(userId, `${userId}@tenant.test`, ts).run();
+    const sesId = `ses_${uniq()}`;
+    await env.DB
+      .prepare("INSERT INTO sessions (id_hash, public_id, user_id, scope, method, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, 'code', ?, ?, ?)")
+      .bind(`hash_${uniq()}`, sesId, userId, t.id, ts, ts, ts + 86_400_000)
+      .run();
+    const codeId = `lc_${uniq()}`;
+    await env.DB
+      .prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(codeId, `${userId}@tenant.test`, t.id, `ch_${uniq()}`, ts + 600_000, ts)
+      .run();
+    gated.release();
+    const loserRes = await loserPromise;
+    expect(loserRes.status).toBe(409);
+    expect(await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(t.id).first<{ public_id: string }>()).toEqual({ public_id: sesId });
+    expect(await env.DB.prepare("SELECT id FROM login_codes WHERE scope = ?").bind(t.id).first<{ id: string }>()).toEqual({ id: codeId });
+    const audits = await env.DB
+      .prepare("SELECT meta FROM platform_audit WHERE action = 'tenant.delete.cancelled' AND target = ?")
+      .bind(t.id)
+      .all<{ meta: string }>();
+    expect(audits.results).toHaveLength(1);
+    expect(JSON.parse(audits.results[0]!.meta)).toEqual({ slug: t.slug, deleteAfter, restoredStatus: "active" });
+  });
+
+  it("a losing cancel against a deleting tenant leaves its queued purge job intact", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    expect((await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })).status).toBe(202);
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toHaveLength(1);
+    const gated = withBatchGate(env.DB);
+    const loserPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    await env.DB.prepare("UPDATE tenants SET status = 'deleting' WHERE id = ?").bind(t.id).run();
+    gated.release();
+    const loserRes = await loserPromise;
+    expect(loserRes.status).toBe(409);
+    expect((await row(t.id))!.status).toBe("deleting");
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toHaveLength(1);
+  });
+
+  it("a delete/cancel race on a suspended tenant returns status suspended", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(t.id).run();
+    const gated = withBatchGate(env.DB);
+    const cancelPromise = fetchWithDb(gated.db, `/api/tenants/${t.id}/delete/cancel`, o.cookie, {});
+    await gated.reached;
+    const delRes = await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } });
+    expect(delRes.status).toBe(202);
+    const { deleteAfter } = await delRes.json<{ deleteAfter: number }>();
+    gated.release();
+    const cancelRes = await cancelPromise;
+    expect(cancelRes.status).toBe(200);
+    expect(await cancelRes.json()).toEqual({ ok: true, status: "suspended" });
+    expect(await row(t.id)).toEqual({ status: "suspended", delete_after: null });
+    expect((await purgeJobs(t.id)).results.filter((j) => j.status === "queued")).toEqual([]);
+    const auditRow = await env.DB
+      .prepare("SELECT meta FROM platform_audit WHERE action = 'tenant.delete.cancelled' AND target = ?")
+      .bind(t.id)
+      .first<{ meta: string }>();
+    expect(JSON.parse(auditRow!.meta)).toEqual({ slug: t.slug, deleteAfter, restoredStatus: "suspended" });
   });
 });
