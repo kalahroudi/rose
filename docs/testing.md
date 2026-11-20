@@ -4,6 +4,8 @@
 pnpm verify      # guard + lint + knip + script tests + formal + typecheck + every suite. Run before every commit and PR.
 ```
 
+`pnpm dev` needs only Node and pnpm. `pnpm verify` also needs Java 25 (Temurin) once a formal model exists under `formal/`, because `pnpm verify` runs `pnpm formal`. Install it with mise (`mise use java@temurin-25`) or put any JDK 25 on `PATH` or `JAVA_HOME`; see [formal.md](formal.md).
+
 ## Lint
 
 ```sh
