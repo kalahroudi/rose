@@ -360,7 +360,8 @@ export function createTenantApp(options: TenantAppOptions) {
     const { role } = await readJson(c, z.object({ role: roleSchema }));
     const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
     if (role === "owner" || target?.role === "owner") await freshForOwnerChange(c, actor);
-    await changeMemberRole(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), role);
+    if (!target) throw notFound();
+    await changeMemberRole(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), role, target.role);
     await audit(c, "member.role", c.req.param("userId"), { role });
     return c.json({ ok: true });
   });
@@ -368,7 +369,8 @@ export function createTenantApp(options: TenantAppOptions) {
     const actor = need(c, "members:manage");
     const target = await getMembership(c.env.DB, c.get("tenant").id, c.req.param("userId"));
     if (target?.role === "owner") await freshForOwnerChange(c, actor);
-    await removeMember(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"));
+    if (!target) throw notFound();
+    await removeMember(c.env.DB, c.get("tenant").id, actor.role, c.req.param("userId"), target.role);
     await audit(c, "member.remove", c.req.param("userId"));
     return c.json({ ok: true });
   });

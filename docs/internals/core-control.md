@@ -13,13 +13,14 @@ the caller before they are enqueued; this area stores the sealed string and pass
 the handler without inspecting it.
 
 Most caps and claims in this area come from one conditional statement, so a check and its
-write cannot interleave. Cloudflare runs many isolates against one D1 database, and a
-check followed by a separate write is a race. That is why the login-code caps, the
-workspace cap, the rate-limit counter and the job claim are conditional
-`INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE` and conditional
-`UPDATE ... WHERE` / `DELETE ... WHERE` statements rather than read-then-write code. Some
-paths still read and then write in separate statements: the deletion request and cancel.
-The Known limits section lists the races they leave open.
+write cannot interleave. Cloudflare runs many isolates against one D1 database, and an
+unguarded read followed by a separate write is a race. That is why the login-code caps,
+the workspace cap, the rate-limit counter, the job claim and the last-owner and role
+guards use conditional `INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE`
+and conditional `UPDATE ... WHERE` / `DELETE ... WHERE` statements (with compare-and-set
+on the observed state where a preceding read authorises the write). Some paths still read
+and then write without guarding the write: the `last_seen_at` refresh, the deletion
+request and cancel. The Known limits section lists the races they leave open.
 
 ## `audit.ts`
 
@@ -64,20 +65,26 @@ rules that are not expressible as a database constraint:
 - a workspace keeps at least one owner, so demoting or removing the last owner is a
   conflict, not a silent lockout.
 
-The last-owner guard is enforced inside a single conditional `UPDATE` or `DELETE`
-(`role != 'owner' OR (SELECT COUNT(*) FROM ... WHERE role = 'owner') > 1`) rather than a
-separate count-then-write, so two concurrent owner demotions or removals serialized on D1
-cannot both observe two owners and leave a workspace with none. When the guarded statement
-changes zero rows, the function throws `conflict`.
+Both functions read the target's role first to authorise the actor (and the member routes
+in `tenant-app.ts` pass the role they used for their `freshForOwnerChange` check as
+`expectedRole`), then guard every write—demotions, promotions and removals—with
+`AND role = ?` alongside the last-owner predicate
+(`role != 'owner' OR (SELECT COUNT(*) FROM ... WHERE role = 'owner') > 1`) on demotions
+and removals. That prevents both a concurrent last-owner lockout and a stale-role bypass
+such as an admin removing or demoting a member who was just promoted to owner. When the
+guarded statement changes zero rows, the function reads the row again: if it is gone it
+throws `notFound()`, if the role changed it throws `conflict` asking the caller to reload,
+and otherwise it throws the last-owner `conflict`.
 
 `removeMember` deletes the membership, that user's sessions in that tenant and that
 user's passkeys in that tenant in one batch, guarding the session and passkey deletes with
 `NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?)` so a
-refused removal leaves the staying owner's sessions and passkeys intact while a committed
+refused removal leaves the staying member's sessions and passkeys intact while a committed
 removal ends access on the next request rather than at the next sign-in. Covered by
-`packages/core/test/control-users.test.ts` (including concurrent cross-removal and
-cross-demotion races) and "only owners can invite owners or change owner access; last
-owner is protected" (`packages/core/test/auth.test.ts`).
+`packages/core/test/control-users.test.ts` (including concurrent cross-removal,
+cross-demotion, double-removal, admin-removal-vs-promotion and promotion-vs-removal races)
+and "only owners can invite owners or change owner access; last owner is protected"
+(`packages/core/test/auth.test.ts`).
 
 ### Invitations
 
@@ -103,13 +110,16 @@ invitation in one workspace does not admit (or audit) the person in another"
 sessions, passkeys and challenges use that literal like a tenant id, so the same session
 code serves both realms without
 sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
-NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` uses the
-same single conditional `DELETE` on `operators` and guards the platform session and
-passkey deletes in the same batch with `NOT EXISTS (SELECT 1 FROM operators WHERE user_id
-= ?)`, so concurrent removal of the last two platform owners always leaves one owner with
-intact sessions and passkeys. Covered by `packages/core/test/control-users.test.ts` and
-"only owners manage operators and connections; the last owner can not be removed"
-(`apps/admin/worker/test/admin.test.ts`).
+NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` reads
+the operator's role first, guards the conditional `DELETE` on `operators` with
+`AND role = ?` and the last-owner predicate, and guards the platform session and passkey
+deletes in the same batch with `NOT EXISTS (SELECT 1 FROM operators WHERE user_id = ?)`.
+On zero changed rows it reads the row again to distinguish `notFound()`, a concurrent
+role change (`conflict`), and the last-owner `conflict`, so concurrent removal of the
+last two platform owners always leaves one owner with intact sessions and passkeys and a
+double removal returns `notFound()` to the loser. Covered by
+`packages/core/test/control-users.test.ts` and "only owners manage operators and
+connections; the last owner can not be removed" (`apps/admin/worker/test/admin.test.ts`).
 
 ## `tenants.ts`
 

@@ -82,35 +82,55 @@ export async function listMembers(db: D1Database, tenantId: string, f: ListQuery
   return { items: rows!.results as MemberItem[], total: (count!.results[0] as { n: number }).n, page: f.page, pageSize: f.pageSize };
 }
 
-export async function changeMemberRole(db: D1Database, tenantId: string, actorRole: Role, userId: string, role: Role): Promise<void> {
-  const cur = await getMembership(db, tenantId, userId);
-  if (!cur) throw notFound();
-  if ((cur.role === "owner" || role === "owner") && actorRole !== "owner") throw forbidden("Only an owner can change owner access.");
-  if (role !== "owner") {
-    const r = await db
-      .prepare(
-        "UPDATE memberships SET role = ? WHERE tenant_id = ? AND user_id = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM memberships WHERE tenant_id = ? AND role = 'owner') > 1)",
-      )
-      .bind(role, tenantId, userId, tenantId)
-      .run();
-    if (r.meta.changes === 0) {
-      throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
-    }
-    return;
+export async function changeMemberRole(
+  db: D1Database,
+  tenantId: string,
+  actorRole: Role,
+  userId: string,
+  role: Role,
+  expectedRole?: Role,
+): Promise<void> {
+  const observedRole = expectedRole ?? (await getMembership(db, tenantId, userId))?.role;
+  if (!observedRole) throw notFound();
+  if ((observedRole === "owner" || role === "owner") && actorRole !== "owner") {
+    throw forbidden("Only an owner can change owner access.");
   }
-  await db.prepare("UPDATE memberships SET role = ? WHERE tenant_id = ? AND user_id = ?").bind(role, tenantId, userId).run();
+  const r =
+    role !== "owner"
+      ? await db
+          .prepare(
+            "UPDATE memberships SET role = ? WHERE tenant_id = ? AND user_id = ? AND role = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM memberships WHERE tenant_id = ? AND role = 'owner') > 1)",
+          )
+          .bind(role, tenantId, userId, observedRole, tenantId)
+          .run()
+      : await db
+          .prepare("UPDATE memberships SET role = ? WHERE tenant_id = ? AND user_id = ? AND role = ?")
+          .bind(role, tenantId, userId, observedRole)
+          .run();
+  if (r.meta.changes === 0) {
+    const after = await getMembership(db, tenantId, userId);
+    if (!after) throw notFound();
+    if (after.role !== observedRole) throw conflict("This member's role changed. Reload and try again.");
+    throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
+  }
 }
 
-export async function removeMember(db: D1Database, tenantId: string, actorRole: Role, userId: string): Promise<void> {
-  const cur = await getMembership(db, tenantId, userId);
-  if (!cur) throw notFound();
-  if (cur.role === "owner" && actorRole !== "owner") throw forbidden("Only an owner can remove an owner.");
+export async function removeMember(
+  db: D1Database,
+  tenantId: string,
+  actorRole: Role,
+  userId: string,
+  expectedRole?: Role,
+): Promise<void> {
+  const observedRole = expectedRole ?? (await getMembership(db, tenantId, userId))?.role;
+  if (!observedRole) throw notFound();
+  if (observedRole === "owner" && actorRole !== "owner") throw forbidden("Only an owner can remove an owner.");
   const [deleted] = await db.batch([
     db
       .prepare(
-        "DELETE FROM memberships WHERE tenant_id = ? AND user_id = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM memberships WHERE tenant_id = ? AND role = 'owner') > 1)",
+        "DELETE FROM memberships WHERE tenant_id = ? AND user_id = ? AND role = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM memberships WHERE tenant_id = ? AND role = 'owner') > 1)",
       )
-      .bind(tenantId, userId, tenantId),
+      .bind(tenantId, userId, observedRole, tenantId),
     db
       .prepare(
         "DELETE FROM sessions WHERE scope = ? AND user_id = ? AND NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?)",
@@ -123,6 +143,9 @@ export async function removeMember(db: D1Database, tenantId: string, actorRole: 
       .bind(tenantId, userId, tenantId, userId),
   ]);
   if (!deleted || deleted.meta.changes === 0) {
+    const after = await getMembership(db, tenantId, userId);
+    if (!after) throw notFound();
+    if (after.role !== observedRole) throw conflict("This member's role changed. Reload and try again.");
     throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
   }
 }
@@ -239,9 +262,9 @@ export async function removeOperator(db: D1Database, userId: string): Promise<vo
   const [deleted] = await db.batch([
     db
       .prepare(
-        "DELETE FROM operators WHERE user_id = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM operators WHERE role = 'owner') > 1)",
+        "DELETE FROM operators WHERE user_id = ? AND role = ? AND (role != 'owner' OR (SELECT COUNT(*) FROM operators WHERE role = 'owner') > 1)",
       )
-      .bind(userId),
+      .bind(userId, cur.role),
     db
       .prepare(
         "DELETE FROM sessions WHERE scope = 'platform' AND user_id = ? AND NOT EXISTS (SELECT 1 FROM operators WHERE user_id = ?)",
@@ -254,6 +277,9 @@ export async function removeOperator(db: D1Database, userId: string): Promise<vo
       .bind(userId, userId),
   ]);
   if (!deleted || deleted.meta.changes === 0) {
+    const after = await getOperator(db, userId);
+    if (!after) throw notFound();
+    if (after.role !== cur.role) throw conflict("This operator's role changed. Reload and try again.");
     throw conflict("The platform needs at least one owner.");
   }
 }
