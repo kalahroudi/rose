@@ -30,6 +30,8 @@ No Cloudflare account or configuration needed. Then open:
 
 Sign-in codes are shown on screen in development.
 
+`pnpm dev` needs only Node and pnpm; `pnpm verify` also needs Java 25 (Temurin) once a formal model exists under `formal/`: install it with mise (`mise use java@temurin-25`) or any JDK 25 on `PATH` / `JAVA_HOME`; see [docs/formal.md](docs/formal.md).
+
 ## What you get
 
 **Isolation by construction**

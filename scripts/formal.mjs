@@ -13,7 +13,7 @@ export const TLA_TOOLS_URL = `https://github.com/tlaplus/tlaplus/releases/downlo
 export const TLA_TOOLS_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88";
 export const DEFAULT_TIMEOUT_MS = 120_000;
 export const MAX_TIMEOUT_SECONDS = 3600;
-export const MISE_TIMEOUT_MS = 5_000;
+export const PROBE_TIMEOUT_MS = 5_000;
 export const DOWNLOAD_TIMEOUT_MS = 60_000;
 export const MAX_JAR_BYTES = 32 * 1024 * 1024;
 export const MUTANTS = "MUTANTS";
@@ -68,25 +68,30 @@ export const defaultCacheDir = () => process.env.ROSE_FORMAL_CACHE ?? join(homed
 
 export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 
+function runsJava(candidate, spawnImpl, env) {
+  const probe = spawnImpl(candidate, ["-version"], { timeout: PROBE_TIMEOUT_MS, encoding: "utf8", env });
+  return !probe.error && probe.status === 0;
+}
+
 export function findJava({ env = process.env, existsSync: exists = existsSync, spawnSync: spawnImpl = spawnSync } = {}) {
-  if (env.JAVA && exists(env.JAVA)) return env.JAVA;
+  if (env.JAVA && exists(env.JAVA) && runsJava(env.JAVA, spawnImpl, env)) return env.JAVA;
   if (env.JAVA_HOME) {
     const jh = join(env.JAVA_HOME, "bin", "java");
-    if (exists(jh)) return jh;
+    if (exists(jh) && runsJava(jh, spawnImpl, env)) return jh;
   }
-  const mise = spawnImpl("mise", ["where", "java@temurin-25"], { encoding: "utf8", env, timeout: MISE_TIMEOUT_MS });
+  const mise = spawnImpl("mise", ["where", "java@temurin-25"], { encoding: "utf8", env, timeout: PROBE_TIMEOUT_MS });
   if (!mise.error && mise.status === 0 && mise.stdout) {
     const line = mise.stdout.trim().split(/\r?\n/)[0];
     if (line) {
       const mj = join(line, "bin", "java");
-      if (exists(mj)) return mj;
+      if (exists(mj) && runsJava(mj, spawnImpl, env)) return mj;
     }
   }
   if (env.PATH) {
     for (const dir of env.PATH.split(delimiter)) {
       if (!dir) continue;
       const pj = join(dir, "java");
-      if (exists(pj)) return pj;
+      if (exists(pj) && runsJava(pj, spawnImpl, env)) return pj;
     }
   }
   return null;
@@ -774,7 +779,7 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
 
   const java = (opts.findJava ?? findJava)();
   if (!java) {
-    err("✗ formal: no Java found. Set $JAVA, set $JAVA_HOME, install temurin-25 via mise, or put java on PATH.");
+    err("✗ formal: no Java found. Set $JAVA, set $JAVA_HOME, install temurin-25 via mise, or put java on PATH. A java that does not run (for example the macOS /usr/bin/java stub without a JDK) does not count.");
     return { code: 1, checks: [], errors: ["no Java found"] };
   }
 

@@ -63,11 +63,12 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 | Command | Use |
 |---|---|
 | `pnpm dev` | Run everything locally (console :5173, app :5174, `<slug>.localhost:5174`) |
-| `pnpm verify` | **Definition of "works"**: guard + lint + knip + script tests + typecheck + all tests |
+| `pnpm verify` | **Definition of "works"**: guard + lint + knip + script tests + formal + typecheck + all tests |
 | `pnpm guard` | Static guardrails only; also runs automatically after each edit |
 | `pnpm lint` | Lint (oxlint); also part of verify |
 | `pnpm knip` | Unused files, exports and dependencies; part of verify |
 | `pnpm test` / `pnpm typecheck` | Individual steps |
+| `pnpm formal` | Run the formal (TLC) models of the tenant-isolation rules; part of `pnpm verify` and CI |
 | `pnpm ci:local` | Run both CI jobs (`verify` + `pentest`) locally, at HEAD, in a throwaway worktree |
 | `pnpm --filter @rose/app test` | Just the tenant app's tests |
 
@@ -114,6 +115,7 @@ core included, but it needs the owner's agreement first for files that define th
 ## Definition of done
 
 - [ ] `pnpm verify` is green.
+- [ ] Never run `pnpm formal --resync` to get green.
 - [ ] New routes have permissions, validation (zod), audit entries; lists are paginated.
 - [ ] Sensitive fields are encrypted; nothing secret in logs, audit metadata or job payloads.
 - [ ] Tests exist next to the module and exercise roles and failure cases.
