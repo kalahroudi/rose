@@ -17,9 +17,9 @@ write cannot interleave. Cloudflare runs many isolates against one D1 database, 
 check followed by a separate write is a race. That is why the login-code caps, the
 workspace cap, the rate-limit counter and the job claim are conditional
 `INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE` and conditional
-`UPDATE ... WHERE` statements rather than read-then-write code. Some paths still read and
-then write in separate statements: the deletion request and cancel, and the last-owner
-checks. The Known limits section lists the races they leave open.
+`UPDATE ... WHERE` / `DELETE ... WHERE` statements rather than read-then-write code. Some
+paths still read and then write in separate statements: the deletion request and cancel.
+The Known limits section lists the races they leave open.
 
 ## `audit.ts`
 
@@ -64,12 +64,20 @@ rules that are not expressible as a database constraint:
 - a workspace keeps at least one owner, so demoting or removing the last owner is a
   conflict, not a silent lockout.
 
+The last-owner guard is enforced inside a single conditional `UPDATE` or `DELETE`
+(`role != 'owner' OR (SELECT COUNT(*) FROM ... WHERE role = 'owner') > 1`) rather than a
+separate count-then-write, so two concurrent owner demotions or removals serialized on D1
+cannot both observe two owners and leave a workspace with none. When the guarded statement
+changes zero rows, the function throws `conflict`.
+
 `removeMember` deletes the membership, that user's sessions in that tenant and that
-user's passkeys in that tenant in one batch. Removing someone therefore ends their
-access on the next request rather than at their next sign-in. The session and passkey
-deletion is not covered by a test. The owner and last-owner rules are covered by "only
-owners can invite owners or change owner access; last owner is protected"
-(`packages/core/test/auth.test.ts`).
+user's passkeys in that tenant in one batch, guarding the session and passkey deletes with
+`NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?)` so a
+refused removal leaves the staying owner's sessions and passkeys intact while a committed
+removal ends access on the next request rather than at the next sign-in. Covered by
+`packages/core/test/control-users.test.ts` (including concurrent cross-removal and
+cross-demotion races) and "only owners can invite owners or change owner access; last
+owner is protected" (`packages/core/test/auth.test.ts`).
 
 ### Invitations
 
@@ -95,10 +103,11 @@ invitation in one workspace does not admit (or audit) the person in another"
 sessions, passkeys and challenges use that literal like a tenant id, so the same session
 code serves both realms without
 sharing rows. `addOperator` creates the user if needed and inserts with `ON CONFLICT DO
-NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` refuses
-to remove the last platform owner and, in one batch, deletes the operator row, the
-platform session rows and the platform passkey rows for that user. The session and
-passkey deletion is not covered by a test. The owner and last-owner rules are covered by
+NOTHING`; a second add is a conflict, not a silent role change. `removeOperator` uses the
+same single conditional `DELETE` on `operators` and guards the platform session and
+passkey deletes in the same batch with `NOT EXISTS (SELECT 1 FROM operators WHERE user_id
+= ?)`, so concurrent removal of the last two platform owners always leaves one owner with
+intact sessions and passkeys. Covered by `packages/core/test/control-users.test.ts` and
 "only owners manage operators and connections; the last owner can not be removed"
 (`apps/admin/worker/test/admin.test.ts`).
 
@@ -545,12 +554,6 @@ used for ownership.
 
 ## Known limits
 
-- **Last-owner checks are not atomic.** `changeMemberRole`, `removeMember` and
-  `removeOperator` count owners and then write. No database constraint enforces either
-  rule. Two concurrent demotions of the last two owners can both pass the count and leave
-  the workspace (or the platform) with no owner. The race needs two simultaneous owner
-  actions and is not reachable by one person through the UI, but the inline comment "a
-  workspace always keeps at least one owner" is stronger than the code guarantees.
 - **The `last_seen_at` refresh is check-then-write.** `readSession` reads the row, then
   writes a fresh `last_seen_at` in a separate statement when the row is older than
   `TOUCH_INTERVAL`. Parallel requests that read the same old value each pass the check and
@@ -591,9 +594,6 @@ used for ownership.
 
 ## Corrections to inline comments
 
-- `changeMemberRole`'s "a workspace always keeps at least one owner" and
-  `removeOperator`'s "The platform needs at least one owner" describe an intention that
-  the check-then-write implementation does not hold under concurrency; see Known limits.
 - `requestTenantDeletion`'s "the tenant stops serving" is true for authenticated access
   at once and for host resolution only after the cache TTL on other isolates; see Known
   limits.
