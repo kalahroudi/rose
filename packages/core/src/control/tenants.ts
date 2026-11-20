@@ -276,7 +276,12 @@ export async function deleteTenantRecords(db: D1Database, id: string): Promise<v
   ]);
 }
 
-export async function recoverStuckPurges(db: D1Database): Promise<number> {
+export interface RecoveredPurgeJob {
+  id: string;
+  tenantId: string;
+}
+
+export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurgeJob[]> {
   const t = now();
   const r = await db
     .prepare(
@@ -288,11 +293,13 @@ export async function recoverStuckPurges(db: D1Database): Promise<number> {
          AND NOT EXISTS (
            SELECT 1 FROM jobs j
            WHERE j.type = 'tenant.purge' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.tenantId') = t.id
-         )`,
+         )
+       LIMIT 100
+       RETURNING id, json_extract(payload, '$.tenantId') AS tenant_id`,
     )
     .bind(t, t, t, t)
-    .run();
-  return r.meta.changes;
+    .all<{ id: string; tenant_id: string }>();
+  return r.results.map((row) => ({ id: row.id, tenantId: row.tenant_id }));
 }
 
 export async function tenantCounts(db: D1Database): Promise<Record<TenantStatus | "total", number>> {

@@ -111,7 +111,11 @@ Queuing a job also sends its id to a Cloudflare Queue (`rose-app-jobs` or
 claims the job with an atomic compare-and-set, runs it, and schedules retries itself with
 a delayed message and exponential backoff (five attempts). The job row is the source of
 truth: a lost message costs time, not the job, because an hourly cron in each worker
-sweeps for due jobs and for jobs left running by a worker that died. The operator worker
+sweeps for due jobs and for jobs left running by a worker that died. The tenant worker's
+sweep also recovers lost `tenant.purge` jobs: up to 100 per run, it re-enqueues a purge
+for every tenant that is already `deleting` or whose `pending_deletion` grace period has
+ended, whenever no queued or running purge job exists, and records one
+`tenant.purge_recovered` platform audit entry per recovered tenant. The operator worker
 can send to the tenant worker's queue, but a message only ever names a job id.
 
 | Job | Runs in | Does |

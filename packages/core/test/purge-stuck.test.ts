@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createTestTenant } from "../src/testing";
 import { tenantJobHandlers, tenantTick } from "../src";
 import { runDueJobs } from "../src/control/jobs";
-import { cancelTenantDeletion, requestTenantDeletion } from "../src/control/tenants";
+import { cancelTenantDeletion, recoverStuckPurges, requestTenantDeletion } from "../src/control/tenants";
 import { modules } from "./worker";
 
 const tenantRow = (id: string) => env.DB.prepare("SELECT status, delete_after FROM tenants WHERE id = ?").bind(id).first<{ status: string; delete_after: number | null }>();
@@ -16,10 +16,10 @@ const storageAlive = async (id: string) => {
   return (await stub.exec(id, { sql: "SELECT COUNT(*) AS n FROM notes" })).rows[0]!.n as number;
 };
 
-const failingDb: D1Database = {
+const failingRecordsDb: D1Database = {
   prepare: (query: string) => env.DB.prepare(query),
   batch: async <_T = unknown>() => {
-    throw new Error("simulated tenant storage failure");
+    throw new Error("simulated deleteTenantRecords failure");
   },
   exec: (query: string) => env.DB.exec(query),
   dump: () => env.DB.dump(),
@@ -35,17 +35,17 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
     await env.DB.prepare("UPDATE jobs SET run_after = 0, attempts = 4 WHERE id = ?").bind(job!.id).run();
 
-    await runDueJobs({ ...env, DB: failingDb }, tenantJobHandlers(modules));
+    await runDueJobs({ ...env, DB: failingRecordsDb }, tenantJobHandlers(modules));
 
     expect((await tenantRow(a.id))!.status).toBe("deleting");
     expect(
       await env.DB.prepare("SELECT status, attempts, payload FROM jobs WHERE id = ?").bind(job!.id).first<{ status: string; attempts: number; payload: string }>(),
     ).toMatchObject({ status: "failed", attempts: 5, payload: "{}" });
+    expect(await storageAlive(a.id)).toBe(0);
 
     await tenantTick(env, modules);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).toBeNull();
     expect(await env.DB.prepare("SELECT 1 FROM memberships WHERE tenant_id = ?").bind(a.id).first()).toBeNull();
-    expect(await storageAlive(a.id)).toBe(0);
   });
 
   it("a tenant whose purge job row was lost is recovered by the sweep", async () => {
@@ -55,7 +55,11 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
     await env.DB.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND json_extract(payload, '$.tenantId') = ?").bind(a.id).run();
 
-    await tenantTick(env, modules);
+    const sent: { jobId: string }[] = [];
+    const qenv = { ...env, APP_JOBS: { send: (body: { jobId: string }) => { sent.push(body); return Promise.resolve(); } } };
+    await tenantTick(qenv, modules);
+
+    expect(sent).toHaveLength(1);
     expect(await env.DB.prepare("SELECT 1 FROM tenants WHERE id = ?").bind(a.id).first()).toBeNull();
   });
 
@@ -72,7 +76,9 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
   it("two ticks enqueue only one job and still honor the grace period", async () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/m/notes", { body: { title: "doomed" } });
-    await env.DB.prepare("UPDATE tenants SET status = 'deleting', delete_after = ? WHERE id = ?").bind(Date.now() + 3_600_000, a.id).run();
+    await requestTenantDeletion(env.DB, a.id);
+    await env.DB.prepare("UPDATE tenants SET status = 'deleting', delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
+    await env.DB.prepare("UPDATE jobs SET run_after = ? WHERE type = 'tenant.purge' AND json_extract(payload, '$.tenantId') = ?").bind(Date.now() + 60_000, a.id).run();
 
     await tenantTick(env, modules);
     await tenantTick(env, modules);
@@ -80,5 +86,36 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(await purgeJobs(a.id)).toEqual({ n: 1 });
     expect((await tenantRow(a.id))!.status).toBe("deleting");
     expect(await storageAlive(a.id)).toBe(1);
+  });
+
+  it("a tenant still inside its grace period whose job row was lost gets no new job", async () => {
+    const a = await createTestTenant(env, SELF);
+    await requestTenantDeletion(env.DB, a.id);
+    await env.DB.prepare("DELETE FROM jobs WHERE type = 'tenant.purge' AND json_extract(payload, '$.tenantId') = ?").bind(a.id).run();
+
+    await tenantTick(env, modules);
+    expect(await purgeJobs(a.id)).toEqual({ n: 0 });
+    expect((await tenantRow(a.id))!.status).toBe("pending_deletion");
+  });
+
+  it("the sweep recovers at most 100 stuck tenants and never duplicates a job", async () => {
+    const t = Date.now();
+    await env.DB
+      .prepare(
+        `WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 101)
+         INSERT INTO tenants (id, slug, name, status, plan, created_at, updated_at)
+         SELECT 'tn_stuck_' || n, 'stuck' || n, 'Stuck ' || n, 'deleting', 'free', ?, ?
+         FROM c`,
+      )
+      .bind(t, t)
+      .run();
+
+    const first = await recoverStuckPurges(env.DB);
+    const second = await recoverStuckPurges(env.DB);
+
+    expect(first).toHaveLength(100);
+    expect(second).toHaveLength(1);
+    expect(first.every((j) => j.id.startsWith("job_") && j.tenantId.startsWith("tn_stuck_"))).toBe(true);
+    expect(new Set([...first, ...second].map((j) => j.tenantId)).size).toBe(101);
   });
 });
