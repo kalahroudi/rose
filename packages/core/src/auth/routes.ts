@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { issueLoginCode, verifyLoginCode } from "../control/otp";
+import { formatKey, issueLoginCode, normalizeKey, verifyLoginCode, verifyLoginKey } from "../control/otp";
 import { assertFreshSession, createSession, listSessions, readSession, revokeSessionById, revokeSessionToken, type SessionInfo } from "../control/sessions";
 import { ensureUser, getUserByEmail, normalizeEmail, setUserName, touchLogin, type UserRow } from "../control/users";
 import { sendEmail } from "../email";
@@ -38,24 +38,24 @@ export async function startSession(c: Context, realm: AuthRealm, user: UserRow, 
   await realm.audit({ actor: user.email, action: `auth.login.${method}`, ip: clientIp(c) });
 }
 
-export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean> }): Promise<{ ok: true; devCode?: string }> {
+export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean> }): Promise<{ ok: true; devCode?: string; devKey?: string }> {
   const env = c.env as CoreEnv;
   const requester = requesterKey(clientIp(c));
   await rateLimit(c, `code-ip:${requester}`);
   await rateLimit(c, `code:${opts.scope}:${opts.email}:${requester}`);
-  const work = async (): Promise<string | undefined> => {
+  const link = `${new URL(c.req.url).origin}/#k=`;
+  const work = async (): Promise<{ code: string; key: string } | undefined> => {
     if (!(await opts.eligible())) return undefined;
-    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, opts.scope, opts.email, requester);
-    await sendEmail(env, {
-      to: opts.email,
-      subject: `${code} is your ${opts.label} sign-in code`,
-      text: `Your sign-in code for ${opts.label} is ${code}\n\nIt expires in 10 minutes. If you did not request it, you can ignore this email.`,
-    });
-    return code;
+    const issued = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, opts.scope, opts.email, requester);
+    if (!issued) return undefined;
+    const text = `Your sign-in code for ${opts.label} is ${issued.code}\n\nTo sign in on another device, use this long code: ${formatKey(issued.key)}\n\nOr open ${link}${issued.key}\n\nIt expires in 10 minutes. If you did not request it, you can ignore this email.`;
+    await sendEmail(env, { to: opts.email, subject: `${issued.code} is your ${opts.label} sign-in code`, text });
+    return issued;
   };
   if (isDev(env)) {
-    const devCode = await work();
-    return devCode === undefined ? { ok: true } : { ok: true, devCode };
+    const issued = await work();
+    if (issued === undefined) return { ok: true };
+    return { ok: true, devCode: issued.code, devKey: issued.key };
   }
   c.executionCtx.waitUntil(work().catch((err) => console.error(JSON.stringify({ level: "error", at: "requestCode", error: String(err) }))));
   return { ok: true };
@@ -69,6 +69,14 @@ export async function checkCode(c: Context, scope: string, email: string, code: 
   if (!(await verifyLoginCode(env.DB, env.ROSE_MASTER_KEY, scope, email, code, requester))) throw unauthorized(BAD_CODE);
 }
 
+export async function checkLink(c: Context, scope: string, email: string, key: string): Promise<void> {
+  const env = c.env as CoreEnv;
+  const requester = requesterKey(clientIp(c));
+  await rateLimit(c, `verify-ip:${requester}`);
+  await rateLimit(c, `verify:${scope}:${email}:${requester}`);
+  if (!(await verifyLoginKey(env.DB, env.ROSE_MASTER_KEY, scope, email, key))) throw unauthorized(BAD_CODE);
+}
+
 async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Promise<boolean> {
   if (!realm.enforcePasskey) return false;
   const user = await getUserByEmail(db, email);
@@ -77,6 +85,7 @@ async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Pr
 
 const emailBody = z.object({ email: z.string().max(254) });
 const verifyBody = z.object({ email: z.string().max(254), code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.") });
+const linkBody = z.object({ email: z.string().max(254), key: z.string().trim().min(1).max(60) });
 
 export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   const app = new Hono<Env>();
@@ -106,6 +115,18 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     const user = await ensureUser(c.env.DB, email);
     if (!(await realm.admit(user))) throw unauthorized(BAD_CODE);
     await startSession(c, realm, user, "code");
+    return c.json({ ok: true });
+  });
+
+  app.post("/code/link", async (c) => {
+    const realm = await getRealm(c);
+    const body = await readJson(c, linkBody);
+    const email = normalizeEmail(body.email);
+    await checkLink(c, realm.scope, email, normalizeKey(body.key));
+    if (await codeDisabled(c.env.DB, realm, email)) throw unauthorized(BAD_CODE);
+    const user = await ensureUser(c.env.DB, email);
+    if (!(await realm.admit(user))) throw unauthorized(BAD_CODE);
+    await startSession(c, realm, user, "link");
     return c.json({ ok: true });
   });
 

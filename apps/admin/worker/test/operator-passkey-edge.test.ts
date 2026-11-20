@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { ageOut } from "../../../../packages/core/test/otp-helpers";
 
 const ORIGIN = "https://admin.rose.test";
 const EMAIL = "root@example.com";
@@ -30,6 +31,7 @@ describe("operator passkey enforcement: edge cases", () => {
     expect(await codeFor(EMAIL)).toBeUndefined();
 
     await clearPasskeys();
+    await ageOut("platform");
     const again = await codeFor(EMAIL);
     expect(again).toBeTruthy();
     expect((await post("/api/auth/code/verify", { email: EMAIL, code: again })).status).toBe(200);
