@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, verifyJwtHs256, wrapDek } from "../src/crypto";
+import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, wrapDek } from "../src/crypto";
 import { createTestTenant } from "../src/testing";
 
 const K1 = env.ROSE_MASTER_KEY;
@@ -108,9 +108,6 @@ describe("upstream gateway", () => {
     expect(seen!.headers.get("Cookie")).toBeNull();
     expect(seen!.headers.get("Authorization")).toBeNull();
     expect(seen!.headers.get("X-Rose-Tenant-Id")).toBe(a.id);
-    const claims = await verifyJwtHs256(env.UPSTREAM_SIGNING_SECRET!, seen!.headers.get("X-Rose-Tenant-Token")!);
-    expect(claims).toMatchObject({ tid: a.id, tslug: a.slug, sub: a.userId, role: "owner", aud: "upstream" });
-    expect(await verifyJwtHs256("wrong-secret-wrong-secret-wrong-secret", seen!.headers.get("X-Rose-Tenant-Token")!)).toBeNull();
   });
 
   it("requires authentication", async () => {

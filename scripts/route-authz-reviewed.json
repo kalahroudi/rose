@@ -1,10 +1,10 @@
 {
   "./http/base:requestContext": {
-    "packages/core/src/http/base.ts": "bacbd19526a0862245a3b458538d7933",
+    "packages/core/src/http/base.ts": "d582a7fe7db7a195a1808bfa3892e32e",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/control/rate-limit.ts": "07d2887cea0cb9621a3626efcdd3c5c5",
-    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",
+    "packages/core/src/crypto.ts": "824f2c32818210303f7d6784fa041840",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
@@ -15,11 +15,11 @@
     "cloudflare:workers": "builtin"
   },
   "./http/base:csrfGuard": {
-    "packages/core/src/http/base.ts": "bacbd19526a0862245a3b458538d7933",
+    "packages/core/src/http/base.ts": "d582a7fe7db7a195a1808bfa3892e32e",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/control/rate-limit.ts": "07d2887cea0cb9621a3626efcdd3c5c5",
-    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",
+    "packages/core/src/crypto.ts": "824f2c32818210303f7d6784fa041840",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
     "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
@@ -39,7 +39,7 @@
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
     "packages/core/src/tenancy/tenant-do.ts": "eb97ebbc845775d8395aad40eab88377",
     "cloudflare:workers": "builtin",
-    "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb"
+    "packages/core/src/crypto.ts": "824f2c32818210303f7d6784fa041840"
   },
   "./tenancy/resolve:hostnameOf": {
     "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",

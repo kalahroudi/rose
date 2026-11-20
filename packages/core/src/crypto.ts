@@ -1,14 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//
-// Cryptography for Rose. Everything is WebCrypto; there is no custom primitive.
-//
-//   master key (worker secret)
-//     ├─ HKDF "rose/kek/v1"  → KEK   wraps each tenant's data key (AES-256-GCM)
-//     └─ HKDF "rose/<purpose>" → HMAC keys (login-code hashing, platform secrets)
-//   tenant data key (DEK, random per tenant, stored wrapped inside the tenant's own storage)
-//     ├─ AES-256-GCM field encryption, bound to tenant + field via AAD
-//     └─ HKDF "rose/index/v1" → HMAC key for blind indexes (exact-match search on ciphertext)
-//
 import { fromB64Url, fromUtf8, toB64Url, toHex, utf8 } from "./encoding";
 import { misconfigured } from "./errors";
 
@@ -178,15 +168,4 @@ export async function signJwtHs256(secret: string, claims: Record<string, unknow
   const key = await hmacKey(utf8(secret));
   const sig = await crypto.subtle.sign("HMAC", key, utf8(`${head}.${body}`));
   return `${head}.${body}.${toB64Url(sig)}`;
-}
-
-export async function verifyJwtHs256(secret: string, token: string): Promise<Record<string, unknown> | null> {
-  const [head, body, sig] = token.split(".");
-  if (!head || !body || !sig) return null;
-  const key = await crypto.subtle.importKey("raw", utf8(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-  const ok = await crypto.subtle.verify("HMAC", key, fromB64Url(sig), utf8(`${head}.${body}`));
-  if (!ok) return null;
-  const claims = JSON.parse(fromUtf8(fromB64Url(body))) as Record<string, unknown>;
-  if (typeof claims.exp !== "number" || claims.exp * 1000 < Date.now()) return null;
-  return claims;
 }
