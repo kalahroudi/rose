@@ -9,7 +9,7 @@
     { "id": "drop-guard", "breaks": "CounterLeqBound", "code": "scripts/fixtures/formal/toy/toy.ts#counterGuard" }
   ],
   "covered": [
-    { "file": "scripts/fixtures/formal/toy/toy.ts", "functions": ["counterGuard"], "sha256": "fa1d08fbaf0641ccc345320e9aa4a16f2ba06f3dd0903df094260e1237b1ee13" }
+    { "file": "scripts/fixtures/formal/toy/toy.ts", "functions": ["counterGuard"], "sha256": "637a9f82c4c1f325b3146f2e47ec50673e7f76a68bfbc83d3593cd8f035d793e" }
   ],
   "bounds": "one counter, bound 2",
   "notModelled": ["concurrency", "network", "retries"]

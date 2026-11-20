@@ -11,6 +11,7 @@ dist/
 coverage/
 .rose/
 formal-runs/
+Mutant-*.cfg
 *.tsbuildinfo
 wrangler.dev.jsonc
 wrangler.production.jsonc
