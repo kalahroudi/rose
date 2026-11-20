@@ -92,7 +92,6 @@ describe("operator console", () => {
     const cookie = await root();
     const t = await seed("initech", "Initech");
     const body = { confirm: "initech" };
-    // Not an owner.
     // Adding operators needs a fresh passkey session: an ordinary code session is refused.
     const addOps2 = await call("/api/operators", { cookie, body: { email: "ops2@rose.test" } });
     expect(addOps2.status).toBe(403);
