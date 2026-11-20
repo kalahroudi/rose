@@ -73,8 +73,9 @@ in `tenant-app.ts` pass the role they used for their `freshForOwnerChange` check
 and removals. That prevents both a concurrent last-owner lockout and a stale-role bypass
 such as an admin removing or demoting a member who was just promoted to owner. When the
 guarded statement changes zero rows, the function reads the row again: if it is gone it
-throws `notFound()`, if the role changed it throws `conflict` asking the caller to reload,
-and otherwise it throws the last-owner `conflict`.
+throws `notFound()`, if an owner was being demoted or removed and is still an owner it
+throws the last-owner `conflict`, and otherwise it throws `conflict` asking the caller to
+reload.
 
 `removeMember` deletes the membership, that user's sessions in that tenant and that
 user's passkeys in that tenant in one batch, guarding the session and passkey deletes with

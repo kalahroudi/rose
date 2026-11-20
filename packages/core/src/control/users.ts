@@ -110,8 +110,10 @@ export async function changeMemberRole(
   if (r.meta.changes === 0) {
     const after = await getMembership(db, tenantId, userId);
     if (!after) throw notFound();
-    if (after.role !== observedRole) throw conflict("This member's role changed. Reload and try again.");
-    throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
+    if (observedRole === "owner" && role !== "owner" && after.role === observedRole) {
+      throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
+    }
+    throw conflict("This member's role changed. Reload and try again.");
   }
 }
 
@@ -145,8 +147,10 @@ export async function removeMember(
   if (!deleted || deleted.meta.changes === 0) {
     const after = await getMembership(db, tenantId, userId);
     if (!after) throw notFound();
-    if (after.role !== observedRole) throw conflict("This member's role changed. Reload and try again.");
-    throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
+    if (observedRole === "owner" && after.role === observedRole) {
+      throw conflict("A workspace needs at least one owner. Make someone else an owner first.");
+    }
+    throw conflict("This member's role changed. Reload and try again.");
   }
 }
 
@@ -279,8 +283,10 @@ export async function removeOperator(db: D1Database, userId: string): Promise<vo
   if (!deleted || deleted.meta.changes === 0) {
     const after = await getOperator(db, userId);
     if (!after) throw notFound();
-    if (after.role !== cur.role) throw conflict("This operator's role changed. Reload and try again.");
-    throw conflict("The platform needs at least one owner.");
+    if (cur.role === "owner" && after.role === cur.role) {
+      throw conflict("The platform needs at least one owner.");
+    }
+    throw conflict("This operator's role changed. Reload and try again.");
   }
 }
 

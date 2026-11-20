@@ -258,6 +258,52 @@ describe("memberships", () => {
     expect(sawNotFound).toBe(true);
   });
 
+  it("changeMemberRole with a stale expectedRole refuses to demote a promoted owner and leaves membership, session and passkey intact", async () => {
+    const t = await tenant();
+    await member(t, "owner");
+    const m = await member(t, "member");
+    await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+    await passkey(m.id, t.id);
+    await changeMemberRole(env.DB, t.id, "owner", m.id, "owner");
+
+    await expect(changeMemberRole(env.DB, t.id, "admin", m.id, "admin", "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    await expect(changeMemberRole(env.DB, t.id, "owner", m.id, "member", "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+  });
+
+  it("removeMember with a stale expectedRole refuses to remove a promoted owner and leaves membership, session and passkey intact", async () => {
+    const t = await tenant();
+    await member(t, "owner");
+    const m = await member(t, "member");
+    await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+    await passkey(m.id, t.id);
+    await changeMemberRole(env.DB, t.id, "owner", m.id, "owner");
+
+    await expect(removeMember(env.DB, t.id, "admin", m.id, "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    await expect(removeMember(env.DB, t.id, "owner", m.id, "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+  });
+
   it("membership actions are scoped to the tenant: another tenant's member is not found", async () => {
     const a = await tenant();
     const b = await tenant();
