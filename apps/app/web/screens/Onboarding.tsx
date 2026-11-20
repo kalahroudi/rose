@@ -54,6 +54,7 @@ export function Onboarding({ boot }: { boot: Bootstrap }) {
         {notice ? <Callout tone="warn">{notice}</Callout> : null}
         <SignIn<RootVerified>
           base="/api/root"
+          links
           title="Sign in or create a workspace"
           subtitle="Enter your email. We will send a code to confirm it is you, then show your workspaces."
           onDone={(result) => (setNotice(null), setVerified(result))}

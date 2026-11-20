@@ -9,8 +9,11 @@ const MAX_FOREIGN_ATTEMPTS = 3;
 const MAX_CODES_PER_REQUESTER = 5;
 const MAX_CODES_PER_EMAIL = 20;
 const WINDOW = 15 * 60_000;
-const MAX_GUESSES_PER_EMAIL = 100;
-const GUESS_WINDOW = WINDOW + CODE_TTL;
+const MAX_GUESSES_PER_EMAIL = 10;
+const GUESS_WINDOW = 60 * 60_000 + CODE_TTL;
+export const SEND_GAP_MS = 120_000;
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 const codeHash = async (masterKey: string, scope: string, email: string, code: string) =>
   hmacHex(await deriveHmacKey(masterKey, "login-code/v1"), `${scope}\u0000${email}\u0000${code}`);
@@ -18,25 +21,52 @@ const codeHash = async (masterKey: string, scope: string, email: string, code: s
 const requesterHash = async (masterKey: string, requester: string) =>
   hmacHex(await deriveHmacKey(masterKey, "login-code-requester/v1"), requester);
 
-export async function issueLoginCode(db: D1Database, masterKey: string, scope: string, email: string, requester: string): Promise<string> {
+const linkHash = async (masterKey: string, scope: string, email: string, key: string) =>
+  hmacHex(await deriveHmacKey(masterKey, "login-link/v1"), `${scope}\u0000${email}\u0000${key}`);
+
+function randomKey(): string {
+  let out = "";
+  while (out.length < 20) {
+    const b = crypto.getRandomValues(new Uint8Array(1))[0]!;
+    if (b < 224) out += CROCKFORD[b % 32];
+  }
+  return out;
+}
+
+export function formatKey(key: string): string {
+  return key.match(/.{1,5}/g)?.join("-") ?? key;
+}
+
+export function normalizeKey(key: string): string {
+  return key.replace(/[\s-]/g, "").toUpperCase().replace(/[IL]/g, "1").replace(/O/g, "0");
+}
+
+export async function issueLoginCode(db: D1Database, masterKey: string, scope: string, email: string, requester: string): Promise<{ code: string; key: string } | undefined> {
   const t = now();
   const who = await requesterHash(masterKey, requester);
   const code = randomDigits(6);
+  const key = randomKey();
   const res = await db
     .prepare(
-      `INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester)
-       SELECT ?, ?, ?, ?, ?, ?, ?
+      `INSERT INTO login_codes (id, email, scope, code_hash, link_hash, expires_at, created_at, requester)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?
-         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND requester = ? AND created_at > ?) < ?`,
+         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND requester = ? AND created_at > ?) < ?
+         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0`,
     )
     .bind(
-      newId("lc"), email, scope, await codeHash(masterKey, scope, email, code), t + CODE_TTL, t, who,
+      newId("lc"), email, scope, await codeHash(masterKey, scope, email, code), await linkHash(masterKey, scope, email, key), t + CODE_TTL, t, who,
       email, scope, t - WINDOW, MAX_CODES_PER_EMAIL,
       email, scope, who, t - WINDOW, MAX_CODES_PER_REQUESTER,
+      email, scope, t - SEND_GAP_MS,
     )
     .run();
-  if (res.meta.changes === 0) throw tooMany("Too many codes requested. Wait a few minutes and try again.");
-  return code;
+  if (res.meta.changes === 0) {
+    const recent = await db.prepare("SELECT 1 AS x FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL").bind(email, scope, t - SEND_GAP_MS).first();
+    if (recent) return undefined;
+    throw tooMany("Too many codes requested. Wait a few minutes and try again.");
+  }
+  return { code, key };
 }
 
 export async function verifyLoginCode(db: D1Database, masterKey: string, scope: string, email: string, code: string, requester: string): Promise<boolean> {
@@ -74,4 +104,13 @@ export async function verifyLoginCode(db: D1Database, masterKey: string, scope: 
   if (!matched) return false;
   const consumed = await db.prepare("UPDATE login_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(t, matched.id).run();
   return consumed.meta.changes === 1;
+}
+
+export async function verifyLoginKey(db: D1Database, masterKey: string, scope: string, email: string, key: string): Promise<boolean> {
+  const t = now();
+  const res = await db
+    .prepare("UPDATE login_codes SET consumed_at = ? WHERE email = ? AND scope = ? AND link_hash = ? AND consumed_at IS NULL AND expires_at > ?")
+    .bind(t, email, scope, await linkHash(masterKey, scope, email, key), t)
+    .run();
+  return res.meta.changes === 1;
 }

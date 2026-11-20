@@ -33,6 +33,7 @@ export const PUBLIC_CORE_ROUTES = {
   "GET /api/bootstrap": "The signed-out SPA needs the host kind, brand and sign-in options before anyone can authenticate; it returns only what the request host already reveals and no tenant data.",
   "POST /api/root/code/request": "Sign-in on the root (apex) host starts signed out; protected by the per-address rate limit and a response that is identical whether or not the address is known.",
   "POST /api/root/code/verify": "Completes the root-host sign-in, so it cannot require a session; the one-time code is hashed, single-use, expires quickly and is attempt-limited.",
+  "POST /api/root/code/link": "Completes the root-host sign-in with the mailed sign-in key, so it cannot require a session; the key is hashed, single-use, expires quickly and bypasses only the typed guess budget.",
   "GET /api/root/slug": "Lets a person find their workspace address from the root host before signing in; rate-limited and returns no tenant data beyond the address.",
   "POST /api/root/enter": "Hands a freshly verified root-host sign-in to a workspace host; it checks the signed, short-lived proof itself and issues no session without it.",
   "GET /auth/handoff": "Receives the one-time handoff from the root host and creates the session on the workspace host; the token is signed, single-use and short-lived, and the host decides the tenant.",

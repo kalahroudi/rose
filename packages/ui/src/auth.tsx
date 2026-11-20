@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { browserSupportsWebAuthn, startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { QueryCache, QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, errorMessage } from "./api";
 import { Field, Input } from "./form";
 import { Logo } from "./icons";
@@ -66,7 +66,16 @@ export interface SignInProps<R> {
   base: string;
   /** Offer "Sign in with a passkey" (the API must expose `/passkey/login/*` under `base`). */
   passkeys?: boolean;
+  /** Expose link sign-in (`/code/link`) and the long-code entry. */
+  links?: boolean;
   onDone: (result: R, email: string) => void;
+}
+
+function readLinkKey(): string | null {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#k=")) return null;
+  const key = hash.slice(3).split("&")[0]!;
+  return /^[0-9A-Za-z-]{1,60}$/.test(key) ? key : null;
 }
 
 /**
@@ -74,13 +83,32 @@ export interface SignInProps<R> {
  * The server answers the same way whether or not the address has access, so the form
  * never reveals who has an account.
  */
-export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDone }: SignInProps<R>) {
-  const [step, setStep] = useState<"email" | "code">("email");
+export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, links, onDone }: SignInProps<R>) {
+  const [pendingLink] = useState<string | null>(() => (links ? readLinkKey() : null));
+  const [step, setStep] = useState<"email" | "code" | "link">(pendingLink ? "link" : "email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
+  const [longCode, setLongCode] = useState("");
+  const [usingLongCode, setUsingLongCode] = useState(false);
   const [devCode, setDevCode] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"" | "code" | "verify" | "passkey">("");
+  const [devKey, setDevKey] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"" | "code" | "verify" | "passkey" | "link">("");
   const [error, setError] = useState<string | null>(null);
+  const [resendUntil, setResendUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (pendingLink) history.replaceState(null, "", window.location.pathname + window.location.search);
+  }, [pendingLink]);
+
+  useEffect(() => {
+    if (step !== "code" || resendUntil <= Date.now()) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [step, resendUntil]);
+
+  const resendSeconds = Math.max(0, Math.ceil((resendUntil - now) / 1000));
+  const resendLabel = resendSeconds > 0 ? `Send a new code (${Math.floor(resendSeconds / 60)}:${String(resendSeconds % 60).padStart(2, "0")})` : "Send a new code";
 
   const run = async (kind: typeof busy, fn: () => Promise<void>) => {
     setBusy(kind);
@@ -97,12 +125,16 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDo
 
   const request = () =>
     run("code", async () => {
-      const r = await api<{ devCode?: string }>(`${base}/code/request`, { body: { email } });
+      const r = await api<{ devCode?: string; devKey?: string }>(`${base}/code/request`, { body: { email } });
       setDevCode(r.devCode ?? null);
+      setDevKey(r.devKey ?? null);
       setCode("");
+      setLongCode("");
+      setResendUntil(Date.now() + 120_000);
       setStep("code");
     });
   const verify = (value = code) => run("verify", async () => onDone(await api<R>(`${base}/code/verify`, { body: { email, code: value } }), email));
+  const verifyLink = (value: string, forEmail = email) => run("link", async () => onDone(await api<R>(`${base}/code/link`, { body: { email: forEmail, key: value } }), forEmail));
   const passkey = () =>
     run("passkey", async () => {
       const { id, options } = await api<{ id: string; options: Parameters<typeof startAuthentication>[0]["optionsJSON"] }>(`${base}/passkey/login/options`, { body: {} });
@@ -110,9 +142,26 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDo
       onDone(await api<R>(`${base}/passkey/login/verify`, { body: { id, response } }), "");
     });
 
+  if (step === "link" && pendingLink) {
+    return (
+      <form className="stack" onSubmit={(e) => (e.preventDefault(), void verifyLink(pendingLink))}>
+        <div>
+          <h1>Finish signing in</h1>
+          <p className="page-desc">Confirm the email address this link was sent to.</p>
+        </div>
+        {error ? <Callout tone="bad">{error}</Callout> : null}
+        <Field label="Email address">
+          {(p) => <Input {...p} type="email" autoComplete="email" required placeholder="you@company.com" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />}
+        </Field>
+        <Button type="submit" variant="primary" size="lg" block busy={busy === "link"} disabled={!email.includes("@")}>Sign in</Button>
+        <button type="button" className="link" onClick={() => (setStep("email"), setError(null))}>Use a 6-digit code instead</button>
+      </form>
+    );
+  }
+
   if (step === "code") {
     return (
-      <form className="stack" onSubmit={(e) => (e.preventDefault(), void verify())}>
+      <form className="stack" onSubmit={(e) => (e.preventDefault(), usingLongCode ? void verifyLink(longCode) : void verify())}>
         <div>
           <h1>Check your email</h1>
           <p className="page-desc">If <strong>{email}</strong> has access, a 6-digit code is on its way. It expires in 10 minutes.</p>
@@ -120,18 +169,32 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDo
         {error ? <Callout tone="bad">{error}</Callout> : null}
         {devCode ? (
           <Callout tone="warn">
-            Development mode: your code is <button type="button" className="link mono" onClick={() => (setCode(devCode), void verify(devCode))}>{devCode}</button>. In production it is only sent by email.
+            Development mode: your code is <button type="button" className="link mono" onClick={() => (setCode(devCode), void verify(devCode))}>{devCode}</button>
+            {devKey ? <> and your long code is <button type="button" className="link mono" onClick={() => (setLongCode(devKey), setUsingLongCode(true))}>{devKey}</button></> : null}
+            . In production they are only sent by email.
           </Callout>
         ) : null}
-        <Field label="Sign-in code">
-          {(p) => (
-            <Input {...p} className="otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="••••••" autoFocus value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
-          )}
-        </Field>
-        <Button type="submit" variant="primary" size="lg" block busy={busy === "verify"} disabled={code.length !== 6}>Continue</Button>
+        {usingLongCode ? (
+          <Field label="Long code">
+            {(p) => (
+              <Input {...p} className="mono" autoComplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" autoFocus value={longCode} onChange={(e) => setLongCode(e.target.value)} />
+            )}
+          </Field>
+        ) : (
+          <Field label="Sign-in code">
+            {(p) => (
+              <Input {...p} className="otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="••••••" autoFocus value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+            )}
+          </Field>
+        )}
+        <Button type="submit" variant="primary" size="lg" block busy={busy === "verify" || busy === "link"} disabled={usingLongCode ? longCode.trim().length < 20 : code.length !== 6}>Continue</Button>
+        {links ? <p className="hint">Code not working? Use the link or the long code from the same email.</p> : null}
         <div className="row" style={{ justifyContent: "space-between" }}>
           <button type="button" className="link" onClick={() => (setStep("email"), setError(null))}>Use a different email</button>
-          <button type="button" className="link" disabled={busy !== ""} onClick={() => void request()}>Send a new code</button>
+          {links ? <button type="button" className="link" onClick={() => (setUsingLongCode(!usingLongCode), setError(null))}>{usingLongCode ? "Use the 6-digit code" : "Use the long code"}</button> : null}
+        </div>
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <button type="button" className="link" disabled={busy !== "" || resendSeconds > 0} onClick={() => void request()}>{resendLabel}</button>
         </div>
       </form>
     );

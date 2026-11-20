@@ -15,6 +15,7 @@ export function SignInScreen({ boot, tenant }: { boot: Bootstrap; tenant: Tenant
       <SignIn
         base="/api/auth"
         passkeys
+        links
         title={`Sign in to ${tenant.name}`}
         subtitle={<>You are signing in at <span className="mono">{window.location.host}</span>. Only members of this workspace can sign in here.</>}
         onDone={() => void qc.invalidateQueries({ queryKey: ["bootstrap"] })}

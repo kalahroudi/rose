@@ -9,6 +9,7 @@ import { createTenant } from "../src/control/tenants";
 import { addMembership, ensureUser, getMembership } from "../src/control/users";
 import { maxWorkspacesPerUser } from "../src/env";
 import { createTestTenant } from "../src/testing";
+import { ageOut } from "./otp-helpers";
 import { notes } from "./worker";
 
 const post = (origin: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -52,34 +53,45 @@ describe("email sign-in codes", () => {
 
   it("codes are single use, expire, and lock after five wrong guesses", async () => {
     const key = env.ROSE_MASTER_KEY;
-    const code = await issueLoginCode(env.DB, key, "s1", "u@example.com", "r1");
+    const { code } = (await issueLoginCode(env.DB, key, "s1", "u@example.com", "r1"))!;
     expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code, "r1")).toBe(true);
     expect(await verifyLoginCode(env.DB, key, "s1", "u@example.com", code, "r1")).toBe(false);
 
-    const second = await issueLoginCode(env.DB, key, "s2", "u@example.com", "r1");
+    const { code: second } = (await issueLoginCode(env.DB, key, "s2", "u@example.com", "r1"))!;
     const wrong = second === "000000" ? "111111" : "000000";
     for (let i = 0; i < 5; i++) expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", wrong, "r1")).toBe(false);
     expect(await verifyLoginCode(env.DB, key, "s2", "u@example.com", second, "r1")).toBe(false);
 
-    const third = await issueLoginCode(env.DB, key, "s3", "u@example.com", "r1");
+    const { code: third } = (await issueLoginCode(env.DB, key, "s3", "u@example.com", "r1"))!;
     await env.DB.prepare("UPDATE login_codes SET expires_at = 1 WHERE scope = 's3'").run();
     expect(await verifyLoginCode(env.DB, key, "s3", "u@example.com", third, "r1")).toBe(false);
   });
 
   it("limits how many codes can be requested", async () => {
-    for (let i = 0; i < 5; i++) await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com", "r1");
+    for (let i = 0; i < 5; i++) {
+      await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com", "r1");
+      await ageOut("s4");
+    }
     await expect(issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s4", "u@example.com", "r1")).rejects.toThrow(/Too many/);
   });
 
   it("limits codes per requester, with a higher overall cap per address", async () => {
     const k = env.ROSE_MASTER_KEY;
-    for (let i = 0; i < 5; i++) await issueLoginCode(env.DB, k, "s6", "v@example.com", "abuser");
+    for (let i = 0; i < 5; i++) {
+      await issueLoginCode(env.DB, k, "s6", "v@example.com", "abuser");
+      await ageOut("s6");
+    }
     await expect(issueLoginCode(env.DB, k, "s6", "v@example.com", "abuser")).rejects.toThrow(/Too many/);
     // A different requester can still get and use a code.
-    const code = await issueLoginCode(env.DB, k, "s6", "v@example.com", "legit");
+    const { code } = (await issueLoginCode(env.DB, k, "s6", "v@example.com", "legit"))!;
     expect(await verifyLoginCode(env.DB, k, "s6", "v@example.com", code, "legit")).toBe(true);
-    // The overall per-address cap holds across many requesters.
-    for (let i = 0; i < 14; i++) await issueLoginCode(env.DB, k, "s6", "v@example.com", `r${i}`);
+    await ageOut("s6");
+    // The overall per-address cap is a backstop now that the 2-minute send gap bounds issuance; seed the window directly.
+    const t = Date.now();
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester) VALUES (?, ?, 's6', 'x', ?, ?, ?)")
+        .bind(`raw-${i}`, "v@example.com", t + 600_000, t - 120_000 - i * 30_000, `raw${i}`).run();
+    }
     await expect(issueLoginCode(env.DB, k, "s6", "v@example.com", "fresh")).rejects.toThrow(/Too many/);
     // Other scopes are unaffected.
     await issueLoginCode(env.DB, k, "s7", "v@example.com", "abuser");
@@ -87,41 +99,39 @@ describe("email sign-in codes", () => {
 
   it("one requester's new code does not invalidate another's, and verification falls back for a new address", async () => {
     const k = env.ROSE_MASTER_KEY;
-    const b = await issueLoginCode(env.DB, k, "s8", "w@example.com", "B");
-    await new Promise((r) => setTimeout(r, 5));
-    const a = await issueLoginCode(env.DB, k, "s8", "w@example.com", "A");
+    const { code: b } = (await issueLoginCode(env.DB, k, "s8", "w@example.com", "B"))!;
+    await ageOut("s8");
+    const { code: a } = (await issueLoginCode(env.DB, k, "s8", "w@example.com", "A"))!;
     expect(await verifyLoginCode(env.DB, k, "s8", "w@example.com", b, "B")).toBe(true);
     expect(await verifyLoginCode(env.DB, k, "s8", "w@example.com", a, "A")).toBe(true);
     // Verifying from an address that never requested falls back to the latest code.
-    const c = await issueLoginCode(env.DB, k, "s9", "w@example.com", "A");
+    const { code: c } = (await issueLoginCode(env.DB, k, "s9", "w@example.com", "A"))!;
     expect(await verifyLoginCode(env.DB, k, "s9", "w@example.com", c, "elsewhere")).toBe(true);
   });
 
   it("accepts the newest emailed code from a changed address (R1, R2)", async () => {
     const k = env.ROSE_MASTER_KEY;
-    const tick = () => new Promise((r) => setTimeout(r, 5));
     await issueLoginCode(env.DB, k, "r1", "x@example.com", "A");
-    await tick();
-    const b = await issueLoginCode(env.DB, k, "r1", "x@example.com", "B");
+    await ageOut("r1");
+    const { code: b } = (await issueLoginCode(env.DB, k, "r1", "x@example.com", "B"))!;
     expect(await verifyLoginCode(env.DB, k, "r1", "x@example.com", b, "A")).toBe(true);
-    const a2 = await issueLoginCode(env.DB, k, "r2", "x@example.com", "A");
+    const { code: a2 } = (await issueLoginCode(env.DB, k, "r2", "x@example.com", "A"))!;
     expect(await verifyLoginCode(env.DB, k, "r2", "x@example.com", a2, "A")).toBe(true);
-    await tick();
-    const b2 = await issueLoginCode(env.DB, k, "r2", "x@example.com", "B");
+    await ageOut("r2");
+    const { code: b2 } = (await issueLoginCode(env.DB, k, "r2", "x@example.com", "B"))!;
     expect(await verifyLoginCode(env.DB, k, "r2", "x@example.com", b2, "A")).toBe(true);
   });
 
   it("an older own code never becomes valid again once the newer one is used up", async () => {
     const k = env.ROSE_MASTER_KEY;
-    const tick = () => new Promise((r) => setTimeout(r, 5));
-    const old1 = await issueLoginCode(env.DB, k, "r4", "z@example.com", "A");
-    await tick();
-    const new1 = await issueLoginCode(env.DB, k, "r4", "z@example.com", "A");
+    const { code: old1 } = (await issueLoginCode(env.DB, k, "r4", "z@example.com", "A"))!;
+    await ageOut("r4");
+    const { code: new1 } = (await issueLoginCode(env.DB, k, "r4", "z@example.com", "A"))!;
     expect(await verifyLoginCode(env.DB, k, "r4", "z@example.com", new1, "A")).toBe(true);
     if (old1 !== new1) expect(await verifyLoginCode(env.DB, k, "r4", "z@example.com", old1, "A")).toBe(false);
-    const old2 = await issueLoginCode(env.DB, k, "r5", "z@example.com", "A");
-    await tick();
-    const new2 = await issueLoginCode(env.DB, k, "r5", "z@example.com", "A");
+    const { code: old2 } = (await issueLoginCode(env.DB, k, "r5", "z@example.com", "A"))!;
+    await ageOut("r5");
+    const { code: new2 } = (await issueLoginCode(env.DB, k, "r5", "z@example.com", "A"))!;
     const wrong = new2 === "000000" ? "111111" : "000000";
     for (let i = 0; i < 5; i++) await verifyLoginCode(env.DB, k, "r5", "z@example.com", wrong === old2 ? "222222" : wrong, "A");
     expect(await verifyLoginCode(env.DB, k, "r5", "z@example.com", old2, "A")).toBe(false);
@@ -147,14 +157,19 @@ describe("email sign-in codes", () => {
 
   it("four addresses in one /64 count as one requester", async () => {
     const k = env.ROSE_MASTER_KEY;
-    for (let i = 1; i <= 4; i++) await issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey(`2001:db8:9:9::${i}`));
-    await expect(issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey("2001:db8:9:9::5"))).resolves.toMatch(/^\d{6}$/);
+    for (let i = 1; i <= 4; i++) {
+      await issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey(`2001:db8:9:9::${i}`));
+      await ageOut("r3");
+    }
+    const fifth = await issueLoginCode(env.DB, k, "r3", "y@example.com", requesterKey("2001:db8:9:9::5"));
+    expect(fifth?.code).toMatch(/^\d{6}$/);
   });
 
   it("stores only keyed hashes of codes and hashes of session tokens", async () => {
-    const code = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s5", "u@example.com", "r1");
-    const row = await env.DB.prepare("SELECT code_hash FROM login_codes WHERE scope = 's5'").first<{ code_hash: string }>();
+    const { code, key } = (await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, "s5", "u@example.com", "r1"))!;
+    const row = await env.DB.prepare("SELECT code_hash, link_hash FROM login_codes WHERE scope = 's5'").first<{ code_hash: string; link_hash: string }>();
     expect(row!.code_hash).not.toContain(code);
+    expect(row!.link_hash).not.toContain(key);
     const a = await createTestTenant(env, SELF);
     const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method: "test" });
     const all = await env.DB.prepare("SELECT * FROM sessions WHERE user_id = ?").bind(a.userId).all();
@@ -342,6 +357,13 @@ describe("self-service signup on the root host", () => {
     // The ticket and the handoff are both spent.
     expect((await post(root, "/api/root/enter", { ticket: verified.ticket, slug: "acme-inc" })).status).toBe(401);
     expect((await SELF.fetch(url, { redirect: "manual" })).headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("the sign-in key verifies the email on the root host and returns a ticket", async () => {
+    const { devKey } = await (await post(root, "/api/root/code/request", { email: "keyed@example.com" })).json<{ devKey: string }>();
+    const verified = await (await post(root, "/api/root/code/link", { email: "keyed@example.com", key: devKey })).json<{ ticket: string; workspaces: unknown[] }>();
+    expect(verified.workspaces).toEqual([]);
+    expect((await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Key Co", slug: "key-co" } })).status).toBe(200);
   });
 
   it("rejects reserved, malformed and taken addresses", async () => {

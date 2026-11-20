@@ -312,7 +312,7 @@ expired invitations and expired `rate_limits` rows
 (`DELETE FROM rate_limits WHERE window_start <= ?` with `t - RATE_LIMIT_WINDOW_MS`), and
 deletes login codes an hour past expiry. It is safe to run at any time and both workers
 call it from their hourly tick. The extra hour on login codes is deliberate: a code
-expires after 10 minutes but still counts toward the 25-minute guess window in `otp.ts`,
+expires after 10 minutes but still counts toward the 70-minute guess window in `otp.ts`,
 so deleting it at expiry could drop guesses from that window. One hour is well past the
 window.
 
@@ -339,6 +339,16 @@ one tenant cannot be replayed against another. The caller receives the code itse
 deliver it. Covered by "stores only keyed hashes of codes and hashes of session tokens"
 (`packages/core/test/auth.test.ts`).
 
+Every code also carries a sign-in key: 100 random bits, encoded as 20 Crockford base32
+characters (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, no I/L/O/U). Rejection sampling keeps the
+distribution uniform. The row stores an HMAC of the key (`link_hash`), bound to
+`scope\0email\0key` under the label `login-link/v1`, so a key for one tenant or address
+is useless on another. The key shares the row's `consumed_at` and `expires_at`, so using
+either the code or the key kills both. The mail carries the key as
+`XXXXX-XXXXX-XXXXX-XXXXX` and as a `#k=` fragment link; the client normalises a typed key
+by stripping dashes and spaces, upper-casing and mapping `I`/`L` to `1` and `O` to `0`,
+which is what Crockford's alphabet is for.
+
 The requester is stored as a keyed hash (`requesterHash`) rather than the client address,
 so the control plane holds no raw client addresses. The hash key is derived separately
 from the code key, which keeps the two values from being interchangeable. Pre-migration
@@ -349,18 +359,26 @@ any address)" (`packages/core/test/otp-requester.adversarial.test.ts`).
 
 ### Request caps
 
-`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has two
+`issueLoginCode` checks and inserts in one statement. The `INSERT ... SELECT` has three
 `WHERE` subqueries: at most `MAX_CODES_PER_EMAIL` (20) rows for the address in the last
-15 minutes, and at most `MAX_CODES_PER_REQUESTER` (5) rows for the same requester and
-address in that window. If the insert changes no rows the caller gets `tooMany`. In
-development that surfaces as a 429; in production `requestCode` runs the issue inside
-`waitUntil` after answering, so a request past the cap is refused silently and the person
-still sees the same `{ ok: true }` as everyone else. Doing the count and the insert
-together means parallel requests cannot all pass the cap check. The per-address cap is a
-mail-bomb limit and sits well above what one requester can reach, so one client cannot
-spend the whole address budget. Covered by "parallel requests from many requesters do not
-overshoot the per-email cap" and "parallel requests from one requester do not overshoot
-the per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
+15 minutes, at most `MAX_CODES_PER_REQUESTER` (5) rows for the same requester and address
+in that window, and no code at all for the address in the last `SEND_GAP_MS` (2 minutes).
+If the insert changes no rows the caller gets `tooMany`. In development that surfaces as
+a 429; in production `requestCode` runs the issue inside `waitUntil` after answering, so
+a request past the cap is refused silently and the person still sees the same
+`{ ok: true }` as everyone else. Doing the count and the insert together means parallel
+requests cannot all pass the cap check. The per-address cap is a mail-bomb backstop and
+sits well above what one requester can reach, so one client cannot spend the whole
+address budget. Covered by "parallel requests from many requesters do not overshoot the
+per-email cap" and "parallel requests from one requester do not overshoot the
+per-requester limit" (`packages/core/test/otp-requester.adversarial.test.ts`).
+
+The 2-minute gap is checked twice: a preceding read returns `undefined` so `requestCode`
+stays silent (no mail, same `{ ok: true }` as an ineligible address), and the same
+predicate appears in the `INSERT ... SELECT` guard so two parallel requests cannot both
+send a mail in the same 2-minute window. The gap is what actually bounds mail volume;
+the 20-per-address cap is now a defence-in-depth backstop that normal issuance can no
+longer reach (one code per 2 minutes is about 8 per 15 minutes).
 
 ### Verify: candidates and budgets
 
@@ -403,32 +421,38 @@ The comparison and the spend are separate on purpose:
 
 At the cap, a correct code answers `false` like any wrong code and spends nothing.
 Covered by the `otp-guess-cap`, `otp-cap-edge`, `otp-verify` and `otp-verify.adversarial`
-suites, including "at 100 the correct code is refused and nothing is spent or consumed",
+suites, including "at 10 the correct code is refused and nothing is spent or consumed",
 "at 98 with two candidates a wrong guess spends on both (no free comparisons) and reaches
 the cap", "owner and stranger both sending the right code in parallel: exactly one
 succeeds" and "after the owner's newest code is consumed, its older code is dead".
 
 ### The per-address guess cap
 
-`MAX_GUESSES_PER_EMAIL` is 100 guesses, counted as
+`MAX_GUESSES_PER_EMAIL` is 10 guesses, counted as
 `SUM(attempts + foreign_attempts)` over all codes of one `(scope, email)` created within
-`GUESS_WINDOW`, which is `WINDOW + CODE_TTL` (25 minutes).
-
-The window is the proof, not an estimate. A guess made at any moment can only land on a
-code created at most `CODE_TTL` (10 minutes) before it, because an older code has
-expired. Counting codes from 25 minutes back therefore covers every code that a guess in
-any 15-minute span could touch, which bounds guesses in any 15-minute span at 100.
-Counting only codes created in the last 15 minutes would miss the spends made late in the
-life of a code created between 15 and 25 minutes ago, which still fall inside the span.
-Covered by "guesses on a code created exactly 25 minutes ago do not count; 1 ms younger
-still counts", "sliding span: 100 guesses late in one code's life block new codes 15 min
-later, and free up after 25 min" and "in any 15-minute span no more than 100 guesses are
-counted, even when rotating windows"
-(`packages/core/test/otp-guess-cap.adversarial.test.ts`).
+`GUESS_WINDOW`, which is 60 minutes plus `CODE_TTL` (70 minutes total). The window is the
+proof, not an estimate: a guess can only land on a code created at most `CODE_TTL`
+(10 minutes) before it, so counting codes from 70 minutes back covers every code a guess
+in any 60-minute span could touch. That bounds the typed path at 10 guesses per account
+per hour, or ≤ 1e-5 per account per hour against a 6-digit code.
 
 The cap is per `(scope, email)`, so exhausting one tenant's address does not affect the
 same address on another tenant. Covered by "cap is per (scope, email): another scope or
 another address is unaffected" (`packages/core/test/otp-guess-cap.adversarial.test.ts`).
+
+### The sign-in key
+
+`verifyLoginKey` redeems the key with one atomic
+`UPDATE ... SET consumed_at = ? WHERE email = ? AND scope = ? AND link_hash = ?
+AND consumed_at IS NULL AND expires_at > ?`. It reads and writes only `consumed_at`: it
+never touches `attempts`, `foreign_attempts` or the per-address guess cap. That is the
+whole point — after an attacker burns all 10 typed guesses, the person who received the
+mail still signs in with the key from any requester. The key is at least 64 bits of
+entropy and is not rate-limited per account, so no number of attacker IPs can exhaust it
+(NIST 800-63B §3.1.3, ASVS 6.6.3). The route applies the same per-requester
+`verify-ip`/`verify` rate limits as `/code/verify`, and every failure returns the same
+401 `BAD_CODE` as an unknown, expired or consumed key, so the endpoint reveals nothing
+about whether the address exists or is locked.
 
 ## `rate-limit.ts`
 

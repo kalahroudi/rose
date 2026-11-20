@@ -58,7 +58,7 @@ function Root() {
   if (!b.session) {
     return (
       <AuthLayout appName={`${b.app.name} Admin`} footer="This console is for platform operators. Customers sign in at their workspace address.">
-        <SignIn base="/api/auth" passkeys title="Sign in" subtitle="Use your passkey, or get a one-time code by email." onDone={() => void qc.invalidateQueries({ queryKey: ["bootstrap"] })} />
+        <SignIn base="/api/auth" passkeys links title="Sign in" subtitle="Use your passkey, or get a one-time code by email." onDone={() => void qc.invalidateQueries({ queryKey: ["bootstrap"] })} />
       </AuthLayout>
     );
   }

@@ -4,6 +4,7 @@ import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloud
 import { describe, expect, it } from "vitest";
 import { createTenantWorker } from "../src";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
+import { ageOut } from "./otp-helpers";
 import { createTestTenant } from "../src/testing";
 import { notes } from "./worker";
 
@@ -16,7 +17,7 @@ describe("sign-in code guess budgets", () => {
   it("a flood of wrong guesses from another requester does not invalidate the owner's code", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const own = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    const { code: own } = (await issueLoginCode(env.DB, KEY, scope, email, "owner"))!;
     for (let i = 0; i < 50; i++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(own), "abuser");
     expect(await verifyLoginCode(env.DB, KEY, scope, email, own, "owner")).toBe(true);
   });
@@ -24,7 +25,7 @@ describe("sign-in code guess budgets", () => {
   it("a requester without a code gets 3 guesses on the newest code, then the owner still verifies", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const code = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    const { code } = (await issueLoginCode(env.DB, KEY, scope, email, "owner"))!;
     for (let i = 0; i < 3; i++) expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), "stranger")).toBe(false);
     // Fourth guess: even the right code is refused for the stranger.
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "stranger")).toBe(false);
@@ -34,7 +35,7 @@ describe("sign-in code guess budgets", () => {
   it("the foreign budget is shared across strangers", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const code = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    const { code } = (await issueLoginCode(env.DB, KEY, scope, email, "owner"))!;
     for (const who of ["s1", "s2", "s3"]) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), who);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "s4")).toBe(false);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "owner")).toBe(true);
@@ -43,11 +44,12 @@ describe("sign-in code guess budgets", () => {
   it("the owner still has the full 5 guesses", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const code = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    const { code } = (await issueLoginCode(env.DB, KEY, scope, email, "owner"))!;
     for (let i = 0; i < 3; i++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), "stranger");
     for (let i = 0; i < 4; i++) expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), "owner")).toBe(false);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "owner")).toBe(true);
-    const code2 = await issueLoginCode(env.DB, KEY, scope, email, "owner2");
+    await ageOut(scope);
+    const { code: code2 } = (await issueLoginCode(env.DB, KEY, scope, email, "owner2"))!;
     await tick();
     for (let i = 0; i < 5; i++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code2), "owner2");
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code2, "owner2")).toBe(false);
@@ -57,60 +59,60 @@ describe("sign-in code guess budgets", () => {
 describe("sign-in code per-address guess cap", () => {
   const total = async (scope: string, email: string) =>
     (await env.DB.prepare("SELECT COALESCE(SUM(attempts + foreign_attempts), 0) AS n FROM login_codes WHERE scope = ? AND email = ?").bind(scope, email).first<{ n: number }>())!.n;
-  // 20 requesters, one code each; the first 19 spend all 5 owner guesses (95), the last 4 more (99).
+  // 2 requesters, one code each; the first spends all 5 owner guesses, the second 4 (9).
   const fill = async (scope: string, email: string) => {
     let last = "";
-    for (let i = 0; i < 20; i++) {
-      last = await issueLoginCode(env.DB, KEY, scope, email, `r${i}`);
-      await tick();
-      for (let g = 0; g < (i < 19 ? 5 : 4); g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
+    for (let i = 0; i < 2; i++) {
+      const { code } = (await issueLoginCode(env.DB, KEY, scope, email, `r${i}`))!;
+      last = code;
+      await ageOut(scope);
+      for (let g = 0; g < (i < 1 ? 5 : 4); g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
     }
     return last;
   };
 
-  it("rotating requesters hit the cap at exactly 100 and the 101st guess fails even with the right code", async () => {
+  it("rotating requesters hit the cap at exactly 10 and the 11th guess fails even with the right code", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
     const last = await fill(scope, email);
-    expect(await total(scope, email)).toBe(99);
+    expect(await total(scope, email)).toBe(9);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), "stranger")).toBe(false);
-    expect(await total(scope, email)).toBe(100);
-    expect(await verifyLoginCode(env.DB, KEY, scope, email, last, "r19")).toBe(false);
-    expect(await total(scope, email)).toBe(100);
+    expect(await total(scope, email)).toBe(10);
+    expect(await verifyLoginCode(env.DB, KEY, scope, email, last, "r1")).toBe(false);
+    expect(await total(scope, email)).toBe(10);
   });
 
-  // r0 keeps 1 own guess (4 spent), r1..r18 spend 90, r19 (newest code) 4, plus 1 foreign: 99 counted.
+  // r0 keeps 1 own guess (4 spent), r1 (newest) spends 4, plus 1 foreign: 9 counted.
   const fillEdge = async (scope: string, email: string) => {
     let last = "";
-    for (let i = 0; i < 20; i++) {
-      last = await issueLoginCode(env.DB, KEY, scope, email, `r${i}`);
-      await tick();
-      for (let g = 0; g < (i === 0 || i === 19 ? 4 : 5); g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
+    for (let i = 0; i < 2; i++) {
+      const { code } = (await issueLoginCode(env.DB, KEY, scope, email, `r${i}`))!;
+      last = code;
+      await ageOut(scope);
+      for (let g = 0; g < 4; g++) await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `r${i}`);
     }
-    // One foreign guess on the newest code brings the count to 99 and leaves it open.
     await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), "stranger");
     return last;
   };
 
-  it("at 99 guesses the correct newest code of another requester still verifies", async () => {
+  it("at 9 guesses the correct newest code of another requester still verifies", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
     const newest = await fillEdge(scope, email);
-    expect(await total(scope, email)).toBe(99);
-    // r0's own code is still open and is a candidate too; the single remaining guess must go to the match.
+    expect(await total(scope, email)).toBe(9);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, newest, "r0")).toBe(true);
-    expect(await total(scope, email)).toBe(100);
+    expect(await total(scope, email)).toBe(10);
   });
 
-  it("at 99 guesses a wrong guess still spends the last one and the next verify is refused", async () => {
+  it("at 9 guesses a wrong guess still spends the last one and the next verify is refused", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
     const newest = await fillEdge(scope, email);
-    expect(await total(scope, email)).toBe(99);
+    expect(await total(scope, email)).toBe(9);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(newest), "r0")).toBe(false);
-    expect(await total(scope, email)).toBe(100);
+    expect(await total(scope, email)).toBe(10);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, newest, "r0")).toBe(false);
-    expect(await total(scope, email)).toBe(100);
+    expect(await total(scope, email)).toBe(10);
   });
 
   it("parallel guesses near the cap do not exceed it", async () => {
@@ -118,25 +120,25 @@ describe("sign-in code per-address guess cap", () => {
     const email = "o@example.com";
     const last = await fill(scope, email);
     await Promise.all(Array.from({ length: 6 }, (_, i) => verifyLoginCode(env.DB, KEY, scope, email, wrongOf(last), `p${i}`)));
-    expect(await total(scope, email)).toBeLessThanOrEqual(100);
+    expect(await total(scope, email)).toBeLessThanOrEqual(10);
   });
 
   it("guesses on codes older than the window do not count", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const old = Date.now() - 26 * 60_000;
+    const old = Date.now() - 71 * 60_000;
     for (let i = 0; i < 20; i++) {
       await env.DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester, attempts, foreign_attempts) VALUES (?, ?, ?, ?, ?, ?, ?, 5, 3)")
         .bind(`old-${uniq()}-${i}`, email, scope, "x", old + 600_000, old, `old${i}`).run();
     }
-    const code = await issueLoginCode(env.DB, KEY, scope, email, "fresh");
+    const { code } = (await issueLoginCode(env.DB, KEY, scope, email, "fresh"))!;
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "fresh")).toBe(true);
   });
 
   it("a legitimate owner with a couple of typos still signs in", async () => {
     const scope = `v-${uniq()}`;
     const email = "o@example.com";
-    const code = await issueLoginCode(env.DB, KEY, scope, email, "owner");
+    const { code } = (await issueLoginCode(env.DB, KEY, scope, email, "owner"))!;
     for (let i = 0; i < 2; i++) expect(await verifyLoginCode(env.DB, KEY, scope, email, wrongOf(code), "owner")).toBe(false);
     expect(await verifyLoginCode(env.DB, KEY, scope, email, code, "owner")).toBe(true);
   });
