@@ -207,11 +207,11 @@ export async function requestTenantDeletion(
       )
       .bind(jobId, title, payload, deleteAfter, createdBy, t, t),
     db
-      .prepare("DELETE FROM sessions WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')")
-      .bind(id, id),
+      .prepare("DELETE FROM sessions WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
+      .bind(id, id, deleteAfter),
     db
-      .prepare("DELETE FROM jobs WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion')")
-      .bind(id, id),
+      .prepare("DELETE FROM jobs WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
+      .bind(id, id, deleteAfter),
     db.prepare("SELECT status, delete_after FROM tenants WHERE id = ?").bind(id),
   ]);
   if ((upd?.meta.changes ?? 0) > 0) {

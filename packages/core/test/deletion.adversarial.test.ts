@@ -93,6 +93,20 @@ describe("purge never runs before delete_after (adversarial)", () => {
     expect((await tenantRow(a.id))!.delete_after).toBe(first.deleteAfter);
   });
 
+  it("a repeat delete on a pending tenant leaves a session inserted after the first request untouched", async () => {
+    const a = await createTestTenant(env, SELF);
+    const first = await requestTenantDeletion(env.DB, a.id);
+    expect(first.created).toBe(true);
+    await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(first.deleteAfter - 1000, a.id).run();
+    await createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" });
+    const inserted = await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(a.id).first<{ public_id: string }>();
+    expect(inserted).not.toBeNull();
+    const second = await requestTenantDeletion(env.DB, a.id);
+    expect(second.created).toBe(false);
+    expect(second.deleteAfter).toBe(first.deleteAfter - 1000);
+    expect(await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(a.id).first<{ public_id: string }>()).toEqual(inserted);
+  });
+
   it("delete, cancel, delete again gives a fresh 48h deadline, not the old one", async () => {
     const a = await createTestTenant(env, SELF);
     await requestTenantDeletion(env.DB, a.id);

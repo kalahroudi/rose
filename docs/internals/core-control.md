@@ -159,14 +159,15 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   immediately following `INSERT INTO jobs (...) SELECT ... WHERE changes() = 1` inserts the
   platform-scoped `tenant.purge` job only for the request whose `UPDATE` actually matched;
   the same batch deletes the tenant's sessions and tenant-scoped jobs (guarded on
-  `status = 'pending_deletion'`, leaving the `"platform"`-scoped purge job intact) and reads
-  back `status, delete_after`. When the `UPDATE` matched (`created: true`), it returns
-  `{ deleteAfter, created: true, jobId }`; when another request already moved the tenant to
-  `pending_deletion`, it returns `{ deleteAfter, created: false }` with the stored deadline
-  from the batch read-back (refusing missing or `deleting` tenants with 404). Callers call
-  `notifyJob` and write the `tenant.delete.requested` audit row only when `created` is true,
-  so concurrent delete requests converge on one purge job, one audit entry, one queue
-  notification and the same stored deadline.
+  `status = 'pending_deletion' AND delete_after = ?`, leaving the `"platform"`-scoped
+  purge job intact) and reads back `status, delete_after`. When the `UPDATE` matched
+  (`created: true`), it returns `{ deleteAfter, created: true, jobId }`; when another
+  request already moved the tenant to `pending_deletion`, it returns `{ deleteAfter,
+  created: false }` with the stored deadline from the batch read-back (refusing missing or
+  `deleting` tenants with 404). Callers call `notifyJob` and write the
+  `tenant.delete.requested` audit row only when `created` is true, so concurrent delete
+  requests converge on one purge job, one audit entry, one queue notification and the same
+  stored deadline.
 - The tenant stops serving authenticated requests immediately: the session query joins
   the tenant and requires `status = 'active'`. Host-level routing can lag by the host
   cache TTL on other isolates, which is why the tenant-app owner-deletion route also
@@ -176,13 +177,17 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   and authenticated access is refused immediately"
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
-- `cancelTenantDeletion` checks that the tenant is currently `pending_deletion`, then runs
-  one atomic `db.batch` containing the conditional `UPDATE tenants ... WHERE id = ? AND
-  status = 'pending_deletion'` (restoring `prior_status` via `CASE`, clearing `delete_after`
-  and `prior_status`), the cleanup deletes for sessions, login codes, handoffs and WebAuthn
-  challenges for the scope, and `DELETE FROM jobs WHERE type = 'tenant.purge' AND status =
-  'queued' AND json_extract(payload, '$.tenantId') = ?`. Because both `requestTenantDeletion`
-  and `cancelTenantDeletion` pair the status update and purge-job mutation in a single
+- `cancelTenantDeletion` performs no pre-check and runs a single atomic `db.batch`. Before
+  the status transition, guarded deletes (`AND EXISTS (SELECT 1 FROM tenants WHERE id = ?
+  AND status = 'pending_deletion')`) clear sessions, login codes, handoffs and WebAuthn
+  challenges for the scope as well as the queued `tenant.purge` job (`DELETE FROM jobs WHERE
+  type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?`),
+  so a losing cancel leaves rows untouched once the tenant is no longer `pending_deletion`.
+  The batch then reads `delete_after` and finishes with the conditional `UPDATE tenants ...
+  WHERE id = ? AND status = 'pending_deletion' RETURNING status` (restoring `prior_status`
+  via `CASE` and clearing `delete_after` and `prior_status`), returning
+  `{ status, deleteAfter } | null`. Because both `requestTenantDeletion` and
+  `cancelTenantDeletion` pair the status update and purge-job mutation in a single
   transaction, racing deletes and cancels cannot strand a `pending_deletion` tenant without
   a queued purge job or leave a stray queued purge job on an active/suspended tenant.
   Covered by the concurrent race tests in `packages/core/test/deletion.adversarial.test.ts`
@@ -472,7 +477,7 @@ job reads the row; a message is just a wake-up call.
 runs locally and in tests, where the sweep does the work a queue would have woken.
 
 `enqueueJob` inserts a `queued` row with `run_after = now + delayMs`, reads it back and
-then calls `notify`. `notify` is best effort: it picks the queue by ownership
+then calls `notifyJob`. `notifyJob` is best effort: it picks the queue by ownership
 (`ADMIN_JOB_TYPES`, currently only `domain.verify`, goes to `ADMIN_JOBS`; everything else
 runs in the tenant worker and goes to `APP_JOBS`), and a missing binding or a failed send
 is logged and ignored. A lost or missing message is not fatal, because the job row stays
