@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { createTenantWorker } from "../src";
 import { requesterKey } from "../src/http/base";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
 import { consumeHandoff, createHandoff, createSession, readSession } from "../src/control/sessions";
 import { createTenant } from "../src/control/tenants";
-import { addMembership, ensureUser } from "../src/control/users";
+import { addMembership, ensureUser, getMembership } from "../src/control/users";
 import { maxWorkspacesPerUser } from "../src/env";
 import { createTestTenant } from "../src/testing";
+import { notes } from "./worker";
 
 const post = (origin: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
   SELF.fetch(origin + path, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), redirect: "manual" });
@@ -185,6 +187,101 @@ describe("invitations", () => {
     expect((await owner.fetch(`/api/members/${owner.userId}`, { cookie: adminCookie, method: "PATCH", body: { role: "member" } })).status).toBe(403);
     expect((await owner.fetch(`/api/members/${owner.userId}`, { cookie: adminCookie, method: "DELETE" })).status).toBe(403);
     expect((await owner.fetch(`/api/members/${owner.userId}`, { method: "PATCH", body: { role: "member" } })).status).toBe(409);
+  });
+
+  it("a member promoted to owner after the route's read can not be demoted or removed with a stale expected role", async () => {
+    const worker = createTenantWorker({ modules: [notes] });
+    const owner = await createTestTenant(env, SELF);
+    const staleOwner = await createSession(env.DB, { userId: owner.userId, scope: owner.id, method: "stale" });
+    await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE user_id = ? AND scope = ? AND method = ?").bind(15 * 60_000, owner.userId, owner.id, "stale").run();
+    const staleOwnerCookie = `__Host-rose_session=${staleOwner.token}`;
+    const adminUser = await ensureUser(env.DB, `adm-${Math.random().toString(36).slice(2, 10)}@example.com`);
+    await addMembership(env.DB, owner.id, adminUser.id, "admin");
+    const adminSession = await createSession(env.DB, { userId: adminUser.id, scope: owner.id, method: "test" });
+    const adminCookie = `__Host-rose_session=${adminSession.token}`;
+
+    const interceptTargetRead = (tenantId: string, targetUserId: string) => {
+      let triggered = false;
+      const raw = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+      const db: D1Database = {
+        prepare(query: string) {
+          const wrap = (stmt: D1PreparedStatement, values: unknown[] = []): D1PreparedStatement => {
+            const proxy: D1PreparedStatement = {
+              bind(...next: unknown[]) {
+                return wrap(stmt.bind(...next), next);
+              },
+              async first<T = unknown>(colName?: string) {
+                const res = colName === undefined ? await stmt.first<T>() : await stmt.first<T>(colName);
+                if (
+                  !triggered &&
+                  query === "SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ?" &&
+                  values[0] === tenantId &&
+                  values[1] === targetUserId
+                ) {
+                  triggered = true;
+                  await env.DB.prepare("UPDATE memberships SET role = 'owner' WHERE tenant_id = ? AND user_id = ?").bind(tenantId, targetUserId).run();
+                }
+                return res as never;
+              },
+              run: () => stmt.run(),
+              all: () => stmt.all(),
+              raw: ((options?: { columnNames?: boolean }) => (options ? stmt.raw(options as never) : stmt.raw())) as D1PreparedStatement["raw"],
+            };
+            raw.set(proxy, stmt);
+            return proxy;
+          };
+          return wrap(env.DB.prepare(query));
+        },
+        batch(statements: D1PreparedStatement[]) {
+          return env.DB.batch(statements.map((s) => raw.get(s) ?? s));
+        },
+        exec(query: string) { return env.DB.exec(query); },
+        dump() { return env.DB.dump(); },
+        withSession(constraintOrBookmark?: string) { return env.DB.withSession(constraintOrBookmark); },
+      };
+      return { db, triggered: () => triggered };
+    };
+
+    const makeTarget = async () => {
+      const id = Math.random().toString(36).slice(2, 10);
+      const user = await ensureUser(env.DB, `promoted-${id}@example.com`);
+      await addMembership(env.DB, owner.id, user.id, "member");
+      await createSession(env.DB, { userId: user.id, scope: owner.id, method: "test" });
+      await env.DB
+        .prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, name, created_at) VALUES (?, ?, ?, 'rose.test', 'key', 'pk', 0)")
+        .bind(`cred-${id}`, user.id, owner.id)
+        .run();
+      return user;
+    };
+
+    const cases: readonly { cookie: string; method: "PATCH" | "DELETE"; body?: { role: string } }[] = [
+      { cookie: staleOwnerCookie, method: "PATCH", body: { role: "admin" } },
+      { cookie: staleOwnerCookie, method: "DELETE" },
+      { cookie: adminCookie, method: "PATCH", body: { role: "admin" } },
+      { cookie: adminCookie, method: "DELETE" },
+    ];
+
+    for (const testCase of cases) {
+      const target = await makeTarget();
+      const hook = interceptTargetRead(owner.id, target.id);
+      const headers: Record<string, string> = { Origin: owner.origin, Cookie: testCase.cookie };
+      const init: RequestInit = { method: testCase.method, headers };
+      if (testCase.body) {
+        headers["Content-Type"] = "application/json";
+        init.body = JSON.stringify(testCase.body);
+      }
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(new Request(`${owner.origin}/api/members/${target.id}`, init), { ...env, DB: hook.db }, ctx);
+      await waitOnExecutionContext(ctx);
+      expect(hook.triggered()).toBe(true);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error: { code: "conflict", message: "This member's role changed. Reload and try again." },
+      });
+      expect((await getMembership(env.DB, owner.id, target.id))!.role).toBe("owner");
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(target.id, owner.id).first()).not.toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(target.id, owner.id).first()).not.toBeNull();
+    }
   });
 });
 

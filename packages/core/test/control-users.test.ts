@@ -94,9 +94,214 @@ describe("memberships", () => {
   it("protects the last owner and refuses a non-owner removing an owner", async () => {
     const t = await tenant();
     const o = await member(t, "owner");
+    await createSession(env.DB, { userId: o.id, scope: t.id, method: "test" });
+    await passkey(o.id, t.id);
     await expect(removeMember(env.DB, t.id, "owner", o.id)).rejects.toMatchObject({ code: "conflict", status: 409 });
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(o.id, t.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(o.id, t.id).first()).not.toBeNull();
+    await expect(changeMemberRole(env.DB, t.id, "owner", o.id, "admin")).rejects.toMatchObject({ code: "conflict", status: 409 });
+    await changeMemberRole(env.DB, t.id, "owner", o.id, "owner");
+    expect((await getMembership(env.DB, t.id, o.id))!.role).toBe("owner");
     await expect(removeMember(env.DB, t.id, "admin", o.id)).rejects.toMatchObject({ code: "forbidden", status: 403 });
     await expect(changeMemberRole(env.DB, t.id, "admin", o.id, "member")).rejects.toMatchObject({ code: "forbidden", status: 403 });
+  });
+
+  it("concurrent cross-removal of two owners keeps one owner and preserves their session and passkey", async () => {
+    for (let i = 0; i < 20; i++) {
+      const t = await tenant();
+      const a = await member(t, "owner");
+      const b = await member(t, "owner");
+      await createSession(env.DB, { userId: a.id, scope: t.id, method: "test" });
+      await createSession(env.DB, { userId: b.id, scope: t.id, method: "test" });
+      await passkey(a.id, t.id);
+      await passkey(b.id, t.id);
+      const results = await Promise.allSettled([
+        removeMember(env.DB, t.id, "owner", a.id),
+        removeMember(env.DB, t.id, "owner", b.id),
+      ]);
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const fail = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(ok).toHaveLength(1);
+      expect(fail).toHaveLength(1);
+      expect(fail[0]!.reason).toMatchObject({
+        code: "conflict",
+        status: 409,
+        message: "A workspace needs at least one owner. Make someone else an owner first.",
+      });
+      const owners = await env.DB
+        .prepare("SELECT user_id FROM memberships WHERE tenant_id = ? AND role = 'owner'")
+        .bind(t.id)
+        .all<{ user_id: string }>();
+      expect(owners.results).toHaveLength(1);
+      const survivor = owners.results[0]!.user_id;
+      const removed = survivor === a.id ? b.id : a.id;
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(survivor, t.id).first()).not.toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(survivor, t.id).first()).not.toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(removed, t.id).first()).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(removed, t.id).first()).toBeNull();
+    }
+  });
+
+  it("concurrent cross-demotion of two owners keeps one owner", async () => {
+    for (let i = 0; i < 20; i++) {
+      const t = await tenant();
+      const a = await member(t, "owner");
+      const b = await member(t, "owner");
+      const results = await Promise.allSettled([
+        changeMemberRole(env.DB, t.id, "owner", a.id, "admin"),
+        changeMemberRole(env.DB, t.id, "owner", b.id, "member"),
+      ]);
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const fail = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(ok).toHaveLength(1);
+      expect(fail).toHaveLength(1);
+      expect(fail[0]!.reason).toMatchObject({
+        code: "conflict",
+        status: 409,
+        message: "A workspace needs at least one owner. Make someone else an owner first.",
+      });
+      const owners = await env.DB
+        .prepare("SELECT user_id FROM memberships WHERE tenant_id = ? AND role = 'owner'")
+        .bind(t.id)
+        .all<{ user_id: string }>();
+      expect(owners.results).toHaveLength(1);
+    }
+  });
+
+  it("concurrent double removal of a member succeeds once and returns not_found to the loser", async () => {
+    for (let i = 0; i < 20; i++) {
+      const t = await tenant();
+      await member(t, "owner");
+      const m = await member(t, "member");
+      await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+      await passkey(m.id, t.id);
+      const results = await Promise.allSettled([
+        removeMember(env.DB, t.id, "owner", m.id),
+        removeMember(env.DB, t.id, "owner", m.id),
+      ]);
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const fail = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(ok).toHaveLength(1);
+      expect(fail).toHaveLength(1);
+      expect(fail[0]!.reason).toMatchObject({ code: "not_found", status: 404 });
+      expect(await getMembership(env.DB, t.id, m.id)).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+    }
+  });
+
+  it("concurrent admin removal racing an owner promotion never removes the promoted owner", async () => {
+    let sawRoleChangedConflict = false;
+    for (let i = 0; i < 20; i++) {
+      const t = await tenant();
+      await member(t, "owner");
+      const m = await member(t, "member");
+      await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+      await passkey(m.id, t.id);
+      const [promote, remove] = await Promise.allSettled([
+        changeMemberRole(env.DB, t.id, "owner", m.id, "owner"),
+        removeMember(env.DB, t.id, "admin", m.id),
+      ]);
+      expect([promote, remove].filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      if (promote.status === "fulfilled") {
+        expect(remove.status).toBe("rejected");
+        const reason = (remove as PromiseRejectedResult).reason as AppError;
+        expect(["conflict", "forbidden"]).toContain(reason.code);
+        if (reason.code === "conflict") {
+          expect(reason).toMatchObject({ code: "conflict", status: 409, message: "This member's role changed. Reload and try again." });
+          sawRoleChangedConflict = true;
+        }
+        expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+        expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+      } else {
+        expect(promote.reason).toMatchObject({ code: "not_found", status: 404 });
+        expect(await getMembership(env.DB, t.id, m.id)).toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+      }
+    }
+    expect(sawRoleChangedConflict).toBe(true);
+  });
+
+  it("concurrent promotion racing a removal fails with not_found if removed first", async () => {
+    let sawNotFound = false;
+    for (let i = 0; i < 20; i++) {
+      const t = await tenant();
+      await member(t, "owner");
+      const m = await member(t, "member");
+      await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+      await passkey(m.id, t.id);
+      const [remove, promote] = await Promise.allSettled([
+        removeMember(env.DB, t.id, "owner", m.id),
+        changeMemberRole(env.DB, t.id, "owner", m.id, "owner"),
+      ]);
+      expect([remove, promote].filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      if (remove.status === "fulfilled") {
+        expect(promote.status).toBe("rejected");
+        expect((promote as PromiseRejectedResult).reason).toMatchObject({ code: "not_found", status: 404 });
+        sawNotFound = true;
+        expect(await getMembership(env.DB, t.id, m.id)).toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).toBeNull();
+      } else {
+        expect(remove.reason).toMatchObject({
+          code: "conflict",
+          status: 409,
+          message: "This member's role changed. Reload and try again.",
+        });
+        expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+        expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+        expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+      }
+    }
+    expect(sawNotFound).toBe(true);
+  });
+
+  it("changeMemberRole with a stale expectedRole refuses to demote a promoted owner and leaves membership, session and passkey intact", async () => {
+    const t = await tenant();
+    await member(t, "owner");
+    const m = await member(t, "member");
+    await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+    await passkey(m.id, t.id);
+    await changeMemberRole(env.DB, t.id, "owner", m.id, "owner");
+
+    await expect(changeMemberRole(env.DB, t.id, "admin", m.id, "admin", "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    await expect(changeMemberRole(env.DB, t.id, "owner", m.id, "member", "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+  });
+
+  it("removeMember with a stale expectedRole refuses to remove a promoted owner and leaves membership, session and passkey intact", async () => {
+    const t = await tenant();
+    await member(t, "owner");
+    const m = await member(t, "member");
+    await createSession(env.DB, { userId: m.id, scope: t.id, method: "test" });
+    await passkey(m.id, t.id);
+    await changeMemberRole(env.DB, t.id, "owner", m.id, "owner");
+
+    await expect(removeMember(env.DB, t.id, "admin", m.id, "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    await expect(removeMember(env.DB, t.id, "owner", m.id, "member")).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+      message: "This member's role changed. Reload and try again.",
+    });
+    expect((await getMembership(env.DB, t.id, m.id))!.role).toBe("owner");
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = ?").bind(m.id, t.id).first()).not.toBeNull();
   });
 
   it("membership actions are scoped to the tenant: another tenant's member is not found", async () => {
@@ -152,7 +357,72 @@ describe("operators", () => {
     const e = email();
     await addOperator(env.DB, e, "owner");
     const u = (await getUserByEmail(env.DB, e))!;
+    await createSession(env.DB, { userId: u.id, scope: "platform", method: "test" });
+    await passkey(u.id, "platform");
     await expect(removeOperator(env.DB, u.id)).rejects.toMatchObject({ code: "conflict", status: 409 });
+    expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = 'platform'").bind(u.id).first()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = 'platform'").bind(u.id).first()).not.toBeNull();
+  });
+
+  it("concurrent cross-removal of two platform owners keeps one owner and preserves their session and passkey", async () => {
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare("DELETE FROM operators").run();
+      const ea = email();
+      const eb = email();
+      await addOperator(env.DB, ea, "owner");
+      await addOperator(env.DB, eb, "owner");
+      const a = (await getUserByEmail(env.DB, ea))!;
+      const b = (await getUserByEmail(env.DB, eb))!;
+      await createSession(env.DB, { userId: a.id, scope: "platform", method: "test" });
+      await createSession(env.DB, { userId: b.id, scope: "platform", method: "test" });
+      await passkey(a.id, "platform");
+      await passkey(b.id, "platform");
+      const results = await Promise.allSettled([
+        removeOperator(env.DB, a.id),
+        removeOperator(env.DB, b.id),
+      ]);
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const fail = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(ok).toHaveLength(1);
+      expect(fail).toHaveLength(1);
+      expect(fail[0]!.reason).toMatchObject({
+        code: "conflict",
+        status: 409,
+        message: "The platform needs at least one owner.",
+      });
+      const owners = await env.DB
+        .prepare("SELECT user_id FROM operators WHERE role = 'owner'")
+        .all<{ user_id: string }>();
+      expect(owners.results).toHaveLength(1);
+      const survivor = owners.results[0]!.user_id;
+      const removed = survivor === a.id ? b.id : a.id;
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = 'platform'").bind(survivor).first()).not.toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = 'platform'").bind(survivor).first()).not.toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = 'platform'").bind(removed).first()).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = 'platform'").bind(removed).first()).toBeNull();
+    }
+  });
+
+  it("concurrent double removal of an operator succeeds once and returns not_found to the loser", async () => {
+    for (let i = 0; i < 20; i++) {
+      const e = email();
+      await addOperator(env.DB, e, "operator");
+      const op = (await getUserByEmail(env.DB, e))!;
+      await createSession(env.DB, { userId: op.id, scope: "platform", method: "test" });
+      await passkey(op.id, "platform");
+      const results = await Promise.allSettled([
+        removeOperator(env.DB, op.id),
+        removeOperator(env.DB, op.id),
+      ]);
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const fail = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(ok).toHaveLength(1);
+      expect(fail).toHaveLength(1);
+      expect(fail[0]!.reason).toMatchObject({ code: "not_found", status: 404 });
+      expect(await getOperator(env.DB, op.id)).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM sessions WHERE user_id = ? AND scope = 'platform'").bind(op.id).first()).toBeNull();
+      expect(await env.DB.prepare("SELECT 1 AS x FROM passkeys WHERE user_id = ? AND scope = 'platform'").bind(op.id).first()).toBeNull();
+    }
   });
 
   it("listOperators filters by email and counts users", async () => {
