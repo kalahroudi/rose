@@ -16,12 +16,11 @@ import {
   distinctStates,
   downloadJar,
   ensureJar,
-  extractDefinitions,
+  extractCovered,
   findJava,
   generateMutantCfg,
   hashEntry,
   main,
-  normalize,
   parseCfg,
   runOutcome,
   runTlc,
@@ -32,8 +31,7 @@ import { ROOT } from "./lib.mjs";
 
 const FIXTURES = join(import.meta.dirname, "fixtures", "formal");
 const TOY = join(FIXTURES, "toy");
-const TS_DRIFT = join(FIXTURES, "ts-drift.ts");
-const TOY_HASH = "637a9f82c4c1f325b3146f2e47ec50673e7f76a68bfbc83d3593cd8f035d793e";
+const TOY_HASH = "0c5927c3b0672e437327ae705a40243eedfb86483707541e1c970657c4cb7cd2";
 
 const read = (p) => readFileSync(p, "utf8");
 const toyManifest = () => JSON.parse(read(join(TOY, "formal.json")));
@@ -121,6 +119,13 @@ test("runOutcome and describeOutcome are driven by TLC_EXIT_TABLE and reject zer
   assert.equal(describeOutcome(spawnErr), "could not run java: ENOENT");
 });
 
+test("TLC_EXIT_TABLE lists only TLC's own exit codes and never 142 or 1", () => {
+  const codes = new Set(TLC_EXIT_TABLE.map((e) => e.code));
+  assert.equal(TLC_EXIT_TABLE.length, codes.size, "exit codes must be unique");
+  assert.ok(!codes.has(142), "142 is a signal convention, not a TLC exit code");
+  assert.ok(!codes.has(1), "1 is not a TLC exit code");
+});
+
 test("non-timeout signals are reported as their own signal outcome, distinct from timeouts", () => {
   const sig = runOutcome({ status: null, signal: "SIGKILL", error: null, stdout: "", stderr: "", timedOut: false });
   assert.deepEqual(sig, { kind: "signal", signal: "SIGKILL" });
@@ -190,6 +195,13 @@ test("parseCfg is CRLF-safe, keyword-driven (not indentation-driven) and ignores
   assert.equal(flags.hasSymmetry, false);
   assert.equal(flags.hasProperty, false);
   assert.deepEqual(flags.invariants, new Set(["CounterLeqBound", "ExtraInv", "TypeOK"]));
+});
+
+test("a (* *) comment between two tokens leaves a space instead of merging them", () => {
+  const flags = cfgFlags(parseCfg("SPECIFICATION Spec\nINVARIANT TypeOK(* note *)ExtraInv\n"));
+  assert.ok(flags.invariants.has("TypeOK"), "token before the comment kept");
+  assert.ok(flags.invariants.has("ExtraInv"), "token after the comment kept");
+  assert.ok(!flags.invariants.has("TypeOKExtraInv"), "tokens must not merge");
 });
 
 test("parseCfg splits on whitespace so keywords start sections anywhere on a line and one-line CONSTANTS are kept", () => {
@@ -414,7 +426,7 @@ test("a cfg with SYMMETRY and a PROPERTY is refused end to end", async (t) => {
 
 test("timeoutSeconds validates finiteness and maximum, and is passed to TLC per flow", async (t) => {
   const base = toyManifest();
-  for (const badVal of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, MAX_TIMEOUT_SECONDS + 1, "10"]) {
+  for (const badVal of [0, 0.5, -5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, MAX_TIMEOUT_SECONDS + 1, "10"]) {
     assert.throws(() => validateManifest({ ...base, timeoutSeconds: badVal }, { dirName: "toy" }), /timeoutSeconds/);
   }
   assert.doesNotThrow(() => validateManifest({ ...base, timeoutSeconds: MAX_TIMEOUT_SECONDS }, { dirName: "toy" }));
@@ -482,194 +494,96 @@ test("each concurrent TLC run gets a unique metadir that is removed afterwards",
   for (const m of metadirs) assert.equal(existsSync(m), false, "metadir removed after run");
 });
 
-// ── Drift extraction on TypeScript fixtures ───────────────────────────────────────
+// ── Drift detection (oxc-parser) ───────────────────────────────────────────────
 
-test("drift extraction skips TS return types, generic constraints, typed consts, a++ / b, and braces in strings/templates", () => {
-  const src = read(TS_DRIFT);
+test("extractCovered finds a function declaration, a nested const arrow, and a quoted object key", () => {
+  const fnDecl = "export async function tick(x: number): string { return `t${x}`; }\n";
+  const tick = extractCovered(fnDecl, "tick");
+  assert.equal(tick.length, 1);
+  assert.ok(tick[0].startsWith("export async function tick"));
 
-  const expectedBody = (name, mustInclude, mustExclude = []) => {
-    const bodies = extractDefinitions(src, name);
-    assert.equal(bodies.length, 1, `${name} should extract exactly one body`);
-    assert.ok(bodies[0].startsWith("{") && bodies[0].endsWith("}"), `${name} body must be brace-delimited`);
-    for (const s of mustInclude) assert.ok(bodies[0].includes(s), `${name} body should include ${s}, got: ${bodies[0]}`);
-    for (const s of mustExclude) assert.ok(!bodies[0].includes(s), `${name} body should not include ${s}, got: ${bodies[0]}`);
-    return bodies[0];
-  };
-
-  expectedBody("objReturn", ["return { ok: x > 0, meta: { n: x } }"], ["meta: { n: number }"]);
-  expectedBody("unionReturn", ['{ err: "bad" }'], ["Promise<"]);
-  expectedBody("fnReturn", ["return (y) => ({ sum: x + y })"], ["sum: number"]);
-  expectedBody("predReturn", ['"id" in x'], ["id: string"]);
-  expectedBody("overloaded", ['typeof x === "string"'], ['kind: "s"; v: string']);
-  expectedBody("genericFn", ["return { id: item.id }"], ["tags: Record", "extra?: U"]);
-  expectedBody("genericArrow", ["return fn(x)"], ["F extends"]);
-  expectedBody("typedArrow", ["return { ok: a <= b.limit }"], ["limit: number"]);
-  expectedBody("typedFuncExpr", ["return { n: v.n + 1 }"], ["n: number"]);
-  expectedBody("postfixDiv", ["return a++ / b + a-- / b"], ["afterDiv", "1 / 2"]);
-
-  const litBody = expectedBody("bracesInLiterals", ['"}"', '"{"', "/}/"]);
-  const norm = normalize(litBody);
-  assert.ok(norm.includes('"}"'), "brace inside string kept");
-  assert.ok(norm.includes("/}/"), "brace inside regex kept");
-  assert.ok(!norm.includes("comment with }"), "comment inside template expression stripped");
-});
-
-test("expression-bodied arrows fail loudly instead of scanning into the next function", () => {
-  assert.throws(() => extractDefinitions("export const f = () => 1;\n", "f"), /brace-delimited body/);
-  assert.throws(
-    () => extractDefinitions("export const f = (x: number): number => x + 1\nexport function g() { return 2; }\n", "f"),
-    /brace-delimited body/,
-  );
-  assert.throws(() => extractDefinitions("export const f = () => (1 + 2);\n", "f"), /brace-delimited body/);
-  assert.throws(() => extractDefinitions("export const f = () => ({ a: 1 }).a;\n", "f"), /brace-delimited body/);
-  assert.throws(() => extractDefinitions('const m = { "f": () => 1 };\n', "f"), /brace-delimited body/);
-});
-
-test("extractDefinitions and normalize fail closed on ambiguous slash (tokenizeSafe), handle readonly return types, and skip type/interface spans", () => {
-  // Repro 1: ambiguous `/` fails closed in both extractDefinitions and normalize
-  const ambiguous = "export function f(a: number) { const x = a++ / 1; return /; }\n";
-  assert.throws(() => extractDefinitions(ambiguous, "f"), /Ambiguous `\/`/);
-  assert.throws(() => normalize("{ const x = a++ / 1; return /; }"), /Ambiguous `\/`/);
-
-  // Repro 2: readonly in return type must not stop at the type's `{`
-  const readonlySrc = "export function getItems(n: number): readonly { id: string; count: number }[] {\n  return [{ id: 'a', count: n }];\n}\n";
-  const readonlyBodies = extractDefinitions(readonlySrc, "getItems");
-  assert.equal(readonlyBodies.length, 1);
-  assert.ok(readonlyBodies[0].includes("return [{ id: 'a', count: n }]"), `got: ${readonlyBodies[0]}`);
-  assert.ok(!readonlyBodies[0].includes("id: string"));
-
-  // Repro 3: quoted keys inside `type X = ...` and `interface X { ... }` are never read as bodies
-  const typeAndInterfaceOnly = [
-    'type Handlers = {',
-    '  "tenant.purge": (env: unknown) => { done: boolean };',
-    '};',
-    'export type UnionHandlers<T extends { id: string }> =',
-    '  | { "tenant.purge": (x: T) => { ok: true } }',
-    '  | { other: number }',
-    'export interface HandlerMap extends Record<string, unknown> {',
-    '  "tenant.purge": (env: unknown) => { done: boolean };',
-    '}',
-  ].join("\n");
-  assert.deepEqual(extractDefinitions(typeAndInterfaceOnly, "tenant.purge"), []);
-
-  const withRealHandler = `${typeAndInterfaceOnly}\nconst handlers = {\n  "tenant.purge": async (env: unknown) => {\n    return { purged: true };\n  },\n};\n`;
-  const extracted = extractDefinitions(withRealHandler, "tenant.purge");
-  assert.equal(extracted.length, 1);
-  assert.ok(extracted[0].includes("return { purged: true }"));
-});
-
-test("nested const, let or var with the covered name that is not a function is skipped instead of throwing", () => {
-  const src = [
-    "export function other() {",
-    "  const target = computeTarget();",
-    "  let target2 = 1;",
-    "  if (target) {",
-    "    var target = null;",
-    "  }",
-    "  return target;",
-    "}",
-    "export function target(x: number) {",
-    "  return x + 1;",
-    "}",
-  ].join("\n");
-  const bodies = extractDefinitions(src, "target");
-  assert.equal(bodies.length, 1);
-  assert.ok(bodies[0].includes("return x + 1"));
-
-  const onlyNestedNonFn = "export function other() { const missing = 123; let missing2 = 'a'; var missing3 = {}; }\n";
-  assert.deepEqual(extractDefinitions(onlyNestedNonFn, "missing"), []);
-});
-
-test("covered functions support quoted object keys, nested const arrows, and reject duplicates naming file and name", () => {
-  // Quoted object keys (plain and wrapped in a call like idempotent(...))
-  const quotedSrc = [
-    "export function tenantJobHandlers() {",
-    "  const handlers = {",
-    '    "tenant.purge": idempotent(async (env, _job, payload) => {',
-    "      return { done: true, result: payload };",
-    "    }),",
-    '    "other.job": async () => { return { done: true }; },',
+  const nested = [
+    "export function createApp() {",
+    "  const realmFor = (c, tenant) => ({ scope: tenant.id });",
+    "  const activeTenant = (c) => {",
+    "    return c.tenant;",
     "  };",
-    "  return handlers;",
-    "}",
-  ].join("\n");
-  const purgeBodies = extractDefinitions(quotedSrc, "tenant.purge");
-  assert.equal(purgeBodies.length, 1);
-  assert.ok(purgeBodies[0].includes("return { done: true, result: payload }"));
-  const otherBodies = extractDefinitions(quotedSrc, "other.job");
-  assert.equal(otherBodies.length, 1);
-  assert.ok(otherBodies[0].includes("return { done: true }"));
-
-  // Const arrows declared inside another function (including parenthesized object-literal return)
-  const nestedArrowsSrc = [
-    "export function createTenantApp() {",
-    "  const realmFor = (c: Ctx, tenant: TenantRow): AuthRealm => ({",
-    "    scope: tenant.id,",
-    "    admit: async () => { return true; },",
-    "  });",
-    "  const activeTenant = (c: Ctx): TenantRow => {",
-    '    const host = c.get("host");',
-    "    return host.tenant;",
-    "  };",
-    "  const authenticate = async (c: Ctx, next: () => Promise<void>) => {",
-    "    const row = activeTenant(c);",
+    "  const authenticate = async (c, next) => {",
     "    await next();",
     "  };",
     "  return { realmFor, activeTenant, authenticate };",
     "}",
   ].join("\n");
-  assert.equal(extractDefinitions(nestedArrowsSrc, "realmFor").length, 1);
-  assert.ok(extractDefinitions(nestedArrowsSrc, "realmFor")[0].includes("scope: tenant.id"));
-  assert.equal(extractDefinitions(nestedArrowsSrc, "activeTenant").length, 1);
-  assert.ok(extractDefinitions(nestedArrowsSrc, "activeTenant")[0].includes('c.get("host")'));
-  assert.equal(extractDefinitions(nestedArrowsSrc, "authenticate").length, 1);
-  assert.ok(extractDefinitions(nestedArrowsSrc, "authenticate")[0].includes("await next()"));
+  for (const name of ["realmFor", "activeTenant", "authenticate"]) {
+    assert.equal(extractCovered(nested, name).length, 1, name);
+  }
 
-  // Combined file with quoted handler + top-level function + nested const arrows hashes cleanly
-  const combined = `${quotedSrc}\nexport async function tenantTick() { return 1; }\n${nestedArrowsSrc}\n`;
-  const combinedHash = hashEntry(
-    { file: "src/tenant-app.ts", functions: ["tenant.purge", "tenantTick", "realmFor", "activeTenant", "authenticate"] },
-    () => combined,
-    "/",
-  );
-  assert.equal(combinedHash.found, true);
-  assert.match(combinedHash.sha256, /^[0-9a-f]{64}$/);
-
-  // Duplicate names (quoted object key and nested const arrow) error naming file and name
-  const dupQuoted = 'const a = { "tenant.purge": () => { return 1; } };\nconst b = { "tenant.purge": idempotent(async () => { return 2; }) };\n';
-  assert.throws(
-    () => hashEntry({ file: "src/tenant-app.ts", functions: ["tenant.purge"] }, () => dupQuoted, "/"),
-    /src\/tenant-app\.ts: "tenant\.purge" is defined 2 times/,
-  );
-
-  const dupNested = "function a() { const activeTenant = () => { return 1; }; }\nfunction b() { const activeTenant = () => { return 2; }; }\n";
-  assert.throws(
-    () => hashEntry({ file: "src/tenant-app.ts", functions: ["activeTenant"] }, () => dupNested, "/"),
-    /src\/tenant-app\.ts: "activeTenant" is defined 2 times/,
-  );
+  const quoted = [
+    "export function handlers() {",
+    "  const map = {",
+    "    \"tenant.purge\": idempotent(async (env) => { return { done: true }; }),",
+    "  };",
+    "  return map;",
+    "}",
+  ].join("\n");
+  const purge = extractCovered(quoted, "tenant.purge");
+  assert.equal(purge.length, 1);
+  assert.ok(purge[0].startsWith("\"tenant.purge\""));
 });
 
-test("comment-only edits (including inside template expressions) do not change the hash; body and template text edits do", (t) => {
-  const dir = makeTempDir(t, "rose-hash-");
-  const entry = { file: "m.ts", functions: ["f"] };
-  writeFileSync(join(dir, "m.ts"), "export function f(x: number): string {\n  return `a${x}b`; // count\n}\n");
-  const before = hashEntry(entry, readFileSync, dir).sha256;
-
-  writeFileSync(join(dir, "m.ts"), "export function f(x: number): string {\n  // a longer comment\n  return `a${/* inner comment */ x}b`;\n}\n");
-  assert.equal(hashEntry(entry, readFileSync, dir).sha256, before);
-
-  // Moving template text across interpolation must change the hash
-  writeFileSync(join(dir, "m.ts"), "export function f(x: number): string {\n  return `ab${x}`;\n}\n");
-  assert.notEqual(hashEntry(entry, readFileSync, dir).sha256, before);
-});
-
-test("a covered function that no longer exists is stale; a name defined twice is an error", (t) => {
-  const dir = makeTempDir(t, "rose-hash-");
-  writeFileSync(join(dir, "m.ts"), "export function g() { return 1; }\n");
-  assert.equal(hashEntry({ file: "m.ts", functions: ["f"] }, readFileSync, dir).found, false);
+test("a covered function that no longer exists is stale; a name defined twice errors with both line numbers", () => {
+  assert.equal(hashEntry({ file: "m.ts", functions: ["f"] }, () => "export function g() { return 1; }\n", "/").found, false);
 
   const dup = "export function f() { return 1; }\nconst f = () => { return 2; };\n";
-  assert.throws(() => hashEntry({ file: "x.ts", functions: ["f"] }, () => dup, "/"), /defined 2 times/);
+  assert.throws(() => hashEntry({ file: "x.ts", functions: ["f"] }, () => dup, "/"), /x\.ts: "f" is defined 2 times \(lines 1 and 2\)/);
+
+  const dupQuoted = "const a = { \"tenant.purge\": () => { return 1; } };\nconst b = { \"tenant.purge\": () => { return 2; } };\n";
+  assert.throws(() => hashEntry({ file: "y.ts", functions: ["tenant.purge"] }, () => dupQuoted, "/"), /lines 1 and 2/);
+});
+
+test("comment-only and whitespace-only edits keep the hash; body, param default, return type and async edits change it", (t) => {
+  const dir = makeTempDir(t, "rose-hash-");
+  const entry = { file: "m.ts", functions: ["f"] };
+  const write = (s) => writeFileSync(join(dir, "m.ts"), s);
+  const hash = () => hashEntry(entry, readFileSync, dir).sha256;
+
+  write("export function f(x: number): string {\n  return x;\n}\n");
+  const base = hash();
+
+  write("export function f(x: number): string {\n  // explain the return\n  return x; // trailing\n}\n");
+  assert.equal(hash(), base, "comment-only edit keeps the hash");
+
+  write("export function f(x: number): string {\n\n    return x;\n\n}\n");
+  assert.equal(hash(), base, "whitespace-only edit keeps the hash");
+
+  write("export function f(x: number): string {\n  return x + 1;\n}\n");
+  assert.notEqual(hash(), base, "body edit changes the hash");
+
+  write("export function f(x = 1): string {\n  return x;\n}\n");
+  assert.notEqual(hash(), base, "param default edit changes the hash");
+
+  write("export function f(x: number): number {\n  return x;\n}\n");
+  assert.notEqual(hash(), base, "return-type edit changes the hash");
+
+  write("export async function f(x: number): string {\n  return x;\n}\n");
+  assert.notEqual(hash(), base, "adding async changes the hash");
+});
+
+test("a parse error in a covered file fails the drift check", () => {
+  assert.throws(
+    () => hashEntry({ file: "broken.ts", functions: ["f"] }, () => "export function f( { return 1; }\n", "/"),
+    /cannot parse broken\.ts/,
+  );
+});
+
+test("every covered function in the tenant-deletion manifest is found exactly once in this checkout", () => {
+  const manifest = JSON.parse(read(join(FIXTURES, "tenant-deletion-formal.json")));
+  for (const entry of manifest.covered) {
+    const src = read(join(ROOT, entry.file));
+    for (const fn of entry.functions) {
+      assert.equal(extractCovered(src, fn).length, 1, `${entry.file}: "${fn}" should be found exactly once`);
+    }
+  }
 });
 
 // ── End-to-end flow checks, drift, resync, CLI errors ─────────────────────────────
@@ -866,6 +780,24 @@ test("ensureJar refuses a bad sha256 and caches a matching jar", async (t) => {
   assert.equal(readFileSync(jar, "utf8"), "jar-bytes");
   assert.equal(await ensureJar({ cacheDir: dir, sha, download }), jar);
   assert.equal(downloads, 1);
+});
+
+test("ensureJar removes its temp file when the download fails and leaves only the jar on success", async (t) => {
+  const dir = makeTempDir(t, "rose-jar-");
+  const content = Buffer.from("jar-bytes");
+  const sha = sha256(content);
+  let attempts = 0;
+  const flaky = async () => {
+    attempts++;
+    if (attempts === 1) throw new Error("network down");
+    return content;
+  };
+  await assert.rejects(ensureJar({ cacheDir: dir, sha, download: flaky }), /network down/);
+  assert.deepEqual(readdirSync(dir), [], "failed download must not leave a temp file");
+
+  const jar = await ensureJar({ cacheDir: dir, sha, download: flaky });
+  assert.equal(readFileSync(jar, "utf8"), "jar-bytes");
+  assert.deepEqual(readdirSync(dir), ["tla2tools.jar"], "successful download leaves only the jar");
 });
 
 test("no Java produces a clear error", async () => {

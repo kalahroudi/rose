@@ -1,6 +1,6 @@
 # Formal harness
 
-`pnpm formal` runs `scripts/formal.mjs`. It checks every `formal/*/formal.json` flow with TLC, proves each mutant fails, and detects when modelled code changed.
+`pnpm formal` runs `scripts/formal.mjs`. It checks every `formal/*/formal.json` flow with TLC, proves each mutant fails, and detects when modelled code changed. It is not yet run by `pnpm verify` or CI (T2 wires it).
 
 CLI options:
 
@@ -37,7 +37,7 @@ The config parser (`parseCfg`) is CRLF-safe and driven by TLC's `.cfg` keywords 
 
 ## Exit codes
 
-TLC 1.7.4 returns 0 for a pass, 12 for a safety violation, and 13 for a temporal violation. The harness drives classification and descriptions from `TLC_EXIT_TABLE` and treats only those three as model outcomes. Every other code, timeout, or signal is a model or infrastructure error and never counts as "mutant killed".
+TLC 1.7.4 reports its outcomes through `tlc2.output.EC.ExitStatus`. The harness drives classification and descriptions from `TLC_EXIT_TABLE` and treats only a pass, a safety violation, and a temporal violation as model outcomes. Every other code, timeout, or signal is a model or infrastructure error and never counts as "mutant killed".
 
 | Code | Meaning |
 |---|---|
@@ -46,13 +46,17 @@ TLC 1.7.4 returns 0 for a pass, 12 for a safety violation, and 13 for a temporal
 | 11 | deadlock, no enabled next step |
 | 12 | safety invariant violated |
 | 13 | temporal property violated |
-| 150 | parse or semantic error |
-| 151 | constant missing from cfg |
-| 255 | out of memory |
-| 1 | bad option |
-| 142 | timed out |
+| 14 | Assert evaluated to FALSE |
+| 75 | spec evaluation failed |
+| 76 | safety invariant evaluation failed |
+| 77 | liveness property evaluation failed |
+| 150 | spec parse error |
+| 151 | config parse error |
+| 152 | state space too large |
+| 153 | system error |
+| 255 | TLC error |
 
-Non-timeout signals (such as `SIGKILL` or `SIGSEGV`) are reported as their own `signal` outcome (`killed by signal <SIG>`), distinct from timeouts (`ETIMEDOUT` or exit 142).
+A timeout is the harness's own kill, never a TLC exit code: `runTlc` gives `spawnSync` a timeout, and a run whose java process had to be killed reports `ETIMEDOUT`, which `runOutcome` classifies as `timeout`. Non-timeout signals (such as `SIGKILL` or `SIGSEGV`) are reported as their own `signal` outcome (`killed by signal <SIG>`).
 
 A run that prints "is violated" or "properties were violated" while exiting 0 also fails. This catches a stray `-continue` flag, which TLC must never receive.
 
@@ -64,11 +68,11 @@ Each mutant id must appear verbatim in the model as `"<id>" \in MUTANTS`. A miss
 
 ## Drift detection
 
-The harness hashes the covered function bodies, not the files. Comment-only edits must not force a resync. The repository runs TypeScript 7.0.2, whose module has no compiler API, and adding a parser dependency needs owner sign-off. `scripts/formal.mjs` reuses the `tokenizeSafe` lexer exported from `scripts/route-authz-scan.mjs` to find `function <name>` (including `function*`), `const`/`let`/`var <name> [: Type] =` (including arrows declared inside another function), and `"<name>":` / `'<name>':` (including handlers wrapped in a call such as `idempotent(...)`).
+The harness hashes the covered functions, not the files. `scripts/formal.mjs` parses each covered file with `oxc-parser` (`parseSync`; a direct devDependency pinned to 0.156.0) and walks the AST for each covered name, matching it as a function declaration, a variable declarator at any nesting depth whose initializer is an arrow or function expression (optionally wrapped in one call such as `idempotent(...)`), or an object property with a string or identifier key whose value is such a function. The hashed span runs from the declaration start (`export`/`async`/`function`/`const` keyword, or the property key) to its end, so parameters, defaults, types, `async`, and the body are all covered.
 
-The extractor skips `type X = ...` and `interface X { ... }` spans, TypeScript generic parameter lists (`<T extends ...>`), variable type annotations, and return types (including `readonly { ... }`), then extracts the brace-delimited `{ ... }` body (or parenthesized object literal `({ ... })` immediately after `=>`) while respecting strings, template literals, regex literals, comments, and failing closed on ambiguous `/`. It normalizes the token stream (dropping comments and whitespace) and hashes the result.
+Normalisation drops the comment ranges `parseSync` returns and collapses whitespace, then hashes with SHA-256. Comment-only and whitespace-only edits keep the hash; any other edit changes it.
 
-A missing function counts as stale. A name defined twice fails naming the file and the name. A nested `const`/`let`/`var` with the covered name that is not a function is skipped. Plain expression-bodied arrows (`const f = () => 1` or `const f = () => (x + 1)`) fail loudly instead of scanning onward and hashing the wrong text.
+A missing function counts as stale. A name defined more than once in a file fails naming the file and both line numbers. A parse error in a covered file fails the check.
 
 When covered code drifts, the harness tells you to re-check the model against the changed code (`docs/internals/formal-harness.md`), then run `pnpm formal --resync <flow>`.
 

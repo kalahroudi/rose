@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseSync } from "oxc-parser";
 import { ROOT, parseArgs } from "./lib.mjs";
-import { tokenizeSafe } from "./route-authz-scan.mjs";
 
 export const TLA_TOOLS_VERSION = "1.7.4";
 export const TLA_TOOLS_URL = `https://github.com/tlaplus/tlaplus/releases/download/v${TLA_TOOLS_VERSION}/tla2tools.jar`;
@@ -24,11 +24,15 @@ export const TLC_EXIT_TABLE = [
   { code: 11, kind: "deadlock", description: "deadlock, no enabled next step (exit 11)" },
   { code: 12, kind: "safety-violation", description: "safety invariant violated (exit 12)" },
   { code: 13, kind: "liveness-violation", description: "temporal property violated (exit 13)" },
-  { code: 150, kind: "parse-semantic", description: "parse or semantic error (exit 150)" },
-  { code: 151, kind: "constant-missing", description: "constant missing from cfg (exit 151)" },
-  { code: 255, kind: "oom", description: "out of memory (exit 255)" },
-  { code: 1, kind: "bad-option", description: "bad TLC option (exit 1)" },
-  { code: 142, kind: "timeout", description: "timed out" },
+  { code: 14, kind: "assert-violation", description: "Assert evaluated to FALSE (exit 14)" },
+  { code: 75, kind: "spec-eval", description: "spec evaluation failed (exit 75)" },
+  { code: 76, kind: "safety-eval", description: "safety invariant evaluation failed (exit 76)" },
+  { code: 77, kind: "liveness-eval", description: "liveness property evaluation failed (exit 77)" },
+  { code: 150, kind: "spec-parse", description: "spec parse error (exit 150)" },
+  { code: 151, kind: "config-parse", description: "config parse error (exit 151)" },
+  { code: 152, kind: "statespace-too-large", description: "state space too large (exit 152)" },
+  { code: 153, kind: "system-error", description: "system error (exit 153)" },
+  { code: 255, kind: "error", description: "TLC error (exit 255)" },
 ];
 const EXIT_BY_CODE = new Map(TLC_EXIT_TABLE.map((e) => [e.code, e]));
 const EXIT_BY_KIND = new Map(TLC_EXIT_TABLE.map((e) => [e.kind, e]));
@@ -122,382 +126,125 @@ export async function ensureJar({ cacheDir = defaultCacheDir(), url = TLA_TOOLS_
     throw new Error(`tla2tools.jar at ${jar} does not match sha256 ${sha} (got ${actual}). Remove it and re-run to re-download.`);
   }
   mkdirSync(cacheDir, { recursive: true });
-  const tmp = join(cacheDir, `tla2tools.jar.${process.pid}.tmp`);
-  const buf = await download(url);
-  const actual = sha256(buf);
-  if (actual !== sha) throw new Error(`refusing tla2tools.jar from ${url}: sha256 ${actual} does not match expected ${sha}`);
-  writeFileSync(tmp, buf);
-  renameSync(tmp, jar);
-  return jar;
-}
-
-// ── Drift detection (reuses tokenizeSafe from scripts/route-authz-scan.mjs) ───────
-
-const isP = (t, v) => t?.type === "punct" && (v === undefined || t.value === v);
-const isId = (t, v) => t?.type === "id" && (v === undefined || t.value === v);
-const isPropAccess = (toks, i) => isP(toks[i - 1], ".") || isP(toks[i - 1], "?.") || isP(toks[i - 1], "#");
-
-const TYPE_EXPECTS_BRACE_PUNCT = new Set([":", "|", "&", "=>", "?"]);
-const TYPE_EXPECTS_BRACE_KW = new Set(["is", "extends", "keyof", "readonly"]);
-const TYPE_CONT_BEFORE = new Set(["=", ":", "|", "&", "=>", "?", ".", "-"]);
-const TYPE_CONT_BEFORE_KW = new Set(["is", "extends", "keyof", "readonly", "typeof", "infer", "unique", "asserts", "new", "abstract"]);
-const TYPE_CONT_START = new Set(["|", "&", "?", ":", "=>", ".", "[", "<"]);
-const TYPE_CONT_START_KW = new Set(["extends", "is"]);
-const STMT_START_KW = new Set(["export", "import", "function", "const", "let", "var", "class", "interface", "type", "return", "if", "for", "while", "switch", "try"]);
-
-function matchDelim(toks, openIdx, openVal, closeVal) {
-  let depth = 0;
-  for (let i = openIdx; i < toks.length; i++) {
-    if (isP(toks[i], openVal)) depth++;
-    else if (isP(toks[i], closeVal) && --depth === 0) return i;
+  const tmp = join(cacheDir, `tla2tools.jar.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+  try {
+    const buf = await download(url);
+    const actual = sha256(buf);
+    if (actual !== sha) throw new Error(`refusing tla2tools.jar from ${url}: sha256 ${actual} does not match expected ${sha}`);
+    writeFileSync(tmp, buf);
+    renameSync(tmp, jar);
+    return jar;
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
   }
-  return -1;
 }
 
-function skipBalanced(toks, i) {
-  if (isP(toks[i], "(")) { const c = matchDelim(toks, i, "(", ")"); return c < 0 ? -1 : c + 1; }
-  if (isP(toks[i], "[")) { const c = matchDelim(toks, i, "[", "]"); return c < 0 ? -1 : c + 1; }
-  if (isP(toks[i], "{")) { const c = matchDelim(toks, i, "{", "}"); return c < 0 ? -1 : c + 1; }
-  return i;
-}
+// ── Drift detection (oxc-parser) ─────────────────────────────────────────────────
 
-function skipAngle(toks, openIdx) {
-  let depth = 0;
-  let i = openIdx;
-  while (i < toks.length) {
-    if (isP(toks[i], "(") || isP(toks[i], "[") || isP(toks[i], "{")) {
-      i = skipBalanced(toks, i);
-      if (i < 0) return -1;
-      continue;
-    }
-    if (isP(toks[i], "<")) depth++;
-    else if (isP(toks[i], ">") && --depth === 0) return i + 1;
-    i++;
+const isNode = (x) => x != null && typeof x === "object" && typeof x.type === "string";
+const isFunctionExpr = (n) => n != null && (n.type === "ArrowFunctionExpression" || n.type === "FunctionExpression");
+
+function unwrapCall(expr) {
+  if (isFunctionExpr(expr)) return expr;
+  if (expr != null && expr.type === "CallExpression") {
+    const args = (expr.arguments ?? []).filter((a) => a != null && a.type !== "SpreadElement");
+    if (args.length === 1 && isFunctionExpr(args[0])) return args[0];
   }
-  return -1;
+  return null;
 }
 
-const expectsTypeAfter = (prev) =>
-  (prev.type === "punct" && TYPE_EXPECTS_BRACE_PUNCT.has(prev.value))
-  || (prev.type === "id" && TYPE_EXPECTS_BRACE_KW.has(prev.value));
+function propertyKeyName(prop) {
+  const key = prop.key;
+  if (!key) return null;
+  if (key.type === "Identifier" || key.type === "IdentifierName" || key.type === "PrivateIdentifier") return key.name;
+  if (key.type === "Literal") return typeof key.value === "string" ? key.value : null;
+  return null;
+}
 
-/** Skip `: ReturnType` after a function's `)`. Returns body `{` index, -2 for overload/ambient `;`, or -1 on error. */
-function skipReturnTypeToBrace(toks, colonIdx) {
-  let i = colonIdx + 1;
-  let prev = toks[colonIdx];
-  while (i < toks.length) {
-    const t = toks[i];
-    if (isP(t, "(") || isP(t, "[")) {
-      const next = skipBalanced(toks, i);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      i = next;
-      continue;
+function lineOf(src, offset) {
+  let line = 1;
+  for (let i = 0; i < offset; i++) if (src[i] === "\n") line++;
+  return line;
+}
+
+function findSpans(program, name) {
+  const spans = [];
+  const walk = (node, exportStart) => {
+    if (!isNode(node)) return;
+    if (node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration") {
+      if (node.declaration) walk(node.declaration, node.start);
+      return;
     }
-    if (isP(t, "<")) {
-      const next = skipAngle(toks, i);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      i = next;
-      continue;
-    }
-    if (isP(t, "{")) {
-      if (expectsTypeAfter(prev)) {
-        const next = skipBalanced(toks, i);
-        if (next < 0) return -1;
-        prev = toks[next - 1];
-        i = next;
-        continue;
+    if (node.type === "FunctionDeclaration") {
+      if (node.id && node.id.name === name) spans.push({ start: exportStart ?? node.start, end: node.end });
+    } else if (node.type === "VariableDeclaration") {
+      for (const d of node.declarations ?? []) {
+        if (d && d.id && d.id.name === name && unwrapCall(d.init)) spans.push({ start: exportStart ?? node.start, end: d.end });
       }
-      return i;
+    } else if (node.type === "Property") {
+      if (propertyKeyName(node) === name && unwrapCall(node.value)) spans.push({ start: node.key.start, end: node.end });
     }
-    if (isP(t, ";")) return -2;
-    if (t.line > prev.line && isId(t) && STMT_START_KW.has(t.value) && !expectsTypeAfter(prev)) return -2;
-    prev = t;
-    i++;
-  }
-  return -1;
-}
-
-/** Skip a TypeScript type annotation starting at `:` until `stopPunct` (`=` or `=>`) at top level. */
-function skipTypeUntil(toks, colonIdx, stopPunct) {
-  let i = colonIdx + 1;
-  let prev = toks[colonIdx];
-  while (i < toks.length) {
-    const t = toks[i];
-    if (isP(t, "(") || isP(t, "[") || isP(t, "{")) {
-      const next = skipBalanced(toks, i);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      i = next;
-      continue;
+    for (const key of Object.keys(node)) {
+      if (key === "parent" || key === "start" || key === "end") continue;
+      const child = node[key];
+      if (Array.isArray(child)) for (const item of child) walk(item, null);
+      else walk(child, null);
     }
-    if (isP(t, "<")) {
-      const next = skipAngle(toks, i);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      i = next;
-      continue;
-    }
-    if (isP(t, stopPunct)) return i;
-    if (isP(t, ";") || isP(t, ",") || (stopPunct === "=>" && isP(t, "="))) return -1;
-    if (t.line > prev.line && isId(t) && STMT_START_KW.has(t.value) && !expectsTypeAfter(prev)) return -1;
-    prev = t;
-    i++;
-  }
-  return -1;
-}
-
-/** Starting at `function`, return body `{` index, -2 for overload/ambient declaration, or -1 if malformed. */
-function findFunctionBody(toks, fnKwIdx) {
-  let i = fnKwIdx + 1;
-  if (isP(toks[i], "*")) i++;
-  if (isId(toks[i])) i++;
-  if (isP(toks[i], "<")) {
-    i = skipAngle(toks, i);
-    if (i < 0) return -1;
-  }
-  if (!isP(toks[i], "(")) return -1;
-  const closeParen = matchDelim(toks, i, "(", ")");
-  if (closeParen < 0) return -1;
-  i = closeParen + 1;
-  if (isP(toks[i], "{")) return i;
-  if (isP(toks[i], ";")) return -2;
-  if (isP(toks[i], ":")) return skipReturnTypeToBrace(toks, i);
-  return -1;
-}
-
-/** Skip a `type X [<...>] = ...` alias span, returning its last token index or -1 if not a type alias. */
-function skipTypeAlias(toks, typeKwIdx) {
-  let j = typeKwIdx + 1;
-  if (!isId(toks[j]) || toks[j].line !== toks[typeKwIdx].line) return -1;
-  j++;
-  if (isP(toks[j], "<")) {
-    j = skipAngle(toks, j);
-    if (j < 0) return -1;
-  }
-  if (!isP(toks[j], "=")) return -1;
-  let prev = toks[j];
-  j++;
-  while (j < toks.length) {
-    const t = toks[j];
-    if (isP(t, ";")) return j;
-    if (isP(t, "}") || isP(t, ")") || isP(t, "]")) return j - 1;
-    if (t.line > prev.line) {
-      const prevCont = (prev.type === "punct" && TYPE_CONT_BEFORE.has(prev.value))
-        || (prev.type === "id" && TYPE_CONT_BEFORE_KW.has(prev.value));
-      const currCont = (t.type === "punct" && TYPE_CONT_START.has(t.value))
-        || (t.type === "id" && TYPE_CONT_START_KW.has(t.value));
-      if (!prevCont && !currCont) return j - 1;
-    }
-    if (isP(t, "(") || isP(t, "[") || isP(t, "{")) {
-      const next = skipBalanced(toks, j);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      j = next;
-      continue;
-    }
-    if (isP(t, "<")) {
-      const next = skipAngle(toks, j);
-      if (next < 0) return -1;
-      prev = toks[next - 1];
-      j = next;
-      continue;
-    }
-    prev = t;
-    j++;
-  }
-  return toks.length - 1;
-}
-
-/** Skip an `interface X [<...>] [extends ...] { ... }` span, returning its closing `}` index or -1. */
-function skipInterface(toks, ifaceKwIdx) {
-  let j = ifaceKwIdx + 1;
-  if (!isId(toks[j]) || toks[j].line !== toks[ifaceKwIdx].line) return -1;
-  j++;
-  if (isP(toks[j], "<")) {
-    j = skipAngle(toks, j);
-    if (j < 0) return -1;
-  }
-  if (isId(toks[j], "extends")) {
-    j++;
-    while (j < toks.length && !isP(toks[j], "{")) {
-      if (isP(toks[j], ";")) return -1;
-      if (isP(toks[j], "<")) {
-        j = skipAngle(toks, j);
-        if (j < 0) return -1;
-        continue;
-      }
-      if (isP(toks[j], "(") || isP(toks[j], "[")) {
-        j = skipBalanced(toks, j);
-        if (j < 0) return -1;
-        continue;
-      }
-      j++;
-    }
-  }
-  if (!isP(toks[j], "{")) return -1;
-  return matchDelim(toks, j, "{", "}");
-}
-
-/** Parse RHS of `const name [: Type] = <rhs>` or `"name": <rhs>` as a function expression, arrow function, or wrapper(fn). */
-function parseRhsFunction(toks, start, allowWrap = true) {
-  let i = start;
-  if (isId(toks[i], "async")) i++;
-  if (isId(toks[i], "function")) {
-    const open = findFunctionBody(toks, i);
-    return open >= 0 ? { kind: "body", open } : { kind: "not-fn" };
-  }
-  if (isP(toks[i], "<")) {
-    i = skipAngle(toks, i);
-    if (i < 0) return { kind: "not-fn" };
-  }
-  if (isP(toks[i], "(")) {
-    const closeParen = matchDelim(toks, i, "(", ")");
-    if (closeParen < 0) return { kind: "not-fn" };
-    i = closeParen + 1;
-    if (isP(toks[i], ":")) {
-      i = skipTypeUntil(toks, i, "=>");
-      if (i < 0) return { kind: "not-fn" };
-    }
-    if (!isP(toks[i], "=>")) return { kind: "not-fn" };
-  } else if (isId(toks[i]) && isP(toks[i + 1], "=>")) {
-    i += 1;
-  } else if (allowWrap && isId(toks[start]) && !isId(toks[start], "async")) {
-    let w = start + 1;
-    if (isP(toks[w], "<")) w = skipAngle(toks, w);
-    if (w >= 0 && isP(toks[w], "(")) {
-      const closeParen = matchDelim(toks, w, "(", ")");
-      if (closeParen < 0) return { kind: "not-fn" };
-      const inner = parseRhsFunction(toks, w + 1, false);
-      if (inner.kind === "body") {
-        const closeBrace = matchDelim(toks, inner.open, "{", "}");
-        if (closeBrace >= 0 && closeBrace < closeParen) return inner;
-      }
-      if (inner.kind === "expr-arrow") return inner;
-    }
-    return { kind: "not-fn" };
-  } else {
-    return { kind: "not-fn" };
-  }
-  const bodyIdx = i + 1;
-  if (isP(toks[bodyIdx], "{")) return { kind: "body", open: bodyIdx };
-  if (isP(toks[bodyIdx], "(") && isP(toks[bodyIdx + 1], "{")) {
-    const closeBrace = matchDelim(toks, bodyIdx + 1, "{", "}");
-    if (closeBrace >= 0 && isP(toks[closeBrace + 1], ")")) {
-      const after = toks[closeBrace + 2];
-      const continues = after && after.line === toks[closeBrace + 1].line && (
-        (after.type === "punct" && ![";", ",", ")", "}", "]"].includes(after.value))
-        || (after.type === "id" && (after.value === "as" || after.value === "satisfies"))
-      );
-      if (!continues) return { kind: "body", open: bodyIdx + 1 };
-    }
-  }
-  return { kind: "expr-arrow" };
-}
-
-export function extractDefinitions(src, name) {
-  const toks = tokenizeSafe(src, new Set([name, "type", "interface", "readonly", "is", "extends", "keyof"]));
-  const bodies = [];
-  const seenOpen = new Set();
-  let braceDepth = 0;
-
-  const recordBody = (open) => {
-    if (seenOpen.has(open)) return;
-    seenOpen.add(open);
-    const close = matchDelim(toks, open, "{", "}");
-    if (close < 0) throw new Error(`unbalanced braces in "${name}"`);
-    bodies.push(src.slice(toks[open].pos, toks[close].pos + 1));
   };
-
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i];
-    if (isP(t, "{")) {
-      braceDepth++;
-      continue;
-    }
-    if (isP(t, "}")) {
-      braceDepth = Math.max(0, braceDepth - 1);
-      continue;
-    }
-    if (isId(t, "type") && !isPropAccess(toks, i)) {
-      const end = skipTypeAlias(toks, i);
-      if (end >= i) {
-        i = end;
-        continue;
-      }
-    }
-    if (isId(t, "interface") && !isPropAccess(toks, i)) {
-      const end = skipInterface(toks, i);
-      if (end >= i) {
-        i = end;
-        continue;
-      }
-    }
-    if (isId(t, "function") && !isPropAccess(toks, i)) {
-      const nameIdx = isP(toks[i + 1], "*") ? i + 2 : i + 1;
-      if (!isId(toks[nameIdx], name)) continue;
-      const open = findFunctionBody(toks, i);
-      if (open === -2) continue; // TypeScript overload or ambient signature
-      if (open < 0) throw new Error(`cannot find a brace-delimited body for "${name}"`);
-      recordBody(open);
-    } else if (isId(t) && (t.value === "const" || t.value === "let" || t.value === "var") && !isPropAccess(toks, i)) {
-      const nameIdx = i + 1;
-      if (!isId(toks[nameIdx], name)) continue;
-      let eqIdx = nameIdx + 1;
-      if (isP(toks[eqIdx], "!")) eqIdx++;
-      if (isP(toks[eqIdx], ":")) {
-        eqIdx = skipTypeUntil(toks, eqIdx, "=");
-        if (eqIdx < 0) continue;
-      }
-      if (!isP(toks[eqIdx], "=")) continue;
-      const rhs = parseRhsFunction(toks, eqIdx + 1);
-      if (rhs.kind === "expr-arrow") {
-        throw new Error(`cannot find a brace-delimited body for "${name}" (expression-bodied arrow functions must use { ... })`);
-      }
-      if (rhs.kind !== "body") {
-        if (braceDepth > 0) continue;
-        throw new Error(`cannot find a brace-delimited body for "${name}"`);
-      }
-      recordBody(rhs.open);
-    } else if (t.type === "str" && t.value === name && isP(toks[i + 1], ":") && !isP(toks[i - 1], "?") && !isId(toks[i - 1], "case")) {
-      const rhs = parseRhsFunction(toks, i + 2);
-      if (rhs.kind === "expr-arrow") {
-        throw new Error(`cannot find a brace-delimited body for "${name}" (expression-bodied arrow functions must use { ... })`);
-      }
-      if (rhs.kind === "body") recordBody(rhs.open);
-    }
-  }
-  return bodies;
+  for (const stmt of program.body ?? []) walk(stmt, null);
+  return spans;
 }
 
-export function normalize(src) {
-  const toks = tokenizeSafe(src);
-  const parts = [];
-  const tmplStarts = [];
-  for (const t of toks) {
-    if (t.type === "template") {
-      tmplStarts.push(t.pos + 1);
-      parts.push("`");
-    } else if (t.type === "tmplOpen") {
-      const start = tmplStarts.pop();
-      parts.push(src.slice(start, t.pos));
-      parts.push("${");
-    } else if (t.type === "tmplClose") {
-      parts.push("}");
-      tmplStarts.push(t.pos + 1);
-    } else if (t.type === "templateEnd") {
-      const start = tmplStarts.pop();
-      parts.push(src.slice(start, t.pos - 1));
-      parts.push("`");
-    } else if (t.type === "str") {
-      const q = src[t.pos];
-      parts.push(`${q}${t.value}${q}`);
-    } else {
-      parts.push(t.value);
-    }
+function parseCovered(file, src) {
+  const result = parseSync(file, src, { lang: "ts", sourceType: "module" });
+  if (result.errors.length > 0) {
+    const first = result.errors[0];
+    const label = first.labels?.[0]?.start;
+    const line = label != null ? ` (line ${lineOf(src, label)})` : "";
+    throw new Error(`cannot parse ${file}: ${first.message}${line}`);
   }
-  return parts.join(" ");
+  return result;
+}
+
+function normalize(text, comments = []) {
+  const sorted = comments
+    .filter((c) => c != null && c.start >= 0 && c.end > c.start && c.end <= text.length)
+    .sort((a, b) => a.start - b.start);
+  let out = "";
+  let pos = 0;
+  for (const c of sorted) {
+    if (c.start < pos) continue;
+    out += text.slice(pos, c.start);
+    pos = c.end;
+  }
+  out += text.slice(pos);
+  return out.replace(/\s+/g, " ").trim();
+}
+
+export function extractCovered(src, name) {
+  const { program } = parseCovered("covered.ts", src);
+  return findSpans(program, name).map((s) => src.slice(s.start, s.end));
+}
+
+export function hashEntry(entry, read = readFileSync, root = ROOT) {
+  const src = read(join(root, entry.file), "utf8");
+  const { program, comments } = parseCovered(entry.file, src);
+  const parts = [];
+  for (const fn of entry.functions) {
+    const spans = findSpans(program, fn);
+    if (spans.length === 0) return { found: false };
+    if (spans.length > 1) {
+      const lines = spans.map((s) => lineOf(src, s.start)).join(" and ");
+      throw new Error(`${entry.file}: "${fn}" is defined ${spans.length} times (lines ${lines})`);
+    }
+    const span = spans[0];
+    const rel = comments
+      .filter((c) => c.start >= span.start && c.end <= span.end)
+      .map((c) => ({ start: c.start - span.start, end: c.end - span.start }));
+    parts.push(normalize(src.slice(span.start, span.end), rel));
+  }
+  return { found: true, sha256: sha256(parts.join("\n")) };
 }
 
 // ── TLC .cfg parsing and mutant generation ────────────────────────────────────────
@@ -513,7 +260,6 @@ function stripCfgComments(text) {
     if (blockDepth > 0) {
       if (c === "(" && n === "*") { blockDepth++; i += 2; continue; }
       if (c === "*" && n === ")") { blockDepth--; i += 2; continue; }
-      if (c === "\n") out += "\n";
       i++;
       continue;
     }
@@ -525,7 +271,7 @@ function stripCfgComments(text) {
       continue;
     }
     if (c === '"') { inStr = true; out += c; i++; continue; }
-    if (c === "(" && n === "*") { blockDepth = 1; i += 2; continue; }
+    if (c === "(" && n === "*") { blockDepth = 1; out += " "; i += 2; continue; }
     if (c === "\\" && n === "*") {
       while (i < text.length && text[i] !== "\n") i++;
       continue;
@@ -628,9 +374,9 @@ export function cfgFlags(sections) {
   for (const s of sections) {
     if (s.keyword === "SYMMETRY") hasSymmetry = true;
     else if (INVARIANT_KEYWORDS.has(s.keyword)) {
-      for (const a of s.args) for (const name of a.split(/\s+/)) if (name) invariants.add(name);
+      for (const name of s.args) if (name) invariants.add(name);
     } else if (PROPERTY_KEYWORDS.has(s.keyword)) {
-      for (const a of s.args) for (const name of a.split(/\s+/)) if (name) properties.add(name);
+      for (const name of s.args) if (name) properties.add(name);
     }
   }
   return {
@@ -660,18 +406,6 @@ export function generateMutantCfg(text, mutantId, rule) {
   out.push(`  ${MUTANTS} = {"${mutantId}"}`);
   out.push(rule.kind === "safety" ? `INVARIANT ${rule.id}` : `PROPERTY ${rule.id}`);
   return out.join("\n") + "\n";
-}
-
-export function hashEntry(entry, read = readFileSync, root = ROOT) {
-  const src = read(join(root, entry.file), "utf8");
-  const parts = [];
-  for (const fn of entry.functions) {
-    const bodies = extractDefinitions(src, fn);
-    if (bodies.length === 0) return { found: false };
-    if (bodies.length > 1) throw new Error(`${entry.file}: "${fn}" is defined ${bodies.length} times`);
-    parts.push(normalize(bodies[0]));
-  }
-  return { found: true, sha256: sha256(parts.join("\n")) };
 }
 
 // ── Manifest and config validation ────────────────────────────────────────────────
@@ -715,8 +449,8 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
   }
   if (manifest.traceTest !== undefined && (typeof manifest.traceTest !== "string" || !manifest.traceTest)) bad('"traceTest" must be a string');
   if (manifest.timeoutSeconds !== undefined) {
-    if (typeof manifest.timeoutSeconds !== "number" || !Number.isFinite(manifest.timeoutSeconds) || manifest.timeoutSeconds <= 0 || manifest.timeoutSeconds > MAX_TIMEOUT_SECONDS) {
-      bad(`"timeoutSeconds" must be a finite number greater than 0 and at most ${MAX_TIMEOUT_SECONDS}`);
+    if (typeof manifest.timeoutSeconds !== "number" || !Number.isFinite(manifest.timeoutSeconds) || manifest.timeoutSeconds < 1 || manifest.timeoutSeconds > MAX_TIMEOUT_SECONDS) {
+      bad(`"timeoutSeconds" must be a finite number of at least 1 second and at most ${MAX_TIMEOUT_SECONDS}`);
     }
   }
 
@@ -849,6 +583,7 @@ export function describeOutcome(outcome) {
   if (outcome.kind === "violation-exit-zero") return "reported a violation but exited 0";
   if (outcome.kind === "signal") return `killed by signal ${outcome.signal}`;
   if (outcome.kind === "spawn-error") return `could not run java: ${outcome.message}`;
+  if (outcome.kind === "timeout") return "timed out";
   if (outcome.kind === "unknown") return `exited ${outcome.status}`;
   return EXIT_BY_KIND.get(outcome.kind).description;
 }
@@ -903,7 +638,14 @@ function resyncHashes(flow, deps) {
     if (!h.found) throw new Error(`cannot resync ${flow.name}: ${entry.file} no longer has a covered function`);
     entry.sha256 = h.sha256;
   }
-  deps.writeFileSync(flow.manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  const tmp = `${flow.manifestPath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    deps.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
+    deps.renameSync(tmp, flow.manifestPath);
+  } catch (e) {
+    deps.rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 export function runFlow(flow, { java, jar, spawnSync: spawnImpl = spawnSync, readFileSync: read = readFileSync, timeoutMs = DEFAULT_TIMEOUT_MS, resync = false }) {
@@ -975,7 +717,7 @@ export function runFlow(flow, { java, jar, spawnSync: spawnImpl = spawnSync, rea
     checks.push({ flow: flow.name, check: `mutant ${mutant.id}`, pass, states: distinctStates(run.stdout), seconds: run.seconds });
   }
 
-  if (resync && errors.length === 0) resyncHashes(flow, { readFileSync: read, writeFileSync });
+  if (resync && errors.length === 0) resyncHashes(flow, { readFileSync: read, writeFileSync, renameSync, rmSync });
   return { checks, errors, traces };
 }
 
@@ -984,8 +726,6 @@ const ALLOWED_FLAGS = new Set(["flows", "resync"]);
 export async function main(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
   const spawnImpl = opts.spawnSync ?? spawnSync;
-  const read = opts.readFileSync ?? readFileSync;
-  const exists = opts.existsSync ?? existsSync;
   const log = opts.log ?? console.log;
   const err = opts.err ?? console.error;
   const cacheDir = opts.cacheDir ?? defaultCacheDir();
@@ -1012,17 +752,17 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     err(`✗ formal: ${msg}`);
     return { code: 1, checks: [], errors: [msg] };
   }
-  if (args.flows !== undefined && !exists(args.flows)) {
+  if (args.flows !== undefined && !existsSync(args.flows)) {
     const msg = `flows directory does not exist: ${args.flows}`;
     err(`✗ formal: ${msg}`);
     return { code: 1, checks: [], errors: [msg] };
   }
 
-  const flowsDir = args.flows ?? opts.flowsDir ?? join(ROOT, "formal");
+  const flowsDir = args.flows ?? join(ROOT, "formal");
 
   let flows;
   try {
-    flows = discoverFlows(flowsDir, { readFileSync: read, existsSync: exists });
+    flows = discoverFlows(flowsDir);
   } catch (e) {
     err(`✗ formal: ${e.message}`);
     return { code: 1, checks: [], errors: [e.message] };
@@ -1059,7 +799,7 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
   const traces = [];
   for (const flow of flows) {
     try {
-      const r = runFlow(flow, { java, jar, spawnSync: spawnImpl, readFileSync: read, timeoutMs, resync: args.resync !== undefined });
+      const r = runFlow(flow, { java, jar, spawnSync: spawnImpl, timeoutMs, resync: args.resync !== undefined });
       checks.push(...r.checks);
       errors.push(...r.errors);
       traces.push(...r.traces);

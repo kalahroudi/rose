@@ -1,0 +1,98 @@
+{
+  "flow": "tenant-deletion",
+  "spec": "TenantDeletion.tla",
+  "configs": [
+    { "file": "purge.cfg", "rules": ["NoEarlyPurge", "CancelKeepsEverything", "NoOrphans", "StatusRestored"] },
+    { "file": "signin.cfg", "rules": ["NoUseWhilePending", "NoNewCredentialsWhilePending"] },
+    { "file": "iso.cfg", "rules": ["PurgeOnlyItsTarget"] },
+    { "file": "live.cfg", "rules": ["EventuallyGone"] }
+  ],
+  "rules": [
+    {
+      "id": "NoEarlyPurge",
+      "kind": "safety",
+      "sentence": "A workspace's private data is destroyed only after its deletion deadline, and never after the request it was scheduled under was cancelled. (A later new deletion request may purge.)",
+      "harm": "Customer data is lost while they could still cancel."
+    },
+    {
+      "id": "CancelKeepsEverything",
+      "kind": "safety",
+      "sentence": "After a successful cancel, the workspace's private data and its identity records (workspace, memberships, domains, passkeys, API keys) survive, and no purge runs later, including one already running; only sign-in material (sessions, codes, handoffs, challenges) is cleared on request and cancel.",
+      "harm": "A cancelled workspace silently loses data or access."
+    },
+    {
+      "id": "NoUseWhilePending",
+      "kind": "safety",
+      "sentence": "Once deletion is scheduled, no session, login code, handoff, passkey challenge or API key for that workspace can be used.",
+      "harm": "Someone keeps working in a workspace that is being deleted."
+    },
+    {
+      "id": "NoNewCredentialsWhilePending",
+      "kind": "safety",
+      "sentence": "Once deletion is scheduled, no session, login code, handoff or passkey challenge for that workspace can be created.",
+      "harm": "Dead credential rows pile up for a workspace that is going away."
+    },
+    {
+      "id": "PurgeOnlyItsTarget",
+      "kind": "safety",
+      "sentence": "A purge destroys only the workspace it was scheduled for.",
+      "harm": "Another tenant's data or members are destroyed (isolation failure)."
+    },
+    {
+      "id": "EventuallyGone",
+      "kind": "liveness",
+      "sentence": "A scheduled, uncancelled workspace is eventually fully removed (storage and every identity record), despite lost queue messages, crashes mid-purge and retries.",
+      "harm": "The deletion the customer asked for never completes."
+    },
+    {
+      "id": "NoOrphans",
+      "kind": "safety",
+      "sentence": "After removal, no identity or access record (workspace, memberships, domains, sessions, codes, handoffs, challenges, passkeys, invitations, API keys, workspace-scoped jobs) references the workspace; only audit and job history keep its id; every server stops resolving its host within the 5-second cache lifetime.",
+      "harm": "Leftover access, or a host that still points at a deleted workspace."
+    },
+    {
+      "id": "StatusRestored",
+      "kind": "safety",
+      "sentence": "Cancel restores the status from before the request (a suspended workspace stays suspended).",
+      "harm": "Cancelling a deletion un-suspends a workspace."
+    }
+  ],
+  "mutants": [
+    { "id": "begin-no-deadline", "breaks": "NoEarlyPurge", "code": "packages/core/src/control/tenants.ts#beginTenantPurge", "change": "drop `AND delete_after <= ?`" },
+    { "id": "handler-no-status-check", "breaks": "CancelKeepsEverything", "code": "packages/core/src/tenant-app.ts#tenant.purge", "change": "drop `if (row.status !== \"pending_deletion\" && row.status !== \"deleting\") return …`" },
+    { "id": "session-no-status-join", "breaks": "NoUseWhilePending", "code": "packages/core/src/control/sessions.ts#readSession", "change": "drop `AND t.status = 'active'` from the tenants JOIN" },
+    { "id": "admit-no-status-check", "breaks": "NoUseWhilePending", "code": "packages/core/src/tenant-app.ts#realmFor", "change": "drop admit()'s fresh getTenant status check" },
+    { "id": "apikey-no-fresh-status", "breaks": "NoUseWhilePending", "code": "packages/core/src/tenant-app.ts#authenticate", "change": "drop the fresh getTenant check on the Authorization path" },
+    { "id": "records-unscoped", "breaks": "PurgeOnlyItsTarget", "code": "packages/core/src/control/tenants.ts#deleteTenantRecords", "change": "drop `WHERE tenant_id = ?` from the memberships DELETE" },
+    { "id": "no-hourly-sweep", "breaks": "EventuallyGone", "code": "packages/core/src/tenant-app.ts#tenantTick", "change": "drop runDueJobs from the hourly tick" },
+    { "id": "records-keep-memberships", "breaks": "NoOrphans", "code": "packages/core/src/control/tenants.ts#deleteTenantRecords", "change": "drop the memberships DELETE" },
+    { "id": "cancel-always-active", "breaks": "StatusRestored", "code": "packages/core/src/control/tenants.ts#cancelTenantDeletion", "change": "set status 'active' instead of the CASE on prior_status" }
+  ],
+  "covered": [
+    { "file": "packages/core/src/control/tenants.ts", "functions": ["requestTenantDeletion", "cancelTenantDeletion", "beginTenantPurge", "deleteTenantRecords", "setTenantStatus"] },
+    { "file": "packages/core/src/tenant-app.ts", "functions": ["tenant.purge", "tenantTick", "realmFor", "activeTenant", "authenticate"] },
+    { "file": "packages/core/src/control/jobs.ts", "functions": ["runOne", "runJobMessages", "runDueJobs"] },
+    { "file": "packages/core/src/control/sessions.ts", "functions": ["createSession", "readSession", "createHandoff"] },
+    { "file": "packages/core/src/tenancy/resolve.ts", "functions": ["resolveHost", "invalidateHostCache"] },
+    { "file": "packages/core/src/tenancy/context.ts", "functions": ["purgeTenantStorage"] },
+    { "file": "packages/core/src/auth/routes.ts", "functions": ["requestCode"] }
+  ],
+  "bounds": "purge.cfg: 1 workspace, 2 job workers, 2 requests, clock 4 ticks, grace 2 ticks, MAX_ATTEMPTS 2, 2 faults. signin.cfg: same with 1 worker and no faults, sign-in on. iso.cfg: 2 workspaces, 1 request each, 1 worker, no faults. live.cfg: as purge.cfg, liveness, no symmetry. chart.cfg: 1 workspace, 1 worker, 1 request, clock 2, no faults (368 states, owner chart).",
+  "assumptions": [
+    "One clock tick is at least the host-cache TTL (5 s): every isolate's cache is empty after a tick. An HTTP request finishes within one tick.",
+    "MAX_ATTEMPTS is 5 in code and 2 in the model: same behaviour (the job turns 'failed' when a thrown error meets attempts >= MAX), smaller state space.",
+    "Sign-in rules (signin.cfg) and isolation (iso.cfg) are checked with one worker and no faults: they read only the status sequence and statement scoping, which worker concurrency and crashes do not widen. Purge rules and liveness are checked with 2 workers and faults.",
+    "The queue message (notifyJob) is modelled as delivered-or-lost at enqueue; a message for a job that is not yet due is dropped (runJobMessages acks it).",
+    "A stale running job can be reclaimed while its old worker is still alive (slow); the old worker loses ownership but its side effects still happen."
+  ],
+  "notModelled": [
+    "Crypto, data keys and their wrapping (purge destroys the DO; key handling is out of scope).",
+    "UI, rate limits, email delivery, audit row contents (audit is kept by design).",
+    "Root-host /api/root/enter check-then-insert is collapsed into one step (CreateHandoff); its race has the same shape as AdmitRead/CreateSession, which is modelled in two steps.",
+    "Passkey challenges are grouped with handoffs as one credential kind.",
+    "Module jobs and their tenant scoping (T8 covers the job queue).",
+    "Exact backoff times: a retry is due at delete_after or the next tick."
+  ],
+  "timeoutSeconds": 120,
+  "traceTest": "packages/core/test/formal/tenant-deletion.trace.test.ts"
+}
