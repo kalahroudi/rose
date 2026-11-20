@@ -22,14 +22,16 @@
     "consumers": [{ "queue": "rose-app-jobs", "max_batch_size": 10, "max_batch_timeout": 1, "max_retries": 3 }]
   },
   "triggers": { "crons": ["17 * * * *"] },
+  // Cloudflare Email Service. Enable sending for the EMAIL_FROM domain first: `wrangler email sending enable <domain>`.
+  "send_email": [{ "name": "EMAIL" }],
   "observability": { "enabled": true },
   "vars": {
     "ENVIRONMENT": "production",
     "APP_NAME": "Rose",
     "APP_BASE_DOMAIN": "example.com",
-    "EMAIL_PROVIDER": "resend",
+    "EMAIL_PROVIDER": "cloudflare",
     "UPSTREAM_MODE": "off",
     "EMAIL_FROM": "Rose <no-reply@update.example.com>"
   }
-  // Secrets (set by `pnpm setup`): ROSE_MASTER_KEY, UPSTREAM_SIGNING_SECRET, RESEND_API_KEY
+  // Secrets (set by `pnpm setup`): ROSE_MASTER_KEY, UPSTREAM_SIGNING_SECRET, RESEND_API_KEY (only with EMAIL_PROVIDER "resend")
 }

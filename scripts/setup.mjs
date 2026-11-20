@@ -5,7 +5,7 @@
 //
 // Every production answer can be passed as a flag or environment variable, so this also
 // runs unattended:  --domain --admin-host --operator-email --app-name
-//                   --email-provider resend|console --email-from --resend-api-key (or RESEND_API_KEY)
+//                   --email-provider cloudflare|resend|console --email-from --resend-api-key (or RESEND_API_KEY)
 //                   --dry-run (print the plan and commands, change nothing)  --skip-deploy  --yes
 import { createInterface } from "node:readline/promises";
 import { copyFileSync, existsSync } from "node:fs";
@@ -88,13 +88,15 @@ const adminHost = (await ask("admin-host", "ROSE_ADMIN_HOST", "Hostname of the o
 const zone = typeof args.zone === "string" ? args.zone : domain;
 const operatorEmail = (await ask("operator-email", "ROSE_OPERATOR_EMAIL", "Email of the first platform owner (must be able to receive mail)", { validate: (v) => (EMAIL.test(v) ? null : "Enter an email address") })).toLowerCase();
 const appName = await ask("app-name", "ROSE_APP_NAME", "Product name", { def: "Rose" });
-const emailProvider = await ask("email-provider", "ROSE_EMAIL_PROVIDER", "Email provider: resend or console", { def: "resend", validate: (v) => (["resend", "console"].includes(v) ? null : "Choose resend or console") });
+const emailProvider = await ask("email-provider", "ROSE_EMAIL_PROVIDER", "Email provider: cloudflare, resend or console", { def: "cloudflare", validate: (v) => (["cloudflare", "resend", "console"].includes(v) ? null : "Choose cloudflare, resend or console") });
 let emailFrom = "";
 let resendKey = "";
-if (emailProvider === "resend") {
+if (emailProvider !== "console") {
   emailFrom = await ask("email-from", "ROSE_EMAIL_FROM", 'From address, e.g. "Acme <login@acme.app>"', { def: `${appName} <login@${domain}>` });
+}
+if (emailProvider === "resend") {
   resendKey = await ask("resend-api-key", "RESEND_API_KEY", "Resend API key (input is visible; or set RESEND_API_KEY)", { def: dry ? "re_dry_run_placeholder" : undefined, secret: true, validate: (v) => (v.length >= 8 ? null : "Paste the API key") });
-} else {
+} else if (emailProvider === "console") {
   warn("EMAIL_PROVIDER=console can not deliver mail in production: nobody will be able to sign in. Use it only to stage the deployment.");
 }
 rl.close();
@@ -116,6 +118,14 @@ ${c.bold("Plan")}
 for (const queue of ["rose-app-jobs", "rose-admin-jobs"]) {
   const r = step(`Creating queue ${queue}`, wranglerApp, ["queues", "create", queue], { cwd: APP_DIR, capture: true, allowFail: true });
   if (!dry && r.status !== 0 && !/already (exists|taken)|11009/i.test(`${r.stdout}${r.stderr}`)) fail(`Could not create queue ${queue}.\n${r.stdout}\n${r.stderr}`);
+}
+
+// Cloudflare Email Service sends only from a domain enabled for it (needs Workers Paid to
+// reach any recipient). Enabling it again is harmless; it publishes the DKIM/SPF records.
+if (emailProvider === "cloudflare") {
+  const fromDomain = /@([^>\s]+)>?\s*$/.exec(emailFrom)?.[1]?.toLowerCase();
+  if (!fromDomain) fail(`Could not read a domain from the From address ${emailFrom}.`);
+  step(`Enabling Email Sending for ${fromDomain}`, wranglerApp, ["email", "sending", "enable", fromDomain], { cwd: APP_DIR, capture: true });
 }
 
 // 4. Database
