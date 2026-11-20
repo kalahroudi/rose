@@ -15,4 +15,4 @@ export { listQuerySchema, likePattern, likePrefix, offsetOf, orderBy, MAX_PAGE_S
 export { newId, now, randomToken } from "./ids";
 export type { CoreEnv, PlatformWorkerEnv, TenantWorkerEnv, RateLimiter } from "./env";
 export { isDev, assertEnvironment, guardFetch } from "./env";
-export { verifyJwtHs256, signJwtHs256 } from "./crypto";
+export { signJwtHs256 } from "./crypto";

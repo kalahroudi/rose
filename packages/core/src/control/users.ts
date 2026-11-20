@@ -6,7 +6,6 @@ import { newId, now } from "../ids";
 
 export type Role = "owner" | "admin" | "member";
 export const ROLES: readonly Role[] = ["owner", "admin", "member"];
-export const PLATFORM_SCOPE = "platform";
 
 export interface UserRow {
   id: string;

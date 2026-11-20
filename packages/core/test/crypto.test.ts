@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, verifyJwtHs256, wrapDek } from "../src/crypto";
+import { generateDek, TenantCrypto, timingSafeEqual, unwrapDek, wrapDek } from "../src/crypto";
+import { fromB64Url, fromUtf8, utf8 } from "../src/encoding";
 import { createTestTenant } from "../src/testing";
 
 const K1 = env.ROSE_MASTER_KEY;
@@ -86,6 +87,15 @@ describe("primitives", () => {
   });
 });
 
+async function signedClaims(secret: string, token: string): Promise<Record<string, unknown> | null> {
+  const [head, body, sig] = token.split(".");
+  if (!head || !body || !sig) return null;
+  const key = await crypto.subtle.importKey("raw", utf8(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  if (!(await crypto.subtle.verify("HMAC", key, fromB64Url(sig), utf8(`${head}.${body}`)))) return null;
+  const claims = JSON.parse(fromUtf8(fromB64Url(body))) as Record<string, unknown>;
+  return typeof claims.exp === "number" && claims.exp * 1000 >= Date.now() ? claims : null;
+}
+
 describe("upstream gateway", () => {
   it("forwards a signed tenant token and strips credentials both ways", async () => {
     const a = await createTestTenant(env, SELF);
@@ -108,9 +118,9 @@ describe("upstream gateway", () => {
     expect(seen!.headers.get("Cookie")).toBeNull();
     expect(seen!.headers.get("Authorization")).toBeNull();
     expect(seen!.headers.get("X-Rose-Tenant-Id")).toBe(a.id);
-    const claims = await verifyJwtHs256(env.UPSTREAM_SIGNING_SECRET!, seen!.headers.get("X-Rose-Tenant-Token")!);
-    expect(claims).toMatchObject({ tid: a.id, tslug: a.slug, sub: a.userId, role: "owner", aud: "upstream" });
-    expect(await verifyJwtHs256("wrong-secret-wrong-secret-wrong-secret", seen!.headers.get("X-Rose-Tenant-Token")!)).toBeNull();
+    const token = seen!.headers.get("X-Rose-Tenant-Token")!;
+    expect(await signedClaims(env.UPSTREAM_SIGNING_SECRET!, token)).toMatchObject({ tid: a.id, tslug: a.slug, sub: a.userId, role: "owner", aud: "upstream" });
+    expect(await signedClaims("wrong-secret-wrong-secret-wrong-secret", token)).toBeNull();
   });
 
   it("requires authentication", async () => {

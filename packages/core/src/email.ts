@@ -26,5 +26,5 @@ export async function sendEmail(env: CoreEnv, mail: Email): Promise<void> {
   }
   // Console delivery prints sign-in codes, so it must never run in production.
   if (!isDev(env)) throw misconfigured("No email provider configured. Set EMAIL_PROVIDER.");
-  if (env.ENVIRONMENT === "development") console.log(`\n✉  To: ${mail.to}\n   ${mail.subject}\n   ${mail.text.replace(/\n/g, "\n   ")}\n`);
+  console.log(`\n✉  To: ${mail.to}\n   ${mail.subject}\n   ${mail.text.replace(/\n/g, "\n   ")}\n`);
 }
