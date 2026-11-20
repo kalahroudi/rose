@@ -187,4 +187,67 @@ describe("operator tenant deletion (adversarial)", () => {
     expect(r.status).toBe(403);
     expect((await row(t.id))!.status).toBe("active");
   });
+
+  it("20 parallel delete requests create one purge job, one audit row and return the stored deleteAfter", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, () => call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })),
+    );
+    expect(responses.every((r) => r.status === 202)).toBe(true);
+    const bodies = await Promise.all(responses.map((r) => r.json<{ deleteAfter: number; jobId?: string; alreadyPending?: boolean }>()));
+    const stored = await row(t.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    for (const b of bodies) expect(b.deleteAfter).toBe(stored!.delete_after);
+    expect(bodies.filter((b) => b.jobId !== undefined && !b.alreadyPending)).toHaveLength(1);
+    expect(bodies.filter((b) => b.alreadyPending === true)).toHaveLength(19);
+    const queuedJobs = (await purgeJobs(t.id)).results.filter((j) => j.status === "queued");
+    expect(queuedJobs).toHaveLength(1);
+    const audits = await env.DB
+      .prepare("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.delete.requested' AND target = ?")
+      .bind(t.id)
+      .first<{ n: number }>();
+    expect(audits!.n).toBe(1);
+  });
+
+  it("50 rounds of parallel delete and cancel always end in a consistent status and purge-job count", async () => {
+    const t = await seed();
+    const o = await operator("owner", "passkey");
+    for (let i = 0; i < 50; i++) {
+      if (i === 25) {
+        const cur = await row(t.id);
+        if (cur!.status === "pending_deletion") {
+          expect((await call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} })).status).toBe(200);
+        }
+        await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(t.id).run();
+      } else if (i % 2 === 1 && (await row(t.id))!.status !== "pending_deletion") {
+        expect((await call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } })).status).toBe(202);
+      }
+      const [first, second] =
+        i % 2 === 0
+          ? await Promise.all([
+              call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } }),
+              call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} }),
+            ])
+          : await Promise.all([
+              call(`/api/tenants/${t.id}/delete/cancel`, { cookie: o.cookie, body: {} }),
+              call(`/api/tenants/${t.id}/delete`, { cookie: o.cookie, body: { confirm: t.slug } }),
+            ]);
+      const delRes = i % 2 === 0 ? first : second;
+      const cancelRes = i % 2 === 0 ? second : first;
+      expect(delRes.status).toBe(202);
+      expect([200, 409]).toContain(cancelRes.status);
+      const state = await row(t.id);
+      const queued = (await purgeJobs(t.id)).results.filter((j) => j.status === "queued");
+      if (state!.status === "pending_deletion") {
+        expect(state!.delete_after).not.toBeNull();
+        expect(queued).toHaveLength(1);
+      } else {
+        expect(["active", "suspended"]).toContain(state!.status);
+        expect(state!.delete_after).toBeNull();
+        expect(queued).toHaveLength(0);
+      }
+    }
+  });
 });

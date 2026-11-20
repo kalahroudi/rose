@@ -18,8 +18,8 @@ check followed by a separate write is a race. That is why the login-code caps, t
 workspace cap, the rate-limit counter and the job claim are conditional
 `INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE` and conditional
 `UPDATE ... WHERE` statements rather than read-then-write code. Some paths still read and
-then write in separate statements: the deletion request and cancel, and the last-owner
-checks. The Known limits section lists the races they leave open.
+then write in separate statements: the last-owner checks. The Known limits section lists
+the races they leave open.
 
 ## `audit.ts`
 
@@ -153,14 +153,20 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
 
 - `DELETE_GRACE_MS` is 48 hours. `delete_after` is the epoch-ms deadline; `prior_status`
   records what to restore if the deletion is cancelled.
-- `requestTenantDeletion` refuses a missing tenant or one already `deleting`. For requests
-  that arrive one after the other, a second request while `pending_deletion` returns the
-  original deadline and writes nothing, so a retry cannot extend or shorten the grace
-  period. Two requests that arrive at the same time are not covered; see Known limits. The
-  first request moves the tenant to `pending_deletion`, stores the previous status, deletes
-  every session for the scope and deletes the tenant's queued jobs (their `scope` is the
-  tenant id). Work a tenant queued
-  must not outlive it; the purge job itself has scope `"platform"`, so it survives.
+- `requestTenantDeletion` runs the transition and the purge-job insert in one `db.batch`:
+  a conditional `UPDATE tenants ... WHERE id = ? AND status IN ('active', 'suspended')`
+  moves the tenant to `pending_deletion` and records `prior_status` and `delete_after`; an
+  immediately following `INSERT INTO jobs (...) SELECT ... WHERE changes() = 1` inserts the
+  platform-scoped `tenant.purge` job only for the request whose `UPDATE` actually matched;
+  the same batch deletes the tenant's sessions and tenant-scoped jobs (guarded on
+  `status = 'pending_deletion'`, leaving the `"platform"`-scoped purge job intact) and reads
+  back `status, delete_after`. When the `UPDATE` matched (`created: true`), it returns
+  `{ deleteAfter, created: true, jobId }`; when another request already moved the tenant to
+  `pending_deletion`, it returns `{ deleteAfter, created: false }` with the stored deadline
+  from the batch read-back (refusing missing or `deleting` tenants with 404). Callers call
+  `notifyJob` and write the `tenant.delete.requested` audit row only when `created` is true,
+  so concurrent delete requests converge on one purge job, one audit entry, one queue
+  notification and the same stored deadline.
 - The tenant stops serving authenticated requests immediately: the session query joins
   the tenant and requires `status = 'active'`. Host-level routing can lag by the host
   cache TTL on other isolates, which is why the tenant-app owner-deletion route also
@@ -170,14 +176,17 @@ active / suspended --requestTenantDeletion--> pending_deletion --beginTenantPurg
   and authenticated access is refused immediately"
   (`packages/core/test/deletion.adversarial.test.ts`,
   `packages/core/test/session-idle.adversarial.test.ts`).
-- `cancelTenantDeletion` restores `prior_status` (or `active` when it is null), clears the
-  deadline and the stored status, and only then deletes anything issued during the grace
-  period: sessions, login codes, handoffs and WebAuthn challenges for the scope, plus any
-  queued `tenant.purge` job whose payload names this tenant. A conditional `UPDATE ... AND
-  status = 'pending_deletion'` decides the winner, so a cancel that races the purge
-  returns false instead of reviving a tenant that is already being destroyed. Covered by
-  "cancel restores the tenant with its data, and members can sign in again" and "cancel
-  refuses a tenant whose purge already began".
+- `cancelTenantDeletion` checks that the tenant is currently `pending_deletion`, then runs
+  one atomic `db.batch` containing the conditional `UPDATE tenants ... WHERE id = ? AND
+  status = 'pending_deletion'` (restoring `prior_status` via `CASE`, clearing `delete_after`
+  and `prior_status`), the cleanup deletes for sessions, login codes, handoffs and WebAuthn
+  challenges for the scope, and `DELETE FROM jobs WHERE type = 'tenant.purge' AND status =
+  'queued' AND json_extract(payload, '$.tenantId') = ?`. Because both `requestTenantDeletion`
+  and `cancelTenantDeletion` pair the status update and purge-job mutation in a single
+  transaction, racing deletes and cancels cannot strand a `pending_deletion` tenant without
+  a queued purge job or leave a stray queued purge job on an active/suspended tenant.
+  Covered by the concurrent race tests in `packages/core/test/deletion.adversarial.test.ts`
+  and `apps/admin/worker/test/deletion.adversarial.test.ts`.
 - `beginTenantPurge` is the only writer of `status = 'deleting'`. Its single statement
   requires `pending_deletion`, a non-null deadline and `delete_after <= now`, so an
   early, forged or repeated purge attempt writes nothing. The tenant worker's
@@ -555,23 +564,6 @@ used for ownership.
   writes a fresh `last_seen_at` in a separate statement when the row is older than
   `TOUCH_INTERVAL`. Parallel requests that read the same old value each pass the check and
   each write, so "at most once" holds only for a single request at a time.
-- **A cancel can strip a delete request's purge job.** `cancelTenantDeletion` restores the
-  tenant status in one statement and deletes the queued `tenant.purge` job in a second.
-  Neither step reads the other's result. A delete request that lands between them sets the
-  tenant back to `pending_deletion` and enqueues a job. The cancel's cleanup deletes that
-  job if it runs afterwards. The tenant is then pending with no job. A later delete
-  request on a pending tenant returns the stored deadline and adds no job. No sweep creates
-  one either, so the tenant stays pending until someone cancels the deletion and requests
-  it again. Tracked as Noty bug 17887EA7.
-- **Two delete requests at once make two purge jobs.** Both delete routes read the tenant
-  status to decide whether to enqueue, then call `requestTenantDeletion`. Two concurrent
-  requests can both read `active` before either writes. One guarded `UPDATE` sets
-  `pending_deletion`; the other changes no row but still returns its own `deleteAfter`,
-  computed as `now + DELETE_GRACE_MS`, so that response carries a deadline that does not
-  match the stored one. Each request then enqueues a `tenant.purge` job and writes a
-  `tenant.delete.requested` audit row. The duplicate does no harm: `beginTenantPurge` moves
-  the tenant to `deleting` once, and a purge that runs twice only deletes storage and rows
-  that are already gone. Tracked as Noty bug E55E9FFF.
 - **Host routing lags on other isolates.** A pending or suspended tenant is refused
   immediately by `readSession`, but another isolate may route its host from a cached
   lookup until the host cache TTL expires. Only the tenant-app owner deletion, the
@@ -597,9 +589,5 @@ used for ownership.
 - `requestTenantDeletion`'s "the tenant stops serving" is true for authenticated access
   at once and for host resolution only after the cache TTL on other isolates; see Known
   limits.
-- `apps/admin/worker/index.ts` line 214, "Already pending: report the existing state; no
-  second job, no second audit row", holds only for a request that arrives after the tenant
-  is already pending. Two requests that read the tenant at the same moment both see
-  `active`, so both enqueue and both audit; see Known limits.
 - No other comment in this area was found stale. The claim that `beginTenantPurge` is the
   only path into `deleting` was checked against every write to that column.

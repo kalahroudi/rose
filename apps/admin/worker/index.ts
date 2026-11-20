@@ -9,7 +9,7 @@ import { z } from "zod";
 import {
   addDomain, addOperator, assertFreshSession, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
   deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, idempotent, isOperatorEmail, listDomains, listJobs,
-  listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, operatorCount, parse, putSetting,
+  listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, notifyJob, operatorCount, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
   requestTenantDeletion, tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
@@ -209,14 +209,11 @@ app.post("/api/tenants/:id/delete", async (c) => {
   const t = await tenantOr404(c, c.req.param("id"));
   const { confirm } = await readJson(c, z.object({ confirm: z.string().max(80) }));
   if (confirm !== t.slug) throw invalid("Type the tenant address to confirm.", { confirm: "Does not match." });
-  const already = t.status === "pending_deletion";
-  const deleteAfter = await requestTenantDeletion(c.env.DB, t.id);
-  // Already pending: report the existing state; no second job, no second audit row.
-  if (already) return c.json({ deleteAfter, alreadyPending: true }, 202);
-  // The purge job is held back until the grace period ends; the handler re-checks the deadline.
-  const job = await enqueueJob(c.env, { type: "tenant.purge", scope: SCOPE, title: `Delete tenant ${t.slug}`, payload: { tenantId: t.id }, createdBy: c.get("operator").email, delayMs: Math.max(0, deleteAfter - Date.now()) });
-  await audit(c, "tenant.delete.requested", t.id, { slug: t.slug, deleteAfter });
-  return c.json({ jobId: job.id, deleteAfter }, 202);
+  const res = await requestTenantDeletion(c.env.DB, t.id, { title: `Delete tenant ${t.slug}`, createdBy: c.get("operator").email });
+  if (!res.created) return c.json({ deleteAfter: res.deleteAfter, alreadyPending: true }, 202);
+  await notifyJob(c.env, { id: res.jobId, type: "tenant.purge" }, Math.max(0, res.deleteAfter - Date.now()));
+  await audit(c, "tenant.delete.requested", t.id, { slug: t.slug, deleteAfter: res.deleteAfter });
+  return c.json({ jobId: res.jobId, deleteAfter: res.deleteAfter }, 202);
 });
 
 app.post("/api/tenants/:id/delete/cancel", async (c) => {

@@ -3,7 +3,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createTestTenant, type TestTenant } from "../src/testing";
-import { tenantJobHandlers, tenantTick } from "../src";
+import { createTenantApp, tenantJobHandlers, tenantTick } from "../src";
 import { createSession } from "../src/control/sessions";
 import { cancelTenantDeletion, requestTenantDeletion } from "../src/control/tenants";
 import { invalidateHostCache } from "../src/tenancy/resolve";
@@ -84,8 +84,12 @@ describe("purge never runs before delete_after (adversarial)", () => {
     const a = await createTestTenant(env, SELF);
     const first = await requestTenantDeletion(env.DB, a.id);
     const second = await requestTenantDeletion(env.DB, a.id);
-    expect(second).toBe(first);
-    expect((await tenantRow(a.id))!.delete_after).toBe(first);
+    expect(first.created).toBe(true);
+    expect(first.jobId).toBeTruthy();
+    expect(second.created).toBe(false);
+    expect(second.jobId).toBeUndefined();
+    expect(second.deleteAfter).toBe(first.deleteAfter);
+    expect((await tenantRow(a.id))!.delete_after).toBe(first.deleteAfter);
   });
 
   it("delete, cancel, delete again gives a fresh 48h deadline, not the old one", async () => {
@@ -95,7 +99,8 @@ describe("purge never runs before delete_after (adversarial)", () => {
     await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(Date.now() - 1, a.id).run();
     await cancelTenantDeletion(env.DB, a.id);
     const again = await requestTenantDeletion(env.DB, a.id);
-    expect(again).toBeGreaterThan(Date.now() + 47 * 3_600_000);
+    expect(again.created).toBe(true);
+    expect(again.deleteAfter).toBeGreaterThan(Date.now() + 47 * 3_600_000);
   });
 });
 
@@ -219,5 +224,108 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
     await env.DB.prepare("UPDATE tenants SET status = 'deleting' WHERE id = ?").bind(a.id).run();
     expect(await cancelTenantDeletion(env.DB, a.id)).toBe(false);
     expect((await tenantRow(a.id))!.status).toBe("deleting");
+  });
+});
+
+describe("concurrent deletion request and cancel races (adversarial)", () => {
+  const queuedPurgeJobs = (id: string) =>
+    env.DB
+      .prepare("SELECT id, run_after FROM jobs WHERE type = 'tenant.purge' AND status = 'queued' AND json_extract(payload, '$.tenantId') = ?")
+      .bind(id)
+      .all<{ id: string; run_after: number }>();
+
+  it("20 parallel requestTenantDeletion calls create one purge job and return the stored deleteAfter", async () => {
+    const a = await createTestTenant(env, SELF);
+    const results = await Promise.all(Array.from({ length: 20 }, () => requestTenantDeletion(env.DB, a.id)));
+    const stored = await tenantRow(a.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    expect(results.filter((r) => r.created)).toHaveLength(1);
+    expect(results.filter((r) => !r.created)).toHaveLength(19);
+    for (const r of results) expect(r.deleteAfter).toBe(stored!.delete_after);
+    const winner = results.find((r) => r.created)!;
+    const jobs = (await queuedPurgeJobs(a.id)).results;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.id).toBe(winner.jobId);
+    expect(jobs[0]!.run_after).toBe(stored!.delete_after);
+  });
+
+  it("20 parallel owner /api/workspace/delete requests create one purge job, one audit row, one queue notify and match stored deleteAfter", async () => {
+    const a = await createTestTenant(env, SELF);
+    const sent: { body: { jobId: string }; delaySeconds?: number }[] = [];
+    const app = createTenantApp({ modules });
+    const qenv = {
+      ...env,
+      APP_JOBS: {
+        send: (body: { jobId: string }, o?: { delaySeconds?: number }) => {
+          sent.push(o?.delaySeconds === undefined ? { body } : { body, delaySeconds: o.delaySeconds });
+          return Promise.resolve();
+        },
+      },
+    };
+    const cookies = await Promise.all(Array.from({ length: 20 }, () => cookieFor(a, "code")));
+    const responses = await Promise.all(
+      cookies.map((cookie) =>
+        Promise.resolve(
+          app.fetch(
+            new Request(`https://${a.host}/api/workspace/delete`, {
+              method: "POST",
+              headers: { Origin: `https://${a.host}`, Cookie: cookie, "Content-Type": "application/json" },
+              body: JSON.stringify({ confirm: a.slug }),
+            }),
+            qenv,
+          ),
+        ),
+      ),
+    );
+    for (const r of responses) expect([202, 401, 403]).toContain(r.status);
+    const accepted = responses.filter((r) => r.status === 202);
+    expect(accepted.length).toBeGreaterThanOrEqual(1);
+    const stored = await tenantRow(a.id);
+    expect(stored!.status).toBe("pending_deletion");
+    expect(stored!.delete_after).not.toBeNull();
+    for (const r of accepted) {
+      const body = await r.json<{ ok: boolean; deleteAfter: number }>();
+      expect(body.ok).toBe(true);
+      expect(body.deleteAfter).toBe(stored!.delete_after);
+    }
+    const jobs = (await queuedPurgeJobs(a.id)).results;
+    expect(jobs).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body.jobId).toBe(jobs[0]!.id);
+    expect(sent[0]!.delaySeconds).toBeGreaterThan(0);
+    const audits = await env.DB
+      .prepare("SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'tenant.delete.requested' AND target = ?")
+      .bind(a.id)
+      .first<{ n: number }>();
+    expect(audits!.n).toBe(1);
+  });
+
+  it("50 rounds of parallel requestTenantDeletion and cancelTenantDeletion always end in a consistent status and purge-job count", async () => {
+    const a = await createTestTenant(env, SELF);
+    for (let i = 0; i < 50; i++) {
+      if (i === 25) {
+        const cur = await tenantRow(a.id);
+        if (cur!.status === "pending_deletion") await cancelTenantDeletion(env.DB, a.id);
+        await env.DB.prepare("UPDATE tenants SET status = 'suspended' WHERE id = ?").bind(a.id).run();
+      } else if (i % 2 === 1 && (await tenantRow(a.id))!.status !== "pending_deletion") {
+        await requestTenantDeletion(env.DB, a.id);
+      }
+      if (i % 2 === 0) {
+        await Promise.all([requestTenantDeletion(env.DB, a.id), cancelTenantDeletion(env.DB, a.id)]);
+      } else {
+        await Promise.all([cancelTenantDeletion(env.DB, a.id), requestTenantDeletion(env.DB, a.id)]);
+      }
+      const state = await tenantRow(a.id);
+      const jobs = (await queuedPurgeJobs(a.id)).results;
+      if (state!.status === "pending_deletion") {
+        expect(state!.delete_after).not.toBeNull();
+        expect(jobs).toHaveLength(1);
+      } else {
+        expect(["active", "suspended"]).toContain(state!.status);
+        expect(state!.delete_after).toBeNull();
+        expect(jobs).toHaveLength(0);
+      }
+    }
   });
 });
