@@ -48,8 +48,8 @@ carries job ids (never data).
 
 **Control plane (D1, `packages/core/migrations/`)** — identity and routing only:
 `tenants`, `tenant_domains`, `users`, `memberships`, `invitations`, `operators`,
-`sessions`, `login_codes`, `handoffs`, `passkeys`, `webauthn_challenges`, `jobs`,
-`platform_audit`, `platform_settings`.
+`sessions`, `login_codes`, `handoffs`, `passkeys`, `webauthn_challenges`, `rate_limits`,
+`jobs`, `platform_audit`, `platform_settings`.
 
 **Tenant database (Durable Object SQLite, one per tenant)** — everything the tenant owns:
 module tables (for example `contacts`), the tenant's `audit_log`, its `api_keys`, and its
@@ -143,8 +143,10 @@ push; see [known limits](#known-limits).
 - The host→tenant cache is per isolate with a 5-second TTL: a rename, a new custom
   domain or a deleted tenant can take up to 5 s to be reflected for anonymous requests
   in other isolates. Authenticated requests re-check tenant status on every call.
-- The Workers rate limiter counts per Cloudflare location, not globally. The hard limits
-  on sign-in codes (attempts, codes per window) are enforced in D1 and are global.
+- The Workers rate-limiter binding (`RL_AUTH`) counts per server and is only a first
+  filter; the durable D1 counter (`rate_limits`, fixed 60 s window) is the enforced limit.
+  The hard limits on sign-in codes (attempts, codes per window) are also enforced in D1
+  and are global.
 - No billing, no file storage helper (R2) and no per-tenant KV helper yet.
 - Email search inside modules is exact-match (blind index); see [encryption.md](encryption.md).
 - The production setup and deploy scripts have been exercised with `--dry-run` only.

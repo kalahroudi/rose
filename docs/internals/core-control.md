@@ -2,8 +2,8 @@
 
 What `packages/core/src/control` guarantees, and why its SQL is written the way it is.
 These modules are the control plane's data layer: tenants, domains, users and
-memberships, sessions, sign-in codes, jobs, platform settings and the platform audit
-log. `apps/admin/worker/index.ts` reaches most of them through
+memberships, sessions, sign-in codes, rate limits, jobs, platform settings and the
+platform audit log. `apps/admin/worker/index.ts` reaches most of them through
 `packages/core/src/platform.ts`; the tenant worker uses the session, job, invitation and
 deletion pieces from `packages/core/src/tenant-app.ts`.
 
@@ -15,7 +15,8 @@ the handler without inspecting it.
 Most caps and claims in this area come from one conditional statement, so a check and its
 write cannot interleave. Cloudflare runs many isolates against one D1 database, and a
 check followed by a separate write is a race. That is why the login-code caps, the
-workspace cap and the job claim are conditional `INSERT ... SELECT` and conditional
+workspace cap, the rate-limit counter and the job claim are conditional
+`INSERT ... SELECT`, conditional `INSERT ... ON CONFLICT DO UPDATE` and conditional
 `UPDATE ... WHERE` statements rather than read-then-write code. Some paths still read and
 then write in separate statements: the deletion request and cancel, and the last-owner
 checks. The Known limits section lists the races they leave open.
@@ -272,12 +273,14 @@ handoff into a pending tenant mints no session"
 
 ### Housekeeping and freshness
 
-`sweepExpired` deletes expired or idle sessions, expired handoffs, expired challenges and
-expired invitations, and deletes login codes an hour past expiry. It is safe to run at
-any time and both workers call it from their hourly tick. The extra hour on login codes is
-deliberate: a code expires after 10 minutes but still counts toward the 25-minute guess
-window in `otp.ts`, so deleting it at expiry could drop guesses from that window. One
-hour is well past the window.
+`sweepExpired` deletes expired or idle sessions, expired handoffs, expired challenges,
+expired invitations and expired `rate_limits` rows
+(`DELETE FROM rate_limits WHERE window_start <= ?` with `t - RATE_LIMIT_WINDOW_MS`), and
+deletes login codes an hour past expiry. It is safe to run at any time and both workers
+call it from their hourly tick. The extra hour on login codes is deliberate: a code
+expires after 10 minutes but still counts toward the 25-minute guess window in `otp.ts`,
+so deleting it at expiry could drop guesses from that window. One hour is well past the
+window.
 
 `FRESH_SIGN_IN_MS` is 10 minutes. `SessionInfo.createdAt` is the sign-in time (the
 session row's `created_at`), not the last activity, which is exactly what makes it usable
@@ -392,6 +395,60 @@ counted, even when rotating windows"
 The cap is per `(scope, email)`, so exhausting one tenant's address does not affect the
 same address on another tenant. Covered by "cap is per (scope, email): another scope or
 another address is unaffected" (`packages/core/test/otp-guess-cap.adversarial.test.ts`).
+
+## `rate-limit.ts`
+
+`rate-limit.ts` implements the strongly consistent global rate-limit counter called by
+`rateLimit` in `http/base.ts`. It exports `RATE_LIMIT_MAX` (20), `RATE_LIMIT_WINDOW_MS`
+(60,000 ms) and `consumeRateLimit(db, masterKey, key, opts?)`, where `opts` takes only an
+optional `limit` (defaulting to `RATE_LIMIT_MAX`; values `<= 0` refuse immediately without
+writing a row) and the window length is always `RATE_LIMIT_WINDOW_MS`. The backing table
+`rate_limits (key_hash TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT
+NULL)` and its `rate_limits_window (window_start)` index live in
+`packages/core/migrations/0006_rate_limits.sql`.
+
+### Why D1 rather than a Durable Object
+
+Both the tenant worker and the operator console (`apps/admin`) need durable rate limiting
+on their auth endpoints, but `apps/admin` is forbidden from binding Durable Objects
+(`admin-isolation` guard rule and invariant 7 in `AGENTS.md`). Both workers already bind
+the control-plane D1 database (`DB`), so storing counter rows in D1 preserves
+operator-console isolation and needs no changes to `wrangler.jsonc` or
+`wrangler.production.jsonc` bindings. Because D1 serialises writes on its primary, a
+single conditional write cannot be overshot by reconnecting clients or parallel bursts.
+
+### Key hashing and realm isolation
+
+`consumeRateLimit` never stores raw keys in D1. It hashes `key` as HMAC-SHA256 hex
+(`hmacHex`) with a key derived from `masterKey` using the label `"rate-limit/v1"`
+(`deriveHmacKey(masterKey, "rate-limit/v1")`), so no raw client IP addresses or email
+addresses are stored in `rate_limits`. Because the tenant worker and the operator console
+each have their own `ROSE_MASTER_KEY`, the same key string hashes to distinct `key_hash`
+values per worker, isolating their rate-limit budgets automatically inside the shared
+table.
+
+### Atomic counter, window expiry and clock skew
+
+Enforcement is one atomic SQLite conditional upsert (`INSERT INTO rate_limits ... ON
+CONFLICT (key_hash) DO UPDATE SET ... WHERE excluded.window_start -
+rate_limits.window_start >= ? OR rate_limits.count < ? RETURNING count`):
+
+- **First hit**: inserts `(key_hash, now, 1)` and returns `count = 1` (allowed).
+- **Active window (`now - window_start < RATE_LIMIT_WINDOW_MS`)**: increments `count` and
+  leaves `window_start` unchanged while `count < limit`. Once `count` reaches `limit`, the
+  `WHERE` predicate fails, no row is updated, `RETURNING count` yields no row and
+  `consumeRateLimit` refuses the request.
+- **Window expiry**: at the exact boundary `now - window_start >= RATE_LIMIT_WINDOW_MS`,
+  the conflict branch resets `window_start` to `now` and `count` to `1`, opening a new
+  window in the same atomic write. Stale rows are also purged on the hourly cron by
+  `sweepExpired`.
+- **Clock skew**: if the clock moves backwards (`now < window_start`),
+  `now - window_start` is negative and therefore never satisfies
+  `>= RATE_LIMIT_WINDOW_MS`. Backward clock skew cannot prematurely reset an active window
+  or extend the budget; requests keep counting against the existing row until `now` passes
+  `window_start + RATE_LIMIT_WINDOW_MS`.
+
+Covered by `packages/core/test/rate-limit.test.ts`.
 
 ## `jobs.ts`
 
@@ -526,6 +583,11 @@ used for ownership.
   tenant-creation route, which is covered by "the console has no route to create a tenant
   or invite its owner; sign-up is the only path"
   (`apps/admin/worker/test/admin.test.ts`).
+- **The D1 rate limiter uses a fixed 60 s window.** A key's window starts on its first
+  request (`window_start`) and resets once `now - window_start >= RATE_LIMIT_WINDOW_MS`,
+  so up to `2 × 20 - 1 = 39` requests (19 at the end of one window after the request that
+  opened it, plus 20 at the start of the next) can pass across a window boundary. The
+  per-code OTP caps in `control/otp.ts` are unaffected.
 
 ## Corrections to inline comments
 

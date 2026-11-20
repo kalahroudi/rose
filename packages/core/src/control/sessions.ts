@@ -2,6 +2,7 @@
 import { sha256Hex } from "../crypto";
 import { notFound, reauthRequired } from "../errors";
 import { newId, now, randomToken } from "../ids";
+import { RATE_LIMIT_WINDOW_MS } from "./rate-limit";
 import type { OperatorRole, Role } from "./users";
 
 export const SESSION_TTL = 7 * 86_400_000;
@@ -133,6 +134,7 @@ export async function sweepExpired(db: D1Database): Promise<void> {
     db.prepare("DELETE FROM handoffs WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").bind(t),
     db.prepare("DELETE FROM invitations WHERE expires_at < ?").bind(t),
+    db.prepare("DELETE FROM rate_limits WHERE window_start <= ?").bind(t - RATE_LIMIT_WINDOW_MS),
   ]);
 }
 
