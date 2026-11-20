@@ -20,7 +20,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const LOG_DIR = join(ROOT, ".rose", "ci-local");
 export const PORTS = [5173, 5174, 8787];
 
-/** Checks that still skip on the local dev stack. Each Q22 change removes its ids from this list. */
+/** Checks that still skip on the local dev stack. */
 export const ALLOWED_SKIPS = ["ADM-05", "ADM-05b", "ADM-06", "GW-01", "HARD-01", "HARD-05", "AUTH-09"];
 /** ci.yml's `pnpm pentest`, run with the ids above so that an unexpected skip fails the job. */
 export const PENTEST_COMMAND = `pnpm pentest --strict${ALLOWED_SKIPS.map((id) => ` --allow-skip ${id}`).join("")}`;

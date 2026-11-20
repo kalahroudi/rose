@@ -36,8 +36,6 @@
     "**/coverage/**",
     ".wrangler/**",
     ".rose/**",
-    ".bug-hunter/**",
-    ".ai-ship-worktrees/**",
     "**/*.d.ts"
   ],
   "overrides": [

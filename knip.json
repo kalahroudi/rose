@@ -90,8 +90,6 @@
     "**/migrations/**",
     ".wrangler/**",
     ".rose/**",
-    ".bug-hunter/**",
-    ".ai-ship-worktrees/**",
     "brand/**"
   ]
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Adversarial tests for the AUTHZ-07 regex-vs-division handling (tokenizeSafe, L6/L11/L12 follow-up).
+// Adversarial tests for the AUTHZ-07 regex-vs-division handling (tokenizeSafe).
 // Each trick is checked to register /api/evil when run as real JS, then must be caught by scan() when injected
 // before and after the auth line of the real tenant-app.ts.
 import assert from "node:assert/strict";
