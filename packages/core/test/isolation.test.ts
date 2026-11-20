@@ -233,7 +233,7 @@ describe("job queue", () => {
     const before = app.sent.length;
     await runJobMessages(qenv, boom, batchOf([bad.id]));
     expect(app.sent.length).toBe(before);
-    await retryJob(qenv, bad.id);
+    await retryJob(qenv, bad.id, "platform");
     expect(app.sent.at(-1)).toEqual({ body: { jobId: bad.id }, delaySeconds: undefined });
   });
 
