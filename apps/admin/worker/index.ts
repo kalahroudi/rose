@@ -157,7 +157,7 @@ const tenantOr404 = async (c: Ctx, id: string) => {
 app.get("/api/overview", async (c) => {
   const [tenants, users, domains, jobs, series] = await Promise.all([
     tenantCounts(c.env.DB), userCount(c.env.DB), domainCounts(c.env.DB),
-    listJobs(c.env.DB, null, { page: 1, pageSize: 5, q: "", sort: "", status: "failed" }), tenantSignupSeries(c.env.DB, 14),
+    listJobs(c.env.DB, SCOPE, { page: 1, pageSize: 5, q: "", sort: "", status: "failed" }), tenantSignupSeries(c.env.DB, 14),
   ]);
   const setup = await setupStatus(c.env);
   const attention: { id: string; severity: "high" | "medium"; title: string; detail: string; href: string }[] = [];
@@ -288,9 +288,9 @@ app.delete("/api/operators/:userId", async (c) => {
 
 // Audit & activity
 app.get("/api/audit", async (c) => c.json(await listPlatformAudit(c.env.DB, { ...listQ(c), ...(c.req.query("action") !== undefined && { action: c.req.query("action") }) })));
-app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, null, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
+app.get("/api/jobs", async (c) => c.json(await listJobs(c.env.DB, SCOPE, { ...listQ(c), ...(c.req.query("status") !== undefined && { status: c.req.query("status") }) })));
 app.post("/api/jobs/:id/retry", async (c) => {
-  await retryJob(c.env, c.req.param("id"));
+  await retryJob(c.env, c.req.param("id"), SCOPE);
   await audit(c, "job.retry", c.req.param("id"));
   return c.json({ ok: true });
 });
@@ -323,15 +323,16 @@ app.delete("/api/setup/cloudflare", async (c) => {
 app.put("/api/setup/github", async (c) => {
   ownerOnly(c);
   const body = await readJson(c, z.object({ repo: z.string().trim().regex(/^[\w.-]{1,39}\/[\w.-]{1,100}$/, "Use the form owner/repository."), token: z.string().trim().max(300).default("") }));
+  // An empty token keeps the stored secret (the browser never receives it). Only DELETE removes it.
+  const token = body.token || (await getSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.token")) || "";
   const res = await fetch(`https://api.github.com/repos/${body.repo}`, {
-    headers: { "User-Agent": "rose-starter-kit", Accept: "application/vnd.github+json", ...(body.token ? { Authorization: `Bearer ${body.token}` } : {}) },
+    headers: { "User-Agent": "rose-starter-kit", Accept: "application/vnd.github+json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   if (!res.ok) throw invalid("GitHub could not find that repository.", { repo: res.status === 404 ? "Not found. For a private repository, add a token with read access." : `GitHub responded ${res.status}.` });
   const info = await res.json<{ full_name: string; default_branch: string; private: boolean }>();
   await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.repo", info.full_name);
   await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.branch", info.default_branch);
   if (body.token) await putSetting(c.env.DB, c.env.ROSE_MASTER_KEY, "github.token", body.token, true);
-  else await deleteSetting(c.env.DB, "github.token");
   await audit(c, "setup.github.connect", info.full_name);
   return c.json({ ok: true, repo: info.full_name });
 });

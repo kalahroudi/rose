@@ -514,10 +514,9 @@ A handler returns `{ done: true, result? }` or
 - A retry writes `status = 'queued'`, sets `run_after = now + retryInMs`, records the
   note as the error and re-notifies. The handler chooses the wait.
 - A thrown error is retried with backoff `2 ** attempts * 15 s` (using the attempt count
-  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed`, its payload
-  is cleared, and the error is cut to 500 characters. The `error` column holds the
-  exception message and nothing taken from the payload. A final failure is not
-  re-notified.
+  from before the claim) until `MAX_ATTEMPTS` (5), then the job is `failed` and its payload
+  is cleared. An `AppError` stores its message, cut to 500 characters. Anything else stores
+  a fixed sentence and the detail is only logged. A final failure is not re-notified.
 
 `runJobMessages` always acknowledges, including for a malformed body, a missing row, a
 job that is already done, or a handler that threw. Retries are scheduled by this code
@@ -533,15 +532,16 @@ runs each through the same claim.
 ### Listing and retry
 
 `listJobs` returns jobs for one scope, or every scope when the scope is `null`. The
-tenant route passes its own tenant id; the operator console passes `null`, which is why
-that sentence in the code says "operators only". The status filter is an allow-list. The
-response also carries `active`, the count of queued and running jobs for the scope, so
-the UI can show pending work without a second query.
+tenant route passes its own tenant id. The operator console passes `"platform"`, so
+Activity and the overview count only platform work. The status filter is an allow-list.
+The response also carries `active`, the count of queued and running jobs for the scope,
+so the UI can show pending work without a second query.
 
-`retryJob` resets only a `failed` job: `status = 'queued'`, `attempts = 0`, no error, a
-fresh `run_after`, returning the type so the right queue can be notified. Retrying a job
-that is not failed is 404, and the reset attempt count is exactly why the claim token is
-used for ownership.
+`retryJob` resets only a `failed` job in the given scope: `status = 'queued'`,
+`attempts = 0`, no error, a fresh `run_after`, returning the type so the right queue
+can be notified. A job that is not failed, or not in that scope, is 404 and unchanged.
+The operator console passes `"platform"`. The reset attempt count is exactly why the
+claim token is used for ownership.
 
 ## Known limits
 

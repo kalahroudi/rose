@@ -10,8 +10,12 @@
   cron triggers, rate limiting).
 - A domain on that account (the *base domain*). Tenants live at `<slug>.<base>`.
 - `npx wrangler login` done on your machine (or `CLOUDFLARE_API_TOKEN` in CI).
-- An email provider account. [Resend](https://resend.com) is supported out of the box;
-  add another in `packages/core/src/email.ts`.
+- Email: [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) is the
+  default (`send_email` binding `EMAIL`, no API key; sending to any address needs Workers
+  Paid). [Resend](https://resend.com) is also supported; add another provider in
+  `packages/core/src/email.ts`. Whatever the provider, mail to reserved domains
+  (`.example`, `.test`, `.invalid`, `.localhost`, `example.com/.net/.org`) is dropped before
+  it reaches the provider, so tests and the pentest never use your sending quota.
 
 ## One command
 
@@ -23,14 +27,17 @@ pnpm setup --production               # guided
 Unattended (CI): pass every answer as a flag or environment variable.
 
 ```sh
-RESEND_API_KEY=… pnpm setup --production --yes \
+pnpm setup --production --yes \
   --domain acme.app --admin-host admin.acme.app --operator-email you@acme.app \
-  --app-name "Acme" --email-provider resend --email-from "Acme <login@acme.app>"
+  --app-name "Acme" --email-provider cloudflare --email-from "Acme <login@acme.app>"
+# Resend instead: RESEND_API_KEY=… and --email-provider resend
 ```
 
 What it does, in order:
 
-1. Checks `wrangler whoami`.
+1. Checks `wrangler whoami`. With `--email-provider cloudflare` it enables Email Sending
+   for the From address's domain (`wrangler email sending enable`, which publishes the
+   DKIM/SPF/DMARC records on that zone).
 2. Creates the D1 database `rose-control` (or reuses it) and writes its id into
    `wrangler.production.jsonc` in each app (git-ignored copies of `wrangler.jsonc`).
 3. Writes non-secret vars and routes into both `wrangler.production.jsonc` files
@@ -40,7 +47,7 @@ What it does, in order:
 4. Applies control-plane migrations (`wrangler d1 migrations apply --remote`).
 5. Builds and deploys both workers.
 6. Generates secrets and pipes them straight to `wrangler secret put`: a separate
-   `ROSE_MASTER_KEY` for each worker, `UPSTREAM_SIGNING_SECRET`, and your
+   `ROSE_MASTER_KEY` for each worker, `UPSTREAM_SIGNING_SECRET`, and (Resend only) your
    `RESEND_API_KEY`. They are never printed or written to disk. Existing master keys are
    **kept** on re-runs (replacing one would orphan encrypted data). Between step 5 and
    this step the workers fail closed (HTTP 503).
@@ -117,7 +124,9 @@ migrations the next time it starts after a deploy.
 | `ENVIRONMENT` | both | var | Exactly `production` in deployed workers (`development` locally). Any other value, including missing or `staging`, makes the worker refuse to serve (HTTP 500; jobs and cron fail) instead of enabling on-screen sign-in codes |
 | `APP_BASE_DOMAIN` | both | var | Tenants live at `<slug>.<this>` |
 | `APP_NAME` | both | var | Product name in UI, emails, passkey prompts |
-| `EMAIL_PROVIDER`, `EMAIL_FROM`, `RESEND_API_KEY` | both | var, var, secret | Mail delivery |
+| `EMAIL_PROVIDER`, `EMAIL_FROM` | both | var | Mail delivery: `cloudflare` (default), `resend`, or `console` (development only) |
+| `EMAIL` | both | `send_email` binding | Cloudflare Email Service sender, used when `EMAIL_PROVIDER` is `cloudflare` |
+| `RESEND_API_KEY` | both | secret, optional | Only when `EMAIL_PROVIDER` is `resend` |
 | `BOOTSTRAP_OPERATOR_EMAIL` | admin | var | May become the first operator while there are none |
 | `APP_URL_TEMPLATE` | admin | var | How the console links to tenant apps, `https://{host}` |
 | `MAX_WORKSPACES_PER_USER` | app | var, optional | Most workspaces one person may create at signup. Any positive integer; empty, `0`, negative or non-numeric values mean the default, 5 |

@@ -6,6 +6,11 @@ export interface RateLimiter {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
+/** The part of Cloudflare's `send_email` binding Rose uses. */
+interface EmailSender {
+  send(message: { from: string | { email: string; name: string }; to: string; subject: string; text: string }): Promise<{ messageId: string }>;
+}
+
 /** Bindings shared by every Rose worker. */
 export interface CoreEnv {
   /** Control-plane database: tenants, identities, sessions. Never holds tenant business data. */
@@ -18,8 +23,10 @@ export interface CoreEnv {
   APP_NAME: string;
   /** Domain tenants live under: `<slug>.<APP_BASE_DOMAIN>`. */
   APP_BASE_DOMAIN: string;
-  EMAIL_PROVIDER?: "console" | "resend";
+  EMAIL_PROVIDER?: "console" | "resend" | "cloudflare";
   EMAIL_FROM?: string;
+  /** Cloudflare Email Service `send_email` binding, used when EMAIL_PROVIDER is "cloudflare". */
+  EMAIL?: EmailSender;
   RESEND_API_KEY?: string;
   RL_AUTH?: RateLimiter;
   /** Queue that wakes the tenant worker to run a job. Producer binding in both workers. */
