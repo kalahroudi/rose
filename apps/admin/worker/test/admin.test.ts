@@ -166,6 +166,30 @@ describe("operator console", () => {
     expect(JSON.stringify(await json(call("/api/setup", { cookie })))).not.toContain("super-secret-token");
   });
 
+  it("reconnects GitHub with an empty token and keeps the stored one", async () => {
+    const cookie = await root();
+    const { putSetting, getSetting } = await import("@rose/core/platform");
+    const secret = "stored-github-token";
+    await putSetting(env.DB, env.ROSE_MASTER_KEY, "github.token", secret, true);
+    const sealed = await env.DB.prepare("SELECT value FROM platform_settings WHERE key = 'github.token'").first<{ value: string }>();
+    const realFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const req = new Request(input, init);
+      if (req.url !== "https://api.github.com/repos/acme/rose") return realFetch(input, init);
+      if (req.headers.get("authorization") !== `Bearer ${secret}`) return new Response("no", { status: 401 });
+      return Response.json({ full_name: "acme/rose", default_branch: "main", private: true });
+    };
+    try {
+      const res = await call("/api/setup/github", { cookie, method: "PUT", body: { repo: "acme/rose", token: "" } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, repo: "acme/rose" });
+      expect(await env.DB.prepare("SELECT value FROM platform_settings WHERE key = 'github.token'").first()).toEqual(sealed);
+      expect(await getSetting(env.DB, env.ROSE_MASTER_KEY, "github.token")).toBe(secret);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("a tenant-scoped job is neither listed nor retryable", async () => {
     const cookie = await root();
     const t = await seed("jobleak", "JobLeak");
