@@ -95,27 +95,23 @@ export function findJava({ env = process.env, existsSync: exists = existsSync, s
 export async function downloadJar(url, { fetchImpl = fetch, timeoutMs = DOWNLOAD_TIMEOUT_MS, maxBytes = MAX_JAR_BYTES } = {}) {
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`download failed: ${url} (HTTP ${res.status})`);
-  const lenHeader = res.headers?.get?.("content-length");
+  const lenHeader = res.headers.get("content-length");
   if (lenHeader != null) {
     const len = Number(lenHeader);
     if (Number.isFinite(len) && len > maxBytes) {
-      await res.body?.cancel?.();
+      await res.body?.cancel();
       throw new Error(`download refused: ${url} exceeds ${maxBytes} bytes (Content-Length: ${len})`);
     }
   }
-  if (res.body) {
-    const chunks = [];
-    let total = 0;
-    for await (const chunk of res.body) {
-      total += chunk.byteLength;
-      if (total > maxBytes) throw new Error(`download refused: ${url} exceeded ${maxBytes} bytes`);
-      chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks, total);
+  if (!res.body) throw new Error(`download failed: ${url} (empty body)`);
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of res.body) {
+    total += chunk.byteLength;
+    if (total > maxBytes) throw new Error(`download refused: ${url} exceeded ${maxBytes} bytes`);
+    chunks.push(Buffer.from(chunk));
   }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.byteLength > maxBytes) throw new Error(`download refused: ${url} exceeded ${maxBytes} bytes`);
-  return buf;
+  return Buffer.concat(chunks, total);
 }
 
 export async function ensureJar({ cacheDir = defaultCacheDir(), url = TLA_TOOLS_URL, sha = TLA_TOOLS_SHA256, download = downloadJar } = {}) {
@@ -208,13 +204,9 @@ function parseCovered(file, src) {
 }
 
 function normalize(text, comments = []) {
-  const sorted = comments
-    .filter((c) => c != null && c.start >= 0 && c.end > c.start && c.end <= text.length)
-    .sort((a, b) => a.start - b.start);
   let out = "";
   let pos = 0;
-  for (const c of sorted) {
-    if (c.start < pos) continue;
+  for (const c of comments) {
     out += text.slice(pos, c.start);
     pos = c.end;
   }
@@ -513,7 +505,7 @@ export function validateManifest(manifest, { specText = null, cfgTexts = null, d
     for (const fn of c.functions) {
       if (typeof fn !== "string" || !fn.trim()) bad(`covered ${c.file}: each entry in "functions" must be a non-empty string`);
     }
-    if (typeof c.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(c.sha256)) bad(`covered ${c.file}: "sha256" must be 64 hex characters`);
+    if (c.sha256 !== undefined && (typeof c.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(c.sha256))) bad(`covered ${c.file}: "sha256" must be 64 hex characters (leave it out for a new flow; pnpm formal --resync <flow> fills it)`);
   }
 
   if (specText != null) {

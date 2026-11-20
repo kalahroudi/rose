@@ -737,6 +737,11 @@ test("downloadJar passes AbortSignal.timeout to fetch and enforces the size cap"
   assert.equal(buf.toString("utf8"), "hello");
   assert.ok(receivedSignal instanceof AbortSignal, "fetch must receive an AbortSignal");
 
+  await assert.rejects(
+    downloadJar("https://example.invalid/empty", { fetchImpl: async () => new Response(null, { status: 200 }) }),
+    /empty body/,
+  );
+
   // Rejects oversized Content-Length before buffering
   await assert.rejects(
     downloadJar("https://example.invalid/big", {
@@ -949,4 +954,12 @@ test("real TLC on a multi-config flow with VIEW and liveness (skipped only when 
   assert.equal(r.code, 0, r.errors.join("\n"));
   assert.equal(r.checks.length, 4);
   assert.equal(gitStatus(), statusBefore, "real TLC multi-config run must leave git status --porcelain unchanged");
+});
+
+test("a new flow may leave sha256 out (stale until resync); a malformed sha256 is rejected", () => {
+  const m = toyManifest();
+  delete m.covered[0].sha256;
+  assert.doesNotThrow(() => validateManifest(m, { dirName: m.flow }));
+  m.covered[0].sha256 = "abc";
+  assert.throws(() => validateManifest(m, { dirName: m.flow }), /64 hex characters/);
 });

@@ -5,7 +5,7 @@
 CLI options:
 
 - `--flows <dir>`: read flows from `<dir>` instead of `formal/`. Bare `--flows` without a path or a path that does not exist is rejected.
-- `--resync <flow>`: recompute and rewrite only the `sha256` fields for `<flow>`, and only after the flow passes every main config and every mutant. Bare `--resync` without a flow name is rejected.
+- `--resync <flow>`: recompute and rewrite only the `sha256` fields for `<flow>`, and only after the flow passes every main config and every mutant. Bare `--resync` without a flow name is rejected. A new flow leaves `sha256` out of each `covered` entry: a normal run reports it stale, and the first green `--resync` fills it in.
 - Unknown flags and positional arguments are rejected.
 
 ## Manifest
