@@ -121,6 +121,8 @@ test("no ci.yml command, ci:local step, or verify script runs pnpm formal --resy
   for (const step of STEPS.filter((s) => s.run)) assert.ok(!step.run.includes("--resync"), `ci:local must never run --resync: ${step.run}`);
   const verify = JSON.parse(read("package.json")).scripts.verify;
   assert.ok(!verify.includes("--resync"), "the verify script must never run --resync");
+  const formal = JSON.parse(read("package.json")).scripts.formal;
+  assert.ok(!formal.includes("--resync"), "the formal script must never run --resync (verify calls it)");
 });
 
 test("ci.yml and ci:local both run a formal step", () => {

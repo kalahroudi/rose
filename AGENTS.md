@@ -115,7 +115,7 @@ core included, but it needs the owner's agreement first for files that define th
 ## Definition of done
 
 - [ ] `pnpm verify` is green.
-- [ ] `pnpm formal` green; never `--resync` to get green.
+- [ ] Never run `pnpm formal --resync` to get green.
 - [ ] New routes have permissions, validation (zod), audit entries; lists are paginated.
 - [ ] Sensitive fields are encrypted; nothing secret in logs, audit metadata or job payloads.
 - [ ] Tests exist next to the module and exercise roles and failure cases.

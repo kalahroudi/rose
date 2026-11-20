@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The same gate as `pnpm verify` locally, plus a production build.
-# Actions are referenced by major version tag. For a stricter supply chain, pin each to a
-# full commit SHA (Dependabot keeps SHA pins up to date; see .github/dependabot.yml).
+# Existing actions use major version tags and move to SHA pins in a follow-up; the new
+# actions are pinned to a full commit SHA.
 name: CI
 
 on:
@@ -36,7 +36,7 @@ jobs:
       - name: Install (lockfile is authoritative; no lifecycle scripts beyond the allow-list)
         run: pnpm install --frozen-lockfile
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 25
@@ -44,7 +44,7 @@ jobs:
         id: tla-tools-sha
         run: node --input-type=module -e "import('./scripts/formal.mjs').then(m=>console.log('sha='+m.TLA_TOOLS_SHA256))" >> "$GITHUB_OUTPUT"
       - name: Cache TLA tools
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/rose-formal
           key: rose-formal-${{ steps.tla-tools-sha.outputs.sha }}

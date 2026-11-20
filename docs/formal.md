@@ -7,8 +7,9 @@ in `pnpm verify` (after `pnpm test:scripts`) and in the CI verify job. With no
 
 ## What a model is
 
-A flow is one tenant-isolation rule written as a TLA+ spec plus a manifest. The
-manifest `formal/<flow>/formal.json` declares the model and the code it models:
+A flow is one code flow (for example tenant deletion) modelled with several rules,
+written as a TLA+ spec plus a manifest. The manifest `formal/<flow>/formal.json`
+declares the model and the code it models:
 
 - `flow` equals the directory name.
 - `spec` names the `.tla` model in that directory.
@@ -49,14 +50,19 @@ A flow lands only when all seven hold:
 3. Leave `sha256` out of each `covered` entry for a new flow.
 4. Run `pnpm formal`. A new flow reports stale until a human runs
    `pnpm formal --resync <flow>`, which fills the hashes only after the flow passes.
-5. Prove the mutant fails: temporarily remove the guard the mutant switches off,
-   run `pnpm formal`, and confirm it fails; then revert.
+5. The harness already runs every mutant against the model automatically. To prove the
+   real code blocks it, if the flow has a `traceTest`, temporarily remove the guard in
+   the code, run that test, confirm it fails, then revert.
 
 Manifest keys, config placement, exit codes, and drift hashing are covered in
 [docs/internals/formal-harness.md](internals/formal-harness.md).
 
 ## Reading a failure
 
+- **Violation in the main run (no mutant).** Either the code breaks the rule, so file a
+  bug with the trace in code words and never weaken the rule or the model to get green;
+  or the model is not true to the code, so fix the model to match the code and say why
+  in the commit.
 - **Safety or liveness violation.** TLC reports `invariant <id> violated` or
   `Temporal properties were violated`. The harness prints the TLC trace under
   `<flow> <check> output:`. Map each step back to the code with the action's
@@ -77,6 +83,6 @@ Resync is manual and owner-reviewed:
 
 1. Re-check the model against the changed code.
 2. A human runs `pnpm formal --resync <flow>` locally.
-3. The resulting `sha256` change is a Tier 1 diff for the owner.
+3. The resulting `sha256` change is an owner-reviewed diff.
 
 `pnpm verify` and CI never run `--resync`. Only the owner approves a hash refresh.
