@@ -288,7 +288,7 @@ export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurge
        SELECT 1 FROM jobs j
        WHERE j.type = 'tenant.purge' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.tenantId') = t.id
      )`;
-  const [, inserted] = await db.batch([
+  const [, inserted] = await db.batch<{ id: string; tenant_id: string }>([
     db
       .prepare(
         `INSERT INTO platform_audit (id, at, actor, action, target, meta, ip)
@@ -312,7 +312,7 @@ export async function recoverStuckPurges(db: D1Database): Promise<RecoveredPurge
       )
       .bind(t, t, t, t),
   ]);
-  const rows = (inserted?.results ?? []) as { id: string; tenant_id: string }[];
+  const rows = inserted!.results;
   return rows.map((row) => ({ id: row.id, tenantId: row.tenant_id }));
 }
 

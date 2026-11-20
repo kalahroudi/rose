@@ -115,7 +115,8 @@ sweeps for due jobs and for jobs left running by a worker that died. The tenant 
 sweep also recovers lost `tenant.purge` jobs: up to 100 per run, it re-enqueues a purge
 for every tenant that is already `deleting` or whose `pending_deletion` grace period has
 ended, whenever no queued or running purge job exists, and records one
-`tenant.purge_recovered` platform audit entry per recovered tenant. The operator worker
+`tenant.purge_recovered` platform audit entry per re-enqueue. A purge that keeps failing
+is therefore re-enqueued, and audited again, on every hourly sweep until it succeeds. The operator worker
 can send to the tenant worker's queue, but a message only ever names a job id.
 
 | Job | Runs in | Does |

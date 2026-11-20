@@ -83,7 +83,7 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(await purgeJobs(a.id)).toEqual({ n: 0 });
   });
 
-  it("two ticks enqueue only one job and still honor the grace period", async () => {
+  it("an existing queued purge job is not duplicated", async () => {
     const a = await createTestTenant(env, SELF);
     await a.fetch("/api/m/notes", { body: { title: "doomed" } });
     await requestTenantDeletion(env.DB, a.id);
@@ -170,7 +170,10 @@ describe("stuck tenant purges are recovered by the hourly sweep", () => {
     expect(jobs).toHaveLength(100);
     expect(new Set(audited.results.map((r) => r.target))).toEqual(new Set(jobs.map((j) => j.tenantId)));
 
-    await recoverStuckPurges(env.DB);
+    // The next sweep picks up the remaining 50, not the 100 that already have a queued job.
+    const rest = await recoverStuckPurges(env.DB);
+    expect(rest).toHaveLength(50);
+    expect(rest.some((j) => jobs.some((k) => k.tenantId === j.tenantId))).toBe(false);
   });
 
   it("concurrent sweeps enqueue one job and audit once per stuck tenant", async () => {
