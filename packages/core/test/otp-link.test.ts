@@ -126,6 +126,21 @@ describe("sign-in key over HTTP", () => {
     expect(statuses.filter((s) => s.status === 200).length).toBe(1);
   });
 
+  it("after the typed cap is exhausted the key still signs in over HTTP", async () => {
+    const a = await createTestTenant(env, SELF);
+    for (let i = 0; i < 2; i++) {
+      const { code } = (await issueLoginCode(DB, KEY, a.id, a.email, `evil${i}`))!;
+      for (let g = 0; g < 5; g++) await verifyLoginCode(DB, KEY, a.id, a.email, wrongOf(code), `evil${i}`);
+      await ageOut(a.id);
+    }
+    expect(await total(a.id, a.email)).toBe(10);
+    const r = await codeFor(a.origin, a.email, "203.0.113.40");
+    expect(r.body.devKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{20}$/);
+    const res = await link(a.origin, a.email, r.body.devKey!, "203.0.113.41");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Set-Cookie")).toMatch(/^__Host-rose_session=/);
+  });
+
   it("/code/verify racing /code/link on the same code gives exactly one session", async () => {
     const a = await createTestTenant(env, SELF);
     const r = await codeFor(a.origin, a.email, "203.0.113.10");

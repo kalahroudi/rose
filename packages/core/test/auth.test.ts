@@ -87,12 +87,14 @@ describe("email sign-in codes", () => {
     expect(await verifyLoginCode(env.DB, k, "s6", "v@example.com", code, "legit")).toBe(true);
     await ageOut("s6");
     // The overall per-address cap is a backstop now that the 2-minute send gap bounds issuance; seed the window directly.
+    const capScope = "s6-cap";
     const t = Date.now();
     for (let i = 0; i < 20; i++) {
-      await env.DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester) VALUES (?, ?, 's6', 'x', ?, ?, ?)")
-        .bind(`raw-${i}`, "v@example.com", t + 600_000, t - 120_000 - i * 30_000, `raw${i}`).run();
+      await env.DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester) VALUES (?, ?, ?, 'x', ?, ?, ?)")
+        .bind(`raw-${i}`, "v@example.com", capScope, t + 600_000, t - 120_000 - i * 30_000, `raw${i}`).run();
     }
-    await expect(issueLoginCode(env.DB, k, "s6", "v@example.com", "fresh")).rejects.toThrow(/Too many/);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ? AND email = ?").bind(capScope, "v@example.com").first<{ n: number }>())!.n).toBe(20);
+    await expect(issueLoginCode(env.DB, k, capScope, "v@example.com", "fresh")).rejects.toThrow(/Too many/);
     // Other scopes are unaffected.
     await issueLoginCode(env.DB, k, "s7", "v@example.com", "abuser");
   });
@@ -364,6 +366,14 @@ describe("self-service signup on the root host", () => {
     const verified = await (await post(root, "/api/root/code/link", { email: "keyed@example.com", key: devKey })).json<{ ticket: string; workspaces: unknown[] }>();
     expect(verified.workspaces).toEqual([]);
     expect((await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Key Co", slug: "key-co" } })).status).toBe(200);
+  });
+
+  it("parallel sign-in key verifications on the root host yield exactly one ticket", async () => {
+    const email = "parlink@example.com";
+    const { devKey } = await (await post(root, "/api/root/code/request", { email })).json<{ devKey: string }>();
+    expect(devKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{20}$/);
+    const results = await Promise.all(Array.from({ length: 4 }, () => post(root, "/api/root/code/link", { email, key: devKey })));
+    expect(results.filter((r) => r.status === 200).length).toBe(1);
   });
 
   it("rejects reserved, malformed and taken addresses", async () => {

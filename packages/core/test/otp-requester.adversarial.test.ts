@@ -175,30 +175,44 @@ describe("adversarial: fallback from a new address", () => {
 });
 
 describe("adversarial: overall per-email cap", () => {
-  it("20 distinct requesters exhaust the cap; the 21st is refused (HTTP)", async () => {
+  it("the per-address issuance cap is exactly 20: a 20th code is issued, then refused", async () => {
     const a = await createTestTenant(env, SELF);
     const t = Date.now();
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 19; i++) {
       await DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester) VALUES (?, ?, ?, 'x', ?, ?, ?)")
         .bind(`cap-${uniq()}-${i}`, a.email, a.id, t + 600_000, t - 120_000 - i * 30_000, `r${i}`).run();
     }
-    expect((await request(a.origin, a.email, "10.0.1.1")).status).toBe(429);
-    const n = await DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ? AND email = ?").bind(a.id, a.email).first<{ n: number }>();
-    expect(n!.n).toBe(20);
+    const twentieth = await request(a.origin, a.email, "10.0.1.1");
+    expect(twentieth.status).toBe(200);
+    expect(twentieth.body.devCode).toMatch(/^\d{6}$/);
+    const count = async () => (await DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ? AND email = ?").bind(a.id, a.email).first<{ n: number }>())!.n;
+    expect(await count()).toBe(20);
+    await ageOut(a.id);
+    expect((await request(a.origin, a.email, "10.0.1.2")).status).toBe(429);
+    expect(await count()).toBe(20);
   });
 
   it("parallel requests from many requesters do not overshoot the per-email cap", async () => {
     const s = `adv-cap-${uniq()}`;
+    const t = Date.now();
+    for (let i = 0; i < 20; i++) {
+      await DB.prepare("INSERT INTO login_codes (id, email, scope, code_hash, expires_at, created_at, requester) VALUES (?, ?, ?, 'x', ?, ?, ?)")
+        .bind(`cap-${uniq()}-${i}`, "e@example.com", s, t + 600_000, t - 120_000 - i * 30_000, `r${i}`).run();
+    }
     await Promise.allSettled(Array.from({ length: 40 }, (_, i) => issueLoginCode(DB, KEY, s, "e@example.com", `p${i}`)));
     const n = await DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ?").bind(s).first<{ n: number }>();
-    expect(n!.n).toBeLessThanOrEqual(20);
+    expect(n!.n).toBe(20);
   });
 
   it("parallel requests from one requester do not overshoot the per-requester limit", async () => {
     const s = `adv-capr-${uniq()}`;
+    for (let i = 0; i < 5; i++) {
+      await issueLoginCode(DB, KEY, s, "e@example.com", "one");
+      await ageOut(s);
+    }
     await Promise.allSettled(Array.from({ length: 15 }, () => issueLoginCode(DB, KEY, s, "e@example.com", "one")));
     const n = await DB.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE scope = ?").bind(s).first<{ n: number }>();
-    expect(n!.n).toBeLessThanOrEqual(5);
+    expect(n!.n).toBe(5);
   });
 
   it("codes older than the 15-minute window no longer count", async () => {

@@ -38,26 +38,24 @@ export async function startSession(c: Context, realm: AuthRealm, user: UserRow, 
   await realm.audit({ actor: user.email, action: `auth.login.${method}`, ip: clientIp(c) });
 }
 
-export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean>; signInPath?: string }): Promise<{ ok: true; devCode?: string; devKey?: string }> {
+export async function requestCode(c: Context, opts: { scope: string; label: string; email: string; eligible: () => Promise<boolean> }): Promise<{ ok: true; devCode?: string; devKey?: string }> {
   const env = c.env as CoreEnv;
   const requester = requesterKey(clientIp(c));
   await rateLimit(c, `code-ip:${requester}`);
   await rateLimit(c, `code:${opts.scope}:${opts.email}:${requester}`);
-  const link = opts.signInPath === undefined ? undefined : `${new URL(c.req.url).origin}${opts.signInPath}#k=`;
+  const link = `${new URL(c.req.url).origin}/#k=`;
   const work = async (): Promise<{ code: string; key: string } | undefined> => {
     if (!(await opts.eligible())) return undefined;
     const issued = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, opts.scope, opts.email, requester);
     if (!issued) return undefined;
-    const text = link === undefined
-      ? `Your sign-in code for ${opts.label} is ${issued.code}\n\nIt expires in 10 minutes. If you did not request it, you can ignore this email.`
-      : `Your sign-in code for ${opts.label} is ${issued.code}\n\nTo sign in on another device, use this long code: ${formatKey(issued.key)}\n\nOr open ${link}${issued.key}\n\nIt expires in 10 minutes. If you did not request it, you can ignore this email.`;
+    const text = `Your sign-in code for ${opts.label} is ${issued.code}\n\nTo sign in on another device, use this long code: ${formatKey(issued.key)}\n\nOr open ${link}${issued.key}\n\nIt expires in 10 minutes. If you did not request it, you can ignore this email.`;
     await sendEmail(env, { to: opts.email, subject: `${issued.code} is your ${opts.label} sign-in code`, text });
     return issued;
   };
   if (isDev(env)) {
     const issued = await work();
     if (issued === undefined) return { ok: true };
-    return link === undefined ? { ok: true, devCode: issued.code } : { ok: true, devCode: issued.code, devKey: issued.key };
+    return { ok: true, devCode: issued.code, devKey: issued.key };
   }
   c.executionCtx.waitUntil(work().catch((err) => console.error(JSON.stringify({ level: "error", at: "requestCode", error: String(err) }))));
   return { ok: true };
@@ -105,7 +103,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.post("/code/request", async (c) => {
     const realm = await getRealm(c);
     const email = normalizeEmail((await readJson(c, emailBody)).email);
-    return c.json(await requestCode(c, { scope: realm.scope, label: realm.displayName, email, signInPath: "/", eligible: async () => (await realm.eligible(email)) && !(await codeDisabled(c.env.DB, realm, email)) }));
+    return c.json(await requestCode(c, { scope: realm.scope, label: realm.displayName, email, eligible: async () => (await realm.eligible(email)) && !(await codeDisabled(c.env.DB, realm, email)) }));
   });
 
   app.post("/code/verify", async (c) => {

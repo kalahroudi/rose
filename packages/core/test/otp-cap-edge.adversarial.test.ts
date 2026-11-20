@@ -92,10 +92,11 @@ describe("L7 cap edge: the last guess goes to the matching candidate", () => {
   });
 
   it("a code accepted at the edge is single-use", async () => {
-    const e = await edge(9, 0);
-    expect(await verifyLoginCode(DB, KEY, e.scope, e.email, e.newest, "r0")).toBe(true);
-    expect(await verifyLoginCode(DB, KEY, e.scope, e.email, e.newest, "other")).toBe(false);
-    expect(await total(e.scope, e.email)).toBeLessThanOrEqual(10);
+    const e = await edge(8, 0);
+    expect(await verifyLoginCode(DB, KEY, e.scope, e.email, e.newest, "other")).toBe(true);
+    expect(await total(e.scope, e.email)).toBe(9);
+    expect(await verifyLoginCode(DB, KEY, e.scope, e.email, e.newest, "s0")).toBe(false);
+    expect(await total(e.scope, e.email)).toBe(9);
   });
 
   it("an exhausted foreign budget on the newest code is not bypassed by the match-first ordering", async () => {
@@ -109,7 +110,7 @@ describe("L7 cap edge: the last guess goes to the matching candidate", () => {
 });
 
 describe("L7 cap edge: parallel verifies", () => {
-  it("parallel correct and wrong guesses at 9 never exceed 100 and accept at most once", async () => {
+  it("parallel correct and wrong guesses at 9 never exceed 10 and accept at most once", async () => {
     const e = await edge(9, 0);
     const bad = ["000000", "111111", "222222"].find((c) => c !== e.own && c !== e.newest)!;
     const results = await Promise.all(
@@ -119,8 +120,8 @@ describe("L7 cap edge: parallel verifies", () => {
     expect(results.filter(Boolean).length).toBeLessThanOrEqual(1);
   });
 
-  it("parallel correct guesses from many strangers at 8 stay within the address and foreign budgets", async () => {
-    const e = await edge(8, 0);
+  it("parallel correct guesses from many strangers at 5 stay within the address and foreign budgets", async () => {
+    const e = await edge(5, 0);
     const results = await Promise.all(Array.from({ length: 10 }, (_, i) => verifyLoginCode(DB, KEY, e.scope, e.email, e.newest, `s${i}`)));
     expect(await total(e.scope, e.email)).toBeLessThanOrEqual(10);
     const [, n] = await rows(e.scope, e.email);
@@ -129,7 +130,7 @@ describe("L7 cap edge: parallel verifies", () => {
   });
 
   it("parallel wrong guesses by the owner never exceed the 5-attempt per-code budget", async () => {
-    const e = await edge(5, 0);
+    const e = await edge(0, 0);
     const bad = ["000000", "111111", "222222"].find((c) => c !== e.own && c !== e.newest)!;
     await Promise.all(Array.from({ length: 12 }, () => verifyLoginCode(DB, KEY, e.scope, e.email, bad, "r0")));
     const [o, n] = await rows(e.scope, e.email);

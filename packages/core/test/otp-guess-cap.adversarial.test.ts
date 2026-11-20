@@ -166,6 +166,8 @@ describe("adversarial guess cap", () => {
     at(oldestCreated + 70 * MIN - 1);
     const { code: fresh } = (await issueLoginCode(DB, KEY, scope, email, "late"))!;
     expect(await verifyLoginCode(DB, KEY, scope, email, fresh, "late")).toBe(false);
+    at(oldestCreated + 70 * MIN);
+    expect(await verifyLoginCode(DB, KEY, scope, email, fresh, "late")).toBe(true);
     at(oldestCreated + 70 * MIN + SEND_GAP_MS + 1);
     const { code: fresh2 } = (await issueLoginCode(DB, KEY, scope, email, "late2"))!;
     expect(await verifyLoginCode(DB, KEY, scope, email, fresh2, "late2")).toBe(true);
@@ -224,12 +226,12 @@ describe("adversarial guess cap", () => {
     for (const s of log) expect(log.filter((x) => x >= s && x < s + 60 * MIN).length).toBeLessThanOrEqual(10);
   });
 
-  it("one requester alone can exhaust the typed cap but not the owner's key", async () => {
+  it("owner recovery: a new code issued after the typed cap is exhausted signs in via its key", async () => {
     setup();
     const scope = `gc-${uniq()}`;
     const email = "l@example.com";
-    const { code: real, key } = (await issueLoginCode(DB, KEY, scope, email, "owner"))!;
-    expect(real).toMatch(/^\d{6}$/);
+    const { code: initial } = (await issueLoginCode(DB, KEY, scope, email, "owner"))!;
+    expect(initial).toMatch(/^\d{6}$/);
     gap();
     for (let i = 0; i < 2; i++) {
       const { code: c } = (await issueLoginCode(DB, KEY, scope, email, "evil"))!;
@@ -240,6 +242,8 @@ describe("adversarial guess cap", () => {
       gap();
     }
     expect(await total(scope, email)).toBe(10);
+    const { code: real, key } = (await issueLoginCode(DB, KEY, scope, email, "owner"))!;
+    expect(real).toMatch(/^\d{6}$/);
     expect(await verifyLoginCode(DB, KEY, scope, email, real, "owner")).toBe(false);
     expect(await verifyLoginKey(DB, KEY, scope, email, key)).toBe(true);
   });

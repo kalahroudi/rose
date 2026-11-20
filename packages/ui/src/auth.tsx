@@ -66,8 +66,6 @@ export interface SignInProps<R> {
   base: string;
   /** Offer "Sign in with a passkey" (the API must expose `/passkey/login/*` under `base`). */
   passkeys?: boolean;
-  /** Expose link sign-in (`/code/link`) and the long-code entry. */
-  links?: boolean;
   onDone: (result: R, email: string) => void;
 }
 
@@ -83,8 +81,8 @@ function readLinkKey(): string | null {
  * The server answers the same way whether or not the address has access, so the form
  * never reveals who has an account.
  */
-export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, links, onDone }: SignInProps<R>) {
-  const [pendingLink] = useState<string | null>(() => (links ? readLinkKey() : null));
+export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDone }: SignInProps<R>) {
+  const [pendingLink] = useState<string | null>(() => readLinkKey());
   const [step, setStep] = useState<"email" | "code" | "link">(pendingLink ? "link" : "email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -101,13 +99,13 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, link
     if (pendingLink) history.replaceState(null, "", window.location.pathname + window.location.search);
   }, [pendingLink]);
 
+  const resendSeconds = Math.max(0, Math.ceil((resendUntil - now) / 1000));
+
   useEffect(() => {
-    if (step !== "code" || resendUntil <= Date.now()) return;
+    if (step !== "code" || resendSeconds <= 0) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [step, resendUntil]);
-
-  const resendSeconds = Math.max(0, Math.ceil((resendUntil - now) / 1000));
+  }, [step, resendSeconds]);
   const resendLabel = resendSeconds > 0 ? `Send a new code (${Math.floor(resendSeconds / 60)}:${String(resendSeconds % 60).padStart(2, "0")})` : "Send a new code";
 
   const run = async (kind: typeof busy, fn: () => Promise<void>) => {
@@ -188,10 +186,10 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, link
           </Field>
         )}
         <Button type="submit" variant="primary" size="lg" block busy={busy === "verify" || busy === "link"} disabled={usingLongCode ? longCode.trim().length < 20 : code.length !== 6}>Continue</Button>
-        {links ? <p className="hint">Code not working? Use the link or the long code from the same email.</p> : null}
+        <p className="hint">Code not working? Use the link or the long code from the same email.</p>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <button type="button" className="link" onClick={() => (setStep("email"), setError(null))}>Use a different email</button>
-          {links ? <button type="button" className="link" onClick={() => (setUsingLongCode(!usingLongCode), setError(null))}>{usingLongCode ? "Use the 6-digit code" : "Use the long code"}</button> : null}
+          <button type="button" className="link" onClick={() => (setUsingLongCode(!usingLongCode), setError(null))}>{usingLongCode ? "Use the 6-digit code" : "Use the long code"}</button>
         </div>
         <div className="row" style={{ justifyContent: "flex-end" }}>
           <button type="button" className="link" disabled={busy !== "" || resendSeconds > 0} onClick={() => void request()}>{resendLabel}</button>

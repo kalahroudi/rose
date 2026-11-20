@@ -25,16 +25,11 @@ const linkHash = async (masterKey: string, scope: string, email: string, key: st
   hmacHex(await deriveHmacKey(masterKey, "login-link/v1"), `${scope}\u0000${email}\u0000${key}`);
 
 function randomKey(): string {
-  let out = "";
-  while (out.length < 20) {
-    const b = crypto.getRandomValues(new Uint8Array(1))[0]!;
-    if (b < 224) out += CROCKFORD[b % 32];
-  }
-  return out;
+  return Array.from(crypto.getRandomValues(new Uint8Array(20)), (b) => CROCKFORD[b & 31]).join("");
 }
 
 export function formatKey(key: string): string {
-  return key.match(/.{1,5}/g)?.join("-") ?? key;
+  return key.replace(/(.{5})(?=.)/g, "$1-");
 }
 
 export function normalizeKey(key: string): string {
