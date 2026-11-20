@@ -24,6 +24,7 @@
     "ci:local": "node scripts/ci-local.mjs",
     "brand": "node scripts/brand.mjs",
     "pentest": "node scripts/pentest.mjs",
+    "formal": "node scripts/formal.mjs",
     "deploy": "node scripts/deploy.mjs",
     "knip": "knip",
     "prepare": "git config core.hooksPath .githooks || true"

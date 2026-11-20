@@ -1,0 +1,16 @@
+{
+  "flow": "toy",
+  "spec": "Toy.tla",
+  "config": "Toy.cfg",
+  "rules": [
+    { "id": "CounterLeqBound", "kind": "safety", "sentence": "The counter never exceeds its bound.", "harm": "A caller would read a value it was not entitled to." }
+  ],
+  "mutants": [
+    { "id": "drop-guard", "breaks": "CounterLeqBound", "code": "scripts/fixtures/formal/toy/toy.ts#counterGuard" }
+  ],
+  "covered": [
+    { "file": "scripts/fixtures/formal/toy/toy.ts", "functions": ["counterGuard"], "sha256": "fa1d08fbaf0641ccc345320e9aa4a16f2ba06f3dd0903df094260e1237b1ee13" }
+  ],
+  "bounds": "one counter, bound 2",
+  "notModelled": ["concurrency", "network", "retries"]
+}
