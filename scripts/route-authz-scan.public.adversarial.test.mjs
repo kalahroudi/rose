@@ -176,8 +176,8 @@ test("a public key does not exempt the same route after auth, and an exemption d
 
 test("PUBLIC_CORE_ROUTES lists exactly the intended routes, each with a real reason", () => {
   assert.deepEqual(Object.keys(PUBLIC_CORE_ROUTES).sort(), [
-    "GET /api/bootstrap", "GET /api/root/slug", "GET /auth/handoff", "POST /api/root/code/request",
-    "POST /api/root/code/verify", "POST /api/root/enter", "ROUTE /api/auth",
+    "GET /api/bootstrap", "GET /api/root/slug", "GET /auth/handoff", "POST /api/root/code/link",
+    "POST /api/root/code/request", "POST /api/root/code/verify", "POST /api/root/enter", "ROUTE /api/auth",
   ].sort());
   for (const [k, v] of Object.entries(PUBLIC_CORE_ROUTES)) assert.ok(typeof v === "string" && v.trim().length > 30, k);
 });

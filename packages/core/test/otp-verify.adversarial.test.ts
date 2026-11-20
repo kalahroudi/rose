@@ -4,12 +4,12 @@ import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloud
 import { describe, expect, it } from "vitest";
 import { createTenantWorker } from "../src";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
+import { ageOut } from "./otp-helpers";
 import { createTestTenant } from "../src/testing";
 import { notes } from "./worker";
 
 const KEY = (env as unknown as { ROSE_MASTER_KEY: string }).ROSE_MASTER_KEY;
 const DB = (env as unknown as { DB: D1Database }).DB;
-const tick = () => new Promise((r) => setTimeout(r, 3));
 const uniq = () => crypto.randomUUID().slice(0, 8);
 const wrongOf = (code: string) => (code === "000000" ? "111111" : "000000");
 const E = "e@example.com";
@@ -135,7 +135,7 @@ describe("adversarial verify: rotating requesters vs the foreign cap", () => {
 
   it("total guesses on one code stay bounded at 8 however requesters rotate", async () => {
     const s = `adv-v-tot-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     for (let i = 0; i < 20; i++) await verifyLoginCode(DB, KEY, s, E, wrongOf(y), `r${i}`);
     for (let i = 0; i < 20; i++) await verifyLoginCode(DB, KEY, s, E, wrongOf(y), "Y");
     const r = await row(s);
@@ -146,7 +146,7 @@ describe("adversarial verify: rotating requesters vs the foreign cap", () => {
 
   it("owner exhausting its own 5 also closes the code to strangers", async () => {
     const s = `adv-v-own5-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     for (let i = 0; i < 5; i++) await verifyLoginCode(DB, KEY, s, E, wrongOf(y), "Y");
     expect(await verifyLoginCode(DB, KEY, s, E, y, "Z")).toBe(false);
     expect((await row(s)).foreign_attempts).toBe(0);
@@ -154,8 +154,8 @@ describe("adversarial verify: rotating requesters vs the foreign cap", () => {
 
   it("a stranger that requests its own code does not gain extra guesses on the owner's code", async () => {
     const s = `adv-v-own-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
-    await tick();
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
+    await ageOut(s);
     await issueLoginCode(DB, KEY, s, E, "X");
     // X's code is newest; X's guesses go to its own code only. Y's code is untouched.
     for (let i = 0; i < 10; i++) await verifyLoginCode(DB, KEY, s, E, wrongOf(y), "X");
@@ -167,7 +167,7 @@ describe("adversarial verify: rotating requesters vs the foreign cap", () => {
 
   it("legacy code with NULL requester is foreign to everyone: at most 3 guesses", async () => {
     const s = `adv-v-null-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "tmp");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "tmp"))!;
     await DB.prepare("UPDATE login_codes SET requester = NULL WHERE scope = ?").bind(s).run();
     for (let i = 0; i < 6; i++) await verifyLoginCode(DB, KEY, s, E, wrongOf(y), "tmp");
     const r = await row(s);
@@ -179,7 +179,7 @@ describe("adversarial verify: rotating requesters vs the foreign cap", () => {
 describe("adversarial verify: parallel owner + foreign races", () => {
   it("parallel wrong guesses from owner and strangers never exceed 5 owner + 3 foreign", async () => {
     const s = `adv-v-race-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     await Promise.all([
       ...Array.from({ length: 15 }, () => verifyLoginCode(DB, KEY, s, E, wrongOf(y), "Y")),
       ...Array.from({ length: 15 }, (_, i) => verifyLoginCode(DB, KEY, s, E, wrongOf(y), `f${i}`)),
@@ -192,7 +192,7 @@ describe("adversarial verify: parallel owner + foreign races", () => {
 
   it("parallel foreign flood leaves the owner's correct code (sent in the same burst) working", async () => {
     const s = `adv-v-race2-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     const results = await Promise.all([
       ...Array.from({ length: 20 }, (_, i) => verifyLoginCode(DB, KEY, s, E, wrongOf(y), `g${i}`)),
       verifyLoginCode(DB, KEY, s, E, y, "Y"),
@@ -203,7 +203,7 @@ describe("adversarial verify: parallel owner + foreign races", () => {
 
   it("owner and stranger both sending the right code in parallel: exactly one succeeds", async () => {
     const s = `adv-v-race3-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     const results = await Promise.all([
       verifyLoginCode(DB, KEY, s, E, y, "Y"),
       verifyLoginCode(DB, KEY, s, E, y, "Z1"),
@@ -273,9 +273,9 @@ describe("adversarial verify: IPv6 /64 bucketing", () => {
 describe("adversarial verify: no resurrection of older codes", () => {
   it("after the owner's newest code is consumed, its older code is dead", async () => {
     const s = `adv-v-res1-${uniq()}`;
-    const old = await issueLoginCode(DB, KEY, s, E, "Y");
-    await tick();
-    const fresh = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: old } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
+    await ageOut(s);
+    const { code: fresh } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     expect(await verifyLoginCode(DB, KEY, s, E, fresh, "Y")).toBe(true);
     if (old !== fresh) {
       expect(await verifyLoginCode(DB, KEY, s, E, old, "Y")).toBe(false);
@@ -285,18 +285,18 @@ describe("adversarial verify: no resurrection of older codes", () => {
 
   it("after the owner's newest code is exhausted, its older code is dead", async () => {
     const s = `adv-v-res2-${uniq()}`;
-    const old = await issueLoginCode(DB, KEY, s, E, "Y");
-    await tick();
-    const fresh = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: old } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
+    await ageOut(s);
+    const { code: fresh } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     for (let i = 0; i < 5; i++) await verifyLoginCode(DB, KEY, s, E, old === wrongOf(fresh) ? wrongOf(old) : wrongOf(fresh), "Y");
     if (old !== fresh) expect(await verifyLoginCode(DB, KEY, s, E, old, "Y")).toBe(false);
   });
 
   it("strangers exhausting the newest code's foreign budget do not fall back to an older code", async () => {
     const s = `adv-v-res3-${uniq()}`;
-    const old = await issueLoginCode(DB, KEY, s, E, "Y");
-    await tick();
-    const fresh = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: old } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
+    await ageOut(s);
+    const { code: fresh } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     for (let i = 0; i < 3; i++) await verifyLoginCode(DB, KEY, s, E, old === wrongOf(fresh) ? wrongOf(old) : wrongOf(fresh), `z${i}`);
     if (old !== fresh) expect(await verifyLoginCode(DB, KEY, s, E, old, "z9")).toBe(false);
     // Older code was never touched.
@@ -306,9 +306,9 @@ describe("adversarial verify: no resurrection of older codes", () => {
 
   it("expired newest code does not revive an older live code", async () => {
     const s = `adv-v-res4-${uniq()}`;
-    const old = await issueLoginCode(DB, KEY, s, E, "Y");
-    await tick();
-    const fresh = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: old } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
+    await ageOut(s);
+    const { code: fresh } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     await DB.prepare("UPDATE login_codes SET expires_at = 1 WHERE scope = ? AND created_at = (SELECT MAX(created_at) FROM login_codes WHERE scope = ?)").bind(s, s).run();
     if (old !== fresh) expect(await verifyLoginCode(DB, KEY, s, E, old, "Y")).toBe(false);
   });
@@ -318,8 +318,8 @@ describe("adversarial verify: scope isolation", () => {
   it("foreign guesses in scope A do not spend the budget of the same address's code in scope B", async () => {
     const sa = `adv-v-sa-${uniq()}`;
     const sb = `adv-v-sb-${uniq()}`;
-    const ca = await issueLoginCode(DB, KEY, sa, E, "Y");
-    const cb = await issueLoginCode(DB, KEY, sb, E, "Y");
+    const { code: ca } = (await issueLoginCode(DB, KEY, sa, E, "Y"))!;
+    const { code: cb } = (await issueLoginCode(DB, KEY, sb, E, "Y"))!;
     for (let i = 0; i < 10; i++) await verifyLoginCode(DB, KEY, sa, E, wrongOf(cb === ca ? wrongOf(ca) : cb), `x${i}`);
     const rb = await row(sb);
     expect(rb.attempts + rb.foreign_attempts).toBe(0);
@@ -360,7 +360,7 @@ describe("adversarial verify: consume once", () => {
 
   it("a code consumed via the foreign path can not be replayed by its owner", async () => {
     const s = `adv-v-once-${uniq()}`;
-    const y = await issueLoginCode(DB, KEY, s, E, "Y");
+    const { code: y } = (await issueLoginCode(DB, KEY, s, E, "Y"))!;
     expect(await verifyLoginCode(DB, KEY, s, E, y, "Z")).toBe(true);
     expect(await verifyLoginCode(DB, KEY, s, E, y, "Y")).toBe(false);
     expect((await row(s)).consumed_at).not.toBeNull();

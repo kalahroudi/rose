@@ -21,21 +21,27 @@ derived from the request host, never from request data. The same code
    address is eligible is a 6-digit code created and mailed, and that work runs after
    the response (`waitUntil`), so neither the body nor the timing reveals membership.
 2. `POST /api/auth/code/verify {email, code}` checks the code and starts a session.
+3. `POST /api/auth/code/link {email, key}` redeems the sign-in key mailed next to the
+   code and starts a session. It never reads or writes the typed-guess counter.
 
 Properties (`control/otp.ts`):
 
-- Stored as `HMAC(key derived from the master key, scope ‖ email ‖ code)`: a database
-  dump can not be brute-forced offline, and a code for one tenant is useless on another.
-- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A code is also accepted if it is the newest live code for the address (for a user whose client address changed); each verify spends at most one guess on each of those two candidates. The requester is the client IPv4 address or the IPv6 /64 prefix (IPv4-mapped IPv6 counts as IPv4), so one host rotating addresses inside its prefix is one requester. Residual risk: an actor with 4 or more distinct /64 prefixes or IPv4 addresses can still exhaust the 20 per 15 minutes per-address cap and delay the user; accepted to stop mail-bombing.
+- The 6-digit code is stored as `HMAC(key derived from the master key, scope ‖ email ‖
+  code)` and the sign-in key as `HMAC(key derived from the master key, scope ‖ email ‖
+  key)`: a database dump can not be brute-forced offline, and a code or key for one
+  tenant is useless on another.
+- Valid 10 minutes, single use (consumed atomically), only the newest code issued to the same requester (client address) counts, so one person's request never invalidates a code another person received. A code is also accepted if it is the newest live code for the address (for a user whose client address changed); each verify spends at most one guess on each of those two candidates. The requester is the client IPv4 address or the IPv6 /64 prefix (IPv4-mapped IPv6 counts as IPv4), so one host rotating addresses inside its prefix is one requester.
+- Typed code: 10 guesses per account (email, scope) per hour. The counter sums own and foreign attempts across all codes created in the last 70 minutes (60-minute window plus the 10-minute code lifetime); after the 10th guess every guess is answered as a bad code, even a correct one. This bounds online guessing at ≤ 1e-5 per account per hour on the typed path. Residual risk: one client can spend the 10 guesses and so block an address's 6-digit code for up to 70 minutes; the emailed sign-in key still signs the real user in.
+- Sign-in key: every code also carries a 100-bit key (20 Crockford base32 characters) printed as `XXXXX-XXXXX-XXXXX-XXXXX` and linked from the mail. It is redeemed by `POST /code/link` and never touches the typed-guess counter, so no number of attacker requesters can stop the real user signing in (key ≥ 64 bits, not rate-limited per account: NIST 800-63B §3.1.3, ASVS 6.6.3). Using the code or the key consumes both.
+- 2-minute send gap: no code is issued for the same (email, scope) within 120 seconds of the previous unused code. A refused issue stays silent (no mail), exactly like an ineligible address.
 - 5 wrong guesses by the requester a code was issued to kill it. Guesses by any other requester (the newest-code fallback) spend a separate, shared budget of 3 per code, so a stranger can never use up the owner's 5; total guesses per code are bounded at 8.
-- Across all codes for one address and scope created in the last 25 minutes (15-minute issuance window plus the 10-minute code lifetime), at most 100 guesses are accepted; after that every guess is answered as a bad code, even a correct one, until older codes age out. This bounds online guessing in any 15-minute span at 100 however many requesters rotate. One requester alone can not reach the cap (5 codes of 8 guesses is 40), but 3 or more distinct requesters can (15 codes x 8 guesses = 120) and can keep it exhausted by issuing new codes as old ones age out, blocking that address's code sign-in for as long as they continue. This is the same class as the issuance cap's residual risk above, with a lower threshold (3 requesters instead of 4).
 - Verification is rate limited per requester (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`), never per address alone, so one client's wrong guesses can not lock the address's real user out.
-- At most 5 codes per address, scope and requester per 15 minutes, and 20 per address and scope across all requesters (anti mail-bomb).
+- At most 5 codes per address, scope and requester per 15 minutes, and 20 per address and scope across all requesters (anti mail-bomb backstop; the 2-minute gap is the effective bound).
 - An attempt is spent *before* comparison, so parallel guesses can not exceed the budget.
 
 In development and tests (`ENVIRONMENT=development`) the response also contains
-`devCode` and the mail is printed to the terminal. In production, the `console` email
-provider refuses to run.
+`devCode` and `devKey` and the mail is printed to the terminal. In production, the
+`console` email provider refuses to run.
 
 ## Passkeys
 
@@ -133,7 +139,8 @@ JSON bodies require `Content-Type: application/json`.
 | 20 requests / 60 s fixed window per key (`code:<scope>:<email>:<requester>`, `code-ip:<requester>`, `pk-ip:<requester>`, `slug-ip:<requester>`, `key-fail:<requester>`) — up to 2 × 20 - 1 = 39 requests can pass across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
 | 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code by its own requester, plus 3 shared by all other requesters | D1 | global |
-| 100 guesses per address and scope across all codes created in the last 25 min | D1 | global |
+| 10 typed guesses per address and scope across all codes created in the last 70 min | D1 | global |
+| Sign-in key (100-bit, not rate-limited per account) | D1 | global |
 | 20 verifications / 60 s fixed window per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) — same fixed 60 s window (up to 2 × 20 - 1 = 39 across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
 
 Every rate-limit key (`code`, `code-ip`, `verify`, `verify-ip`, `pk-ip`, `slug-ip`, `key-fail`) is keyed on the requester (`requesterKey`: IPv4 address or IPv6 /64 prefix, with IPv4-mapped IPv6 treated as IPv4), not the raw IP. If `RL_AUTH` is missing in production, auth endpoints fail closed.

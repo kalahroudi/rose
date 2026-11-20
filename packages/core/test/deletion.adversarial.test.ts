@@ -376,7 +376,7 @@ describe("concurrent deletion request and cancel races (adversarial)", () => {
     const winner = await cancelTenantDeletion(env.DB, a.id);
     expect(winner).toEqual({ status: "active", deleteAfter: del.deleteAfter });
     const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" });
-    const loginCode = await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1");
+    const { code: loginCode } = (await issueLoginCode(env.DB, env.ROSE_MASTER_KEY, a.id, a.email, "127.0.0.1"))!;
     gated.release();
     const loser = await loserPromise;
     expect(loser).toBeNull();

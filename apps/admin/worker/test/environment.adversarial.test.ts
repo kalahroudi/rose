@@ -2,6 +2,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { addDomain, createTenant, getDomain } from "@rose/core/platform";
 import { describe, expect, it } from "vitest";
+import { ageOut } from "../../../../packages/core/test/otp-helpers";
 import worker from "../index";
 
 const ORIGIN = "https://admin.rose.test";
@@ -120,6 +121,7 @@ describe("adversarial: operator console in production", () => {
 
   it("refuses a session over plain HTTP", async () => {
     // Obtain a real operator session through development sign-in, then replay it over HTTP in production.
+    await ageOut("platform");
     const dev = withEnv("development");
     const { devCode } = await (await fetchWith(dev, "/api/auth/code/request", codeReq())).json<{ devCode: string }>();
     const v = await fetchWith(dev, "/api/auth/code/verify", { method: "POST", headers: { Origin: ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify({ email: "root@example.com", code: devCode }) });

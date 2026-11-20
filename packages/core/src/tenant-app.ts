@@ -2,9 +2,10 @@
 import { Hono, type Context } from "hono";
 import { etag } from "hono/etag";
 import { z } from "zod";
-import { createAuthRoutes, checkCode, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
+import { createAuthRoutes, checkCode, checkLink, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
 import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
+import { normalizeKey } from "./control/otp";
 import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
 import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, recoverStuckPurges, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
@@ -226,6 +227,13 @@ export function createTenantApp(options: TenantAppOptions) {
     if (c.get("host").kind !== "root") throw notFound();
   };
 
+  const verifyRootEmail = async (c: Ctx, email: string) => {
+    const user = await ensureUser(c.env.DB, email);
+    const ticket = await createHandoff(c.env.DB, { purpose: "signup", userId: user.id, scope: ROOT_SCOPE, ttlMs: 15 * 60_000 });
+    const workspaces = await listWorkspacesForUser(c.env.DB, user.id);
+    return c.json({ ticket, workspaces: workspaces.map((w) => ({ slug: w.slug, name: w.name, role: w.role })) });
+  };
+
   app.post("/api/root/code/request", async (c) => {
     rootOnly(c);
     const email = normalizeEmail((await readJson(c, z.object({ email: z.string().max(254) }))).email);
@@ -237,11 +245,15 @@ export function createTenantApp(options: TenantAppOptions) {
     const body = await readJson(c, z.object({ email: z.string().max(254), code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.") }));
     const email = normalizeEmail(body.email);
     await checkCode(c, ROOT_SCOPE, email, body.code);
-    const user = await ensureUser(c.env.DB, email);
-    // The ticket proves "this browser verified this email" for the next 15 minutes.
-    const ticket = await createHandoff(c.env.DB, { purpose: "signup", userId: user.id, scope: ROOT_SCOPE, ttlMs: 15 * 60_000 });
-    const workspaces = await listWorkspacesForUser(c.env.DB, user.id);
-    return c.json({ ticket, workspaces: workspaces.map((w) => ({ slug: w.slug, name: w.name, role: w.role })) });
+    return verifyRootEmail(c, email);
+  });
+
+  app.post("/api/root/code/link", async (c) => {
+    rootOnly(c);
+    const body = await readJson(c, z.object({ email: z.string().max(254), key: z.string().trim().min(1).max(60) }));
+    const email = normalizeEmail(body.email);
+    await checkLink(c, ROOT_SCOPE, email, normalizeKey(body.key));
+    return verifyRootEmail(c, email);
   });
 
   app.get("/api/root/slug", async (c) => {
