@@ -2,6 +2,7 @@
 import { deriveHmacKey, hmacHex, timingSafeEqual } from "../crypto";
 import { tooMany } from "../errors";
 import { newId, now, randomDigits } from "../ids";
+import { ACTIVE_TENANT_GUARD, refuseInactiveTenant, tenantStatus } from "./tenant-guard";
 
 const CODE_TTL = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
@@ -47,16 +48,20 @@ export async function issueLoginCode(db: D1Database, masterKey: string, scope: s
        SELECT ?, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ?) < ?
          AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND requester = ? AND created_at > ?) < ?
-         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0`,
+         AND (SELECT COUNT(*) FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL) = 0
+         AND ${ACTIVE_TENANT_GUARD}`,
     )
     .bind(
       newId("lc"), email, scope, await codeHash(masterKey, scope, email, code), await linkHash(masterKey, scope, email, key), t + CODE_TTL, t, who,
       email, scope, t - WINDOW, MAX_CODES_PER_EMAIL,
       email, scope, who, t - WINDOW, MAX_CODES_PER_REQUESTER,
       email, scope, t - SEND_GAP_MS,
+      scope, scope,
     )
     .run();
   if (res.meta.changes === 0) {
+    const status = await tenantStatus(db, scope);
+    if (status && status !== "active") throw refuseInactiveTenant(status);
     const recent = await db.prepare("SELECT 1 AS x FROM login_codes WHERE email = ? AND scope = ? AND created_at > ? AND consumed_at IS NULL").bind(email, scope, t - SEND_GAP_MS).first();
     if (recent) return undefined;
     throw tooMany("Too many codes requested. Wait a few minutes and try again.");

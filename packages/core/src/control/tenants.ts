@@ -195,7 +195,7 @@ export async function requestTenantDeletion(
   const title = job?.title ?? `Delete tenant ${id}`;
   const createdBy = job?.createdBy ?? null;
   const payload = JSON.stringify({ tenantId: id });
-  const [upd, , , , read] = await db.batch([
+  const [upd, , , , , , , read] = await db.batch([
     db
       .prepare(
         "UPDATE tenants SET status = 'pending_deletion', prior_status = status, delete_after = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'suspended')",
@@ -208,6 +208,15 @@ export async function requestTenantDeletion(
       .bind(jobId, title, payload, deleteAfter, createdBy, t, t),
     db
       .prepare("DELETE FROM sessions WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
+      .bind(id, id, deleteAfter),
+    db
+      .prepare("DELETE FROM login_codes WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
+      .bind(id, id, deleteAfter),
+    db
+      .prepare("DELETE FROM handoffs WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
+      .bind(id, id, deleteAfter),
+    db
+      .prepare("DELETE FROM webauthn_challenges WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")
       .bind(id, id, deleteAfter),
     db
       .prepare("DELETE FROM jobs WHERE scope = ? AND EXISTS (SELECT 1 FROM tenants WHERE id = ? AND status = 'pending_deletion' AND delete_after = ?)")

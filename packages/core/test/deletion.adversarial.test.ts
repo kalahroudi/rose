@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import { createTestTenant, type TestTenant } from "../src/testing";
 import { createTenantApp, tenantJobHandlers, tenantTick } from "../src";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
-import { createSession } from "../src/control/sessions";
+import { createSession, SESSION_TTL } from "../src/control/sessions";
+import { sha256Hex } from "../src/crypto";
+import { newId, now } from "../src/ids";
 import { beginTenantPurge, cancelTenantDeletion, requestTenantDeletion } from "../src/control/tenants";
 import { invalidateHostCache } from "../src/tenancy/resolve";
 import { modules } from "./worker";
@@ -16,6 +18,13 @@ const cookieFor = async (a: TestTenant, method: string, ageMs = 0) => {
   const { token } = await createSession(env.DB, { userId: a.userId, scope: a.id, method });
   if (ageMs) await env.DB.prepare("UPDATE sessions SET created_at = created_at - ? WHERE scope = ? AND method = ?").bind(ageMs, a.id, method).run();
   return `__Host-rose_session=${token}`;
+};
+const insertSessionRow = async (a: TestTenant, method: string) => {
+  const token = crypto.randomUUID();
+  await env.DB.prepare(
+    "INSERT INTO sessions (id_hash, public_id, user_id, scope, method, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(await sha256Hex(token), newId("ses"), a.userId, a.id, method, now(), now(), now() + SESSION_TTL).run();
+  return token;
 };
 const storageAlive = async (id: string) => {
   const stub = env.TENANT_DO.get(env.TENANT_DO.idFromName(id));
@@ -98,7 +107,7 @@ describe("purge never runs before delete_after (adversarial)", () => {
     const first = await requestTenantDeletion(env.DB, a.id);
     expect(first.created).toBe(true);
     await env.DB.prepare("UPDATE tenants SET delete_after = ? WHERE id = ?").bind(first.deleteAfter - 1000, a.id).run();
-    await createSession(env.DB, { userId: a.userId, scope: a.id, method: "code" });
+    await insertSessionRow(a, "code");
     const inserted = await env.DB.prepare("SELECT public_id FROM sessions WHERE scope = ?").bind(a.id).first<{ public_id: string }>();
     expect(inserted).not.toBeNull();
     const second = await requestTenantDeletion(env.DB, a.id);
@@ -173,7 +182,7 @@ describe("pending tenants are unreachable and restorable (adversarial)", () => {
   it("a session row created while pending (e.g. via a race) is not usable", async () => {
     const a = await createTestTenant(env, SELF);
     await requestTenantDeletion(env.DB, a.id);
-    const c = await cookieFor(a, "passkey");
+    const c = `__Host-rose_session=${await insertSessionRow(a, "passkey")}`;
     expect((await a.fetch("/api/m/notes", { cookie: c })).status).toBeGreaterThanOrEqual(401);
     const boot = await (await a.fetch("/api/bootstrap", { cookie: c })).json<{ session: unknown }>();
     expect(boot.session).toBeNull();
