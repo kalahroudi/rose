@@ -154,9 +154,14 @@ export async function rateLimit(c: AnyCtx | Context, key: string): Promise<void>
  * tenant on one subdomain can never read or overwrite another tenant's session cookie.
  * Plain-HTTP localhost development can not use the prefix, so it is dropped there only.
  */
-function cookieSpec(c: Context, base: string): { name: string; secure: boolean } {
+function cookieSecure(c: Context): boolean {
   const secure = new URL(c.req.url).protocol === "https:";
   if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
+  return secure;
+}
+
+function cookieSpec(c: Context, base: string): { name: string; secure: boolean } {
+  const secure = cookieSecure(c);
   return { name: secure ? `__Host-${base}` : base, secure };
 }
 
@@ -183,8 +188,7 @@ async function handoffCookieName(token: string): Promise<string> {
 }
 
 function handoffCookieSpec(c: Context, base: string): { name: string; secure: boolean; domain: string } {
-  const secure = new URL(c.req.url).protocol === "https:";
-  if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
+  const secure = cookieSecure(c);
   return { name: secure ? `__Secure-${base}` : base, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
 }
 

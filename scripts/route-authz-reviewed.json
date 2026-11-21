@@ -1,6 +1,6 @@
 {
   "./http/base:requestContext": {
-    "packages/core/src/http/base.ts": "2d8d810f62033ceed40e5b1cfc170b29",
+    "packages/core/src/http/base.ts": "4e01f94a3bdc500613b8550bcce23293",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",
@@ -19,7 +19,7 @@
     "cloudflare:workers": "builtin"
   },
   "./http/base:csrfGuard": {
-    "packages/core/src/http/base.ts": "2d8d810f62033ceed40e5b1cfc170b29",
+    "packages/core/src/http/base.ts": "4e01f94a3bdc500613b8550bcce23293",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",

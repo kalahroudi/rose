@@ -92,10 +92,14 @@ On `https://<base>`:
    not count) `create` answers 403 without spending the ticket. Entering an existing
    workspace by `slug` is never limited.
 4. `GET https://<slug>.<base>/auth/handoff?token=…` exchanges a **handoff** for a session
-   cookie on that host and redirects to `/`.
+   cookie on that host and redirects to `/`. The `POST /api/root/enter` response also sets
+   a short-lived handoff cookie scoped to `/auth/handoff`; the browser presents it back with
+   this request, and the handoff is consumed only when the cookie's value matches the one
+   bound to the token. A `Sec-Fetch-Site: cross-site` request is refused even with the right
+   cookie, so a cross-site page can not ride the handoff.
 
 A handoff is needed because cookies are host-only by design. It is a random token stored
-hashed, valid 60 seconds, single use, and bound to purpose and tenant.
+hashed, valid 60 seconds, single use, and bound to purpose, tenant and the browser cookie.
 
 ## Invitations
 
