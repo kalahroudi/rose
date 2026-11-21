@@ -382,12 +382,9 @@ describe("self-service signup on the root host", () => {
   });
 
   it("the enter response sets a scoped, short-lived handoff cookie", async () => {
-    const { devCode } = await (await post(root, "/api/root/code/request", { email: "attrs@example.com" })).json<{ devCode: string }>();
-    const { ticket } = await (await post(root, "/api/root/code/verify", { email: "attrs@example.com", code: devCode })).json<{ ticket: string }>();
-    const entered = await post(root, "/api/root/enter", { ticket, create: { name: "Attrs Co", slug: "attrs-co" } });
-    expect(entered.status).toBe(200);
-    const set = entered.headers.getSetCookie().find((s) => s.startsWith("__Secure-rose_handoff="))!;
-    expect(set).toMatch(/^__Secure-rose_handoff=/);
+    const { entered, handoffName } = await enterWorkspace("attrs@example.com", "attrs-co");
+    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${handoffName}=`))!;
+    expect(set).toMatch(/^__Secure-rose_handoff_[0-9a-f]{16}=[^;]+;/);
     expect(set).toMatch(/Domain=rose\.test/);
     expect(set).toMatch(/Path=\/auth\/handoff/);
     expect(set).toMatch(/HttpOnly/);
@@ -426,7 +423,8 @@ describe("self-service signup on the root host", () => {
     const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "right-nonce" });
     const url = `${a.origin}/auth/handoff?token=${token}`;
     const handoffCookie = `${await handoffCookieName(token)}=right-nonce`;
-    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: "__Secure-rose_handoff=someone-elses-nonce" } }), "__Host-rose_session")).toBe(false);
+    // The right cookie name carrying another browser's value: the bound hash does not match.
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: `${await handoffCookieName(token)}=someone-elses-nonce` } }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
   });
 
@@ -451,15 +449,18 @@ describe("self-service signup on the root host", () => {
     }
   });
 
-  it("the handoff response always clears the handoff cookie", async () => {
+  it("the handoff response clears the handoff cookie it was sent, matching or not", async () => {
     const a = await createTestTenant(env, SELF);
     const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
     const url = `${a.origin}/auth/handoff?token=${token}`;
-    const clear = (await SELF.fetch(url, { redirect: "manual" })).headers.getSetCookie().find((s) => s.startsWith("__Secure-rose_handoff="))!;
-    expect(clear).toMatch(/__Secure-rose_handoff=;/);
-    expect(clear).toMatch(/Max-Age=0/);
-    expect(clear).toMatch(/Domain=rose\.test/);
-    expect(clear).toMatch(/Path=\/auth\/handoff/);
+    const name = await handoffCookieName(token);
+    for (const value of ["wrong", "nonce"]) {
+      const clear = (await SELF.fetch(url, { redirect: "manual", headers: { Cookie: `${name}=${value}` } })).headers.getSetCookie().find((s) => s.startsWith(`${name}=`))!;
+      expect(clear).toMatch(new RegExp(`^${name}=;`));
+      expect(clear).toMatch(/Max-Age=0/);
+      expect(clear).toMatch(/Domain=rose\.test/);
+      expect(clear).toMatch(/Path=\/auth\/handoff/);
+    }
   });
 
   it("the sign-in key verifies the email on the root host and returns a ticket", async () => {
