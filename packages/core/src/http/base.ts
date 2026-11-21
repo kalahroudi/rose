@@ -171,3 +171,27 @@ export function clearSessionCookie(c: Context, base: string): void {
   const { name, secure } = cookieSpec(c, base);
   deleteCookie(c, name, { path: "/", secure });
 }
+
+// ── Handoff cookie ─────────────────────────────────────────────────────────────
+
+const HANDOFF_COOKIE = "rose_handoff";
+
+function handoffCookieSpec(c: Context): { name: string; secure: boolean; domain: string } {
+  const secure = new URL(c.req.url).protocol === "https:";
+  if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
+  return { name: secure ? `__Secure-${HANDOFF_COOKIE}` : HANDOFF_COOKIE, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
+}
+
+export function setHandoffCookie(c: Context, nonce: string): void {
+  const { name, secure, domain } = handoffCookieSpec(c);
+  setCookie(c, name, nonce, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge: 60 });
+}
+
+export function readHandoffCookie(c: Context): string | undefined {
+  return getCookie(c, handoffCookieSpec(c).name);
+}
+
+export function clearHandoffCookie(c: Context): void {
+  const { name, secure, domain } = handoffCookieSpec(c);
+  deleteCookie(c, name, { domain, path: "/auth/handoff", secure });
+}

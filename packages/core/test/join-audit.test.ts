@@ -87,8 +87,9 @@ describe("member.join audit and owner notification", () => {
     const { ticket } = await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>();
     const entered = await post(root, "/api/root/enter", { ticket, create: { name: "Audit Co", slug: "audit-co" } });
     expect(entered.status).toBe(200);
+    const handoffCookie = (entered.headers.getSetCookie().find((s) => s.startsWith("__Secure-rose_handoff=")) ?? "").split(";")[0]!;
     const { url } = await entered.json<{ url: string }>();
-    const cookie = (((await SELF.fetch(url, { redirect: "manual" })).headers.get("Set-Cookie") ?? "").split(";")[0])!;
+    const cookie = ((await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } })).headers.getSetCookie().find((s) => s.startsWith("__Host-rose_session=")) ?? "").split(";")[0]!;
     const log = await (await SELF.fetch("https://audit-co.rose.test/api/audit?action=member.join", { headers: { Cookie: cookie } })).json<{ items: Entry[] }>();
     expect(log.items).toHaveLength(1);
     expect(JSON.stringify(log.items[0]!.meta)).toContain("owner");

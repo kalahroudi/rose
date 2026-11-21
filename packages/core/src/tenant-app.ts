@@ -14,12 +14,12 @@ import {
   changeMemberRole, createInvitation, ensureUser, getMembership, getPendingInvitation, listInvitations, listMembers,
   listWorkspacesForUser, normalizeEmail, redeemInvitation, removeMember, revokeInvitation, type Role, type UserRow,
 } from "./control/users";
-import { now } from "./ids";
+import { now, randomToken } from "./ids";
 import { sendEmail } from "./email";
 import { assertEnvironment, guardFetch, isDev, maxWorkspacesPerUser, type TenantWorkerEnv } from "./env";
 import { conflict, forbidden, invalid, notFound, unauthorized } from "./errors";
 import { forwardToUpstream } from "./gateway";
-import { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, requesterKey, type BaseVars } from "./http/base";
+import { clearHandoffCookie, clientIp, csrfGuard, errorHandler, parse, rateLimit, readHandoffCookie, readJson, requestContext, requesterKey, setHandoffCookie, type BaseVars } from "./http/base";
 import { listQuerySchema } from "./http/pagination";
 import { buildPermissions, permissionsOf, type Actor, type ModuleContext, type ModuleDefinition } from "./modules";
 import { bindTenant, purgeTenantStorage, tenantCrypto, TenantDb, type TenantContext } from "./tenancy/context";
@@ -290,7 +290,9 @@ export function createTenantApp(options: TenantAppOptions) {
       tenant = body.slug ? await c.env.DB.prepare("SELECT * FROM tenants WHERE slug = ? AND status = 'active'").bind(body.slug).first<TenantRow>() : null;
       if (!tenant || !(await getMembership(c.env.DB, tenant.id, userId))) throw notFound();
     }
-    const handoff = await createHandoff(c.env.DB, { purpose: "session", userId, scope: tenant.id });
+    const nonce = randomToken();
+    setHandoffCookie(c, nonce);
+    const handoff = await createHandoff(c.env.DB, { purpose: "session", userId, scope: tenant.id, binding: nonce });
     return c.json({ url: tenantUrl(c, tenant.slug, `/auth/handoff?token=${handoff}`) });
   });
 
@@ -298,9 +300,11 @@ export function createTenantApp(options: TenantAppOptions) {
   app.get("/auth/handoff", async (c) => {
     const tenant = activeTenant(c);
     const realm = realmFor(c, tenant);
-    const userId = await consumeHandoff(c.env.DB, c.req.query("token") ?? "", "session", tenant.id);
+    const nonce = c.req.header("Sec-Fetch-Site") === "cross-site" ? undefined : readHandoffCookie(c);
+    const userId = nonce ? await consumeHandoff(c.env.DB, c.req.query("token") ?? "", "session", tenant.id, nonce) : null;
     const user = userId ? await c.env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>() : null;
     if (user && (await realm.admit(user))) await startSession(c, realm, user, "code");
+    clearHandoffCookie(c);
     return c.redirect("/", 302);
   });
 

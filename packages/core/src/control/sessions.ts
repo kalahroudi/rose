@@ -106,15 +106,16 @@ export async function revokeSessionById(db: D1Database, userId: string, scope: s
   if (r.meta.changes === 0) throw notFound();
 }
 
-export async function createHandoff(db: D1Database, input: { purpose: "session" | "signup"; userId: string; scope: string; ttlMs?: number }): Promise<string> {
+export async function createHandoff(db: D1Database, input: { purpose: "session" | "signup"; userId: string; scope: string; ttlMs?: number; binding?: string }): Promise<string> {
   const token = randomToken();
+  const hash = input.binding ? await sha256Hex(`${token}.${input.binding}`) : await sha256Hex(token);
   const res = await db
     .prepare(
       `INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at)
        SELECT ?, ?, ?, ?, ?
        WHERE ${ACTIVE_TENANT_GUARD}`,
     )
-    .bind(await sha256Hex(token), input.purpose, input.userId, input.scope, now() + (input.ttlMs ?? 60_000), input.scope, input.scope)
+    .bind(hash, input.purpose, input.userId, input.scope, now() + (input.ttlMs ?? 60_000), input.scope, input.scope)
     .run();
   if (res.meta.changes === 0) {
     const status = await tenantStatus(db, input.scope);
@@ -124,11 +125,12 @@ export async function createHandoff(db: D1Database, input: { purpose: "session" 
   return token;
 }
 
-export async function consumeHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string): Promise<string | null> {
+export async function consumeHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string, binding?: string): Promise<string | null> {
   if (!token || token.length > 100) return null;
+  const hash = binding ? await sha256Hex(`${token}.${binding}`) : await sha256Hex(token);
   const row = await db
     .prepare("DELETE FROM handoffs WHERE token_hash = ? AND purpose = ? AND scope = ? AND expires_at > ? RETURNING user_id")
-    .bind(await sha256Hex(token), purpose, scope, now())
+    .bind(hash, purpose, scope, now())
     .first<{ user_id: string }>();
   return row?.user_id ?? null;
 }
