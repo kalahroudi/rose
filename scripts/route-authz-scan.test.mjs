@@ -660,7 +660,7 @@ test("pre-auth middleware: a malformed allow-list is reported, never a pass or a
 test("pre-auth middleware: the import's module is pinned and must not be renamed", () => {
   const r = realMw(swap(REAL(), 'import { etag } from "hono/etag";', 'import { etag } from "./evil";'));
   assert.ok(r.ungated.some((u) => /imported from "\.\/evil"/.test(u.reason)), JSON.stringify(r.ungated));
-  const noBase = (src) => swap(src, "import { clientIp, csrfGuard, errorHandler,", "import { clientIp, errorHandler,");
+  const noBase = (src) => swap(src, "import { clearHandoffCookie, clientIp, csrfGuard, errorHandler,", "import { clearHandoffCookie, clientIp, errorHandler,");
   for (const imp of ['import { csrfGuard } from "./evil";', 'import { answer as csrfGuard } from "./http/base";', 'import csrfGuard from "./http/base";']) {
     const r2 = realMw(swap(noBase(REAL()), 'import { z } from "zod";', `import { z } from "zod";\n${imp}`));
     assert.ok(r2.ungated.length + r2.unparsed.length > 0, imp);

@@ -291,8 +291,8 @@ export function createTenantApp(options: TenantAppOptions) {
       if (!tenant || !(await getMembership(c.env.DB, tenant.id, userId))) throw notFound();
     }
     const nonce = randomToken();
-    setHandoffCookie(c, nonce);
     const handoff = await createHandoff(c.env.DB, { purpose: "session", userId, scope: tenant.id, binding: nonce });
+    await setHandoffCookie(c, handoff, nonce);
     return c.json({ url: tenantUrl(c, tenant.slug, `/auth/handoff?token=${handoff}`) });
   });
 
@@ -300,11 +300,12 @@ export function createTenantApp(options: TenantAppOptions) {
   app.get("/auth/handoff", async (c) => {
     const tenant = activeTenant(c);
     const realm = realmFor(c, tenant);
-    const nonce = c.req.header("Sec-Fetch-Site") === "cross-site" ? undefined : readHandoffCookie(c);
-    const userId = nonce ? await consumeHandoff(c.env.DB, c.req.query("token") ?? "", "session", tenant.id, nonce) : null;
+    const token = c.req.query("token") ?? "";
+    const nonce = c.req.header("Sec-Fetch-Site") === "cross-site" ? undefined : await readHandoffCookie(c, token);
+    const userId = nonce ? await consumeHandoff(c.env.DB, token, "session", tenant.id, nonce) : null;
     const user = userId ? await c.env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>() : null;
     if (user && (await realm.admit(user))) await startSession(c, realm, user, "code");
-    clearHandoffCookie(c);
+    if (nonce !== undefined) await clearHandoffCookie(c, token);
     return c.redirect("/", 302);
   });
 

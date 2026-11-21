@@ -9,17 +9,13 @@ import { createTenant } from "../src/control/tenants";
 import { addMembership, ensureUser, getMembership } from "../src/control/users";
 import { maxWorkspacesPerUser } from "../src/env";
 import { createTestTenant } from "../src/testing";
+import { cookiePair, handoffCookieName, hasCookie } from "./cookie-helpers";
 import { ageOut } from "./otp-helpers";
 import { notes } from "./worker";
 
 const post = (origin: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
   SELF.fetch(origin + path, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), redirect: "manual" });
 const cookieOf = (res: Response) => (res.headers.get("Set-Cookie") ?? "").split(";")[0]!;
-const cookieNamed = (res: Response, name: string) => {
-  const line = res.headers.getSetCookie().find((s) => s.startsWith(`${name}=`));
-  return line ? line.split(";")[0]! : "";
-};
-const hasCookie = (res: Response, name: string) => res.headers.getSetCookie().some((s) => s.startsWith(`${name}=`));
 
 describe("email sign-in codes", () => {
   it("signs a member in and sets a host-bound cookie", async () => {
@@ -360,9 +356,9 @@ describe("self-service signup on the root host", () => {
     const { ticket } = await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>();
     const entered = await post(root, "/api/root/enter", { ticket, create: { name: slug, slug } });
     expect(entered.status).toBe(200);
-    const handoffCookie = cookieNamed(entered, "__Secure-rose_handoff");
     const { url } = await entered.json<{ url: string }>();
-    return { url, handoffCookie };
+    const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
+    return { url, handoffName, handoffCookie: cookiePair(entered, handoffName), entered };
   };
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
@@ -371,11 +367,12 @@ describe("self-service signup on the root host", () => {
     expect(verified.workspaces).toEqual([]);
     const entered = await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Acme Inc", slug: "acme-inc" } });
     expect(entered.status).toBe(200);
-    const handoffCookie = cookieNamed(entered, "__Secure-rose_handoff");
     const { url } = await entered.json<{ url: string }>();
     expect(url).toMatch(/^https:\/\/acme-inc\.rose\.test\/auth\/handoff\?token=/);
+    const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
+    const handoffCookie = cookiePair(entered, handoffName);
     const landed = await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } });
-    const cookie = cookieNamed(landed, "__Host-rose_session");
+    const cookie = cookiePair(landed, "__Host-rose_session");
     expect(cookie).toMatch(/^__Host-rose_session=/);
     const boot = await (await SELF.fetch("https://acme-inc.rose.test/api/bootstrap", { headers: { Cookie: cookie } })).json<{ session: { role: string } }>();
     expect(boot.session.role).toBe("owner");
@@ -405,11 +402,30 @@ describe("self-service signup on the root host", () => {
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
   });
 
+  it("two tabs entering workspaces at once get distinct handoff cookies that each work", async () => {
+    const enter = async (email: string, slug: string) => {
+      const user = await ensureUser(env.DB, email);
+      const ticket = await createHandoff(env.DB, { purpose: "signup", userId: user.id, scope: "root", ttlMs: 15 * 60_000 });
+      const entered = await post(root, "/api/root/enter", { ticket, create: { name: slug, slug } });
+      expect(entered.status).toBe(200);
+      const { url } = await entered.json<{ url: string }>();
+      const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
+      return { url, handoffCookie: cookiePair(entered, handoffName) };
+    };
+    const tabA = await enter("tab-a@example.com", "tab-a-ws");
+    const tabB = await enter("tab-b@example.com", "tab-b-ws");
+    expect(tabA.handoffCookie).not.toBe(tabB.handoffCookie);
+    expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(true);
+    expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
   it("a handoff with another browser's nonce starts no session and leaves the token unspent", async () => {
     const a = await createTestTenant(env, SELF);
     const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "right-nonce" });
     const url = `${a.origin}/auth/handoff?token=${token}`;
-    const handoffCookie = "__Secure-rose_handoff=right-nonce";
+    const handoffCookie = `${await handoffCookieName(token)}=right-nonce`;
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: "__Secure-rose_handoff=someone-elses-nonce" } }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
   });
@@ -418,7 +434,7 @@ describe("self-service signup on the root host", () => {
     const a = await createTestTenant(env, SELF);
     const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
     const url = `${a.origin}/auth/handoff?token=${token}`;
-    const handoffCookie = "__Secure-rose_handoff=nonce";
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": "cross-site" } }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": "same-site" } }), "__Host-rose_session")).toBe(true);
   });
@@ -429,7 +445,7 @@ describe("self-service signup on the root host", () => {
       const nonce = site ?? "absent";
       const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: nonce });
       const url = `${a.origin}/auth/handoff?token=${token}`;
-      const headers: Record<string, string> = { Cookie: `__Secure-rose_handoff=${nonce}` };
+      const headers: Record<string, string> = { Cookie: `${await handoffCookieName(token)}=${nonce}` };
       if (site) headers["Sec-Fetch-Site"] = site;
       expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers }), "__Host-rose_session")).toBe(true);
     }

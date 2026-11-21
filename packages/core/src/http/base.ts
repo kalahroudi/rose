@@ -2,7 +2,9 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ZodType } from "zod";
+import { sha256Hex } from "../crypto";
 import { consumeRateLimit } from "../control/rate-limit";
+import { HANDOFF_TTL_MS } from "../control/sessions";
 import { type CoreEnv, isDev } from "../env";
 import { AppError, badRequest, forbidden, invalid, misconfigured, tooMany } from "../errors";
 import { newId } from "../ids";
@@ -176,22 +178,26 @@ export function clearSessionCookie(c: Context, base: string): void {
 
 const HANDOFF_COOKIE = "rose_handoff";
 
-function handoffCookieSpec(c: Context): { name: string; secure: boolean; domain: string } {
+async function handoffCookieName(token: string): Promise<string> {
+  return `${HANDOFF_COOKIE}_${(await sha256Hex(token)).slice(0, 16)}`;
+}
+
+function handoffCookieSpec(c: Context, base: string): { name: string; secure: boolean; domain: string } {
   const secure = new URL(c.req.url).protocol === "https:";
   if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
-  return { name: secure ? `__Secure-${HANDOFF_COOKIE}` : HANDOFF_COOKIE, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
+  return { name: secure ? `__Secure-${base}` : base, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
 }
 
-export function setHandoffCookie(c: Context, nonce: string): void {
-  const { name, secure, domain } = handoffCookieSpec(c);
-  setCookie(c, name, nonce, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge: 60 });
+export async function setHandoffCookie(c: Context, token: string, binding: string): Promise<void> {
+  const { name, secure, domain } = handoffCookieSpec(c, await handoffCookieName(token));
+  setCookie(c, name, binding, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge: HANDOFF_TTL_MS / 1000 });
 }
 
-export function readHandoffCookie(c: Context): string | undefined {
-  return getCookie(c, handoffCookieSpec(c).name);
+export async function readHandoffCookie(c: Context, token: string): Promise<string | undefined> {
+  return getCookie(c, handoffCookieSpec(c, await handoffCookieName(token)).name);
 }
 
-export function clearHandoffCookie(c: Context): void {
-  const { name, secure, domain } = handoffCookieSpec(c);
+export async function clearHandoffCookie(c: Context, token: string): Promise<void> {
+  const { name, secure, domain } = handoffCookieSpec(c, await handoffCookieName(token));
   deleteCookie(c, name, { domain, path: "/auth/handoff", secure });
 }
