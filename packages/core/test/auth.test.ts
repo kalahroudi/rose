@@ -351,14 +351,15 @@ describe("sessions and handoffs", () => {
 
 describe("self-service signup on the root host", () => {
   const root = `https://${env.APP_BASE_DOMAIN}`;
-  const enterWorkspace = async (email: string, slug: string) => {
+  const verifyEmail = async (email: string) => {
     const { devCode } = await (await post(root, "/api/root/code/request", { email })).json<{ devCode: string }>();
-    const { ticket } = await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>();
-    const entered = await post(root, "/api/root/enter", { ticket, create: { name: slug, slug } });
+    return (await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>()).ticket;
+  };
+  const enterWorkspace = async (email: string, slug: string) => {
+    const entered = await post(root, "/api/root/enter", { ticket: await verifyEmail(email), create: { name: slug, slug } });
     expect(entered.status).toBe(200);
     const { url } = await entered.json<{ url: string }>();
-    const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
-    return { url, handoffName, handoffCookie: cookiePair(entered, handoffName), entered };
+    return { url, handoffCookie: cookiePair(entered, await handoffCookieName(new URL(url).searchParams.get("token")!)) };
   };
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
@@ -382,8 +383,11 @@ describe("self-service signup on the root host", () => {
   });
 
   it("the enter response sets a scoped, short-lived handoff cookie", async () => {
-    const { entered, handoffName } = await enterWorkspace("attrs@example.com", "attrs-co");
-    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${handoffName}=`))!;
+    const entered = await post(root, "/api/root/enter", { ticket: await verifyEmail("attrs@example.com"), create: { name: "Attrs Co", slug: "attrs-co" } });
+    expect(entered.status).toBe(200);
+    const { url } = await entered.json<{ url: string }>();
+    const name = await handoffCookieName(new URL(url).searchParams.get("token")!);
+    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${name}=`))!;
     expect(set).toMatch(/^__Secure-rose_handoff_[0-9a-f]{16}=[^;]+;/);
     expect(set).toMatch(/Domain=rose\.test/);
     expect(set).toMatch(/Path=\/auth\/handoff/);
