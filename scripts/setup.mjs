@@ -11,7 +11,7 @@ import { createInterface } from "node:readline/promises";
 import { copyFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ADMIN_DIR, APP_DIR, DB_NAME, PLACEHOLDER_DB_ID, PROD_CONFIG, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, fail, info, installGitHooks,
+  ADMIN_DIR, APP_DIR, DB_NAME, DEV_BASE_DOMAIN, PLACEHOLDER_DB_ID, PROD_CONFIG, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, fail, info, installGitHooks,
   newHexSecret, newMasterKey, ok, parseArgs, readText, run, setDatabaseId, setRoutes, setVar, warn, writeText,
 } from "./lib.mjs";
 
@@ -22,8 +22,9 @@ if (args.help) {
 }
 
 if (!args.production) {
-  const { created, adminEmail } = ensureDevVars({ adminEmail: typeof args["operator-email"] === "string" ? args["operator-email"] : process.env.ROSE_ADMIN_EMAIL });
+  const { created, migratedBaseDomain, adminEmail } = ensureDevVars({ adminEmail: typeof args["operator-email"] === "string" ? args["operator-email"] : process.env.ROSE_ADMIN_EMAIL });
   ok(created ? "Generated local secrets in apps/app/.dev.vars and apps/admin/.dev.vars (git-ignored)" : "Local secrets already present (kept, so existing local data stays readable)");
+  if (migratedBaseDomain) ok(`Moved APP_BASE_DOMAIN in apps/*/.dev.vars from localhost to ${DEV_BASE_DOMAIN}. The tenant app is now http://${DEV_BASE_DOMAIN}:5174`);
   ensureDistDirs();
   ok(installGitHooks() ? "Git hooks enabled (.githooks: pre-commit runs guard + typecheck, pre-push runs pnpm verify)" : "Not a git checkout: skipped git hooks");
   applyLocalMigrations();

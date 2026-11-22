@@ -12,6 +12,7 @@
 // scripts/ci-local.test.mjs fails when ci.yml gains a `run:` command that STEPS does not run.
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -158,19 +159,26 @@ async function stopDevStack() {
 /** ci.yml's readiness check: the tenant app serves `"root"` and the console answers 2xx. */
 async function waitForStack(logDir) {
   const deadline = Date.now() + 90_000;
-  const get = async (url) => {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-      return { status: res.status, body: await res.text() };
-    } catch {
-      return null;
-    }
-  };
+  // Connect to plain localhost and name the site in the Host header, so readiness does not
+  // depend on *.localhost resolving. Not 127.0.0.1: Vite listens on localhost, which can be ::1.
+  const get = (port, host) =>
+    new Promise((done) => {
+      const req = http.request({ host: "localhost", port, path: "/api/bootstrap", headers: { Host: host }, timeout: 2000 }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => done({ status: res.statusCode ?? 0, body }));
+        res.on("error", () => done(null));
+      });
+      req.on("timeout", () => req.destroy());
+      req.on("error", () => done(null));
+      req.end();
+    });
   while (Date.now() < deadline) {
     if (!devStack) throw new Error(`the local stack exited early:\n${readLog(logDir)}`);
-    const app = await get("http://rose.localhost:5174/api/bootstrap");
+    const app = await get(5174, "rose.localhost:5174");
     if (app && app.body.includes('"root"')) {
-      const admin = await get("http://localhost:5173/api/bootstrap");
+      const admin = await get(5173, "localhost:5173");
       if (admin && admin.status >= 200 && admin.status < 300) {
         console.log(green("✓ the local stack is up"));
         return;

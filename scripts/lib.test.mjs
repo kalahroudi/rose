@@ -68,12 +68,14 @@ async function devVarsIn(files) {
     mkdirSync(join(dir, `apps/${app}`), { recursive: true });
     if (files[app] !== undefined) writeFileSync(join(dir, `apps/${app}/.dev.vars`), files[app]);
   }
-  const lib = await import(pathToFileURL(join(dir, "scripts/lib.mjs")).href);
-  const result = lib.ensureDevVars();
-  const read = (app) => Object.fromEntries(readFileSync(join(dir, `apps/${app}/.dev.vars`), "utf8").trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-  const out = { result, app: read("app"), admin: read("admin") };
-  rmSync(dir, { recursive: true, force: true });
-  return out;
+  try {
+    const lib = await import(pathToFileURL(join(dir, "scripts/lib.mjs")).href);
+    const result = lib.ensureDevVars();
+    const read = (app) => Object.fromEntries(readFileSync(join(dir, `apps/${app}/.dev.vars`), "utf8").trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+    return { result, app: read("app"), admin: read("admin") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test("ensureDevVars: a fresh checkout gets the rose.localhost base domain", async () => {
