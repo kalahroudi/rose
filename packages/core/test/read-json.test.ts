@@ -9,6 +9,11 @@ const schema = z.object({ v: z.string() });
 const app = new Hono();
 app.onError(errorHandler);
 app.post("/", async (c) => c.json(await readJson(c, schema)));
+app.post("/twice", async (c) => {
+  const first = await readJson(c, schema);
+  const second = schema.parse(await c.req.json());
+  return c.json({ same: first.v === second.v });
+});
 
 const jsonOfBytes = (bytes: number, filler = "a") => {
   const room = bytes - new TextEncoder().encode('{"v":""}').byteLength;
@@ -83,6 +88,16 @@ describe("readJson size cap", () => {
     const res = await post(stream, { "Content-Length": String(MAX_BODY + 1) });
     expect(res.status).toBe(413);
     expect(state.pulls).toBe(0);
+  });
+
+  it("lets the handler read the body again after readJson", async () => {
+    const res = await app.request("/twice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: '{"v":"x"}',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ same: true });
   });
 
   it("answers an empty body with 400", async () => {

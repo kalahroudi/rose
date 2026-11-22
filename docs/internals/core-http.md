@@ -126,7 +126,7 @@ The declared-length gate exists so an oversized upload is refused without spendi
 reading it. It covers only a length the client declares. A chunked body carries
 no `Content-Length`, so `readJson` reads the stream chunk by chunk, sums the byte lengths,
 and cancels the stream on the first chunk that takes the total over `MAX_BODY`. Memory per
-request is therefore bounded by the cap plus one chunk, not by the platform body limit.
+request is therefore bounded by about twice the cap plus the decoded string, not by the platform body limit.
 The bytes are decoded only after the cap check passes.
 
 The cap counts bytes, not UTF-16 code units, so multi-byte text is not undercounted. The

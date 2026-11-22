@@ -100,6 +100,8 @@ export async function readJson<T>(c: Context, schema: ZodType<T>): Promise<T> {
   }
   if (Number(c.req.header("Content-Length") ?? 0) > MAX_BODY) throw tooLarge();
   const text = await readCapped(c.req.raw);
+  // Hono types the cache entry as a string, but its runtime stores and awaits a Promise.
+  c.req.bodyCache.text = Promise.resolve(text) as unknown as string;
   let raw: unknown;
   try {
     raw = JSON.parse(text);
