@@ -9,14 +9,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { join } from "node:path";
-import { ADMIN_DIR, APP_DIR, DEV_BASE_DOMAIN, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, localPersistTo, ok, spawnChild } from "./lib.mjs";
+import { ADMIN_DIR, APP_DIR, DEV_APP_ORIGIN, DEV_BASE_DOMAIN, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, localPersistTo, ok, spawnChild } from "./lib.mjs";
 
 const WORKERS_PORT = 8787;
 const APP_HOST = `${DEV_BASE_DOMAIN}:5174`;
 
-const { created, migratedBaseDomain, adminEmail } = ensureDevVars({ adminEmail: process.env.ROSE_ADMIN_EMAIL });
+const { created, adminEmail } = ensureDevVars({ adminEmail: process.env.ROSE_ADMIN_EMAIL });
 if (created) ok("Generated local secrets in apps/*/.dev.vars (git-ignored)");
-if (migratedBaseDomain) ok(`Moved APP_BASE_DOMAIN in apps/*/.dev.vars from localhost to ${DEV_BASE_DOMAIN}. The tenant app is now http://${APP_HOST}`);
 ensureDistDirs();
 installGitHooks();
 info("Applying local database migrations…");
@@ -127,7 +126,7 @@ ${line}
 
   Operator console   ${c.cyan("http://localhost:5173")}
                      sign in as ${c.bold(adminEmail)}
-  Tenant app         ${c.cyan(`http://${APP_HOST}`)}   ${c.dim("(sign up / find your workspace)")}
+  Tenant app         ${c.cyan(DEV_APP_ORIGIN)}   ${c.dim("(sign up / find your workspace)")}
   A tenant           ${c.cyan(`http://<slug>.${APP_HOST}`)}
 
   Sign-in codes are shown on the sign-in screen and printed here

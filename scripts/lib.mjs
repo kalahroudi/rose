@@ -87,6 +87,7 @@ function writeVars(file, vars) {
 }
 
 export const DEV_BASE_DOMAIN = "rose.localhost";
+export const DEV_APP_ORIGIN = `http://${DEV_BASE_DOMAIN}:5174`;
 const LEGACY_DEV_BASE_DOMAIN = "localhost";
 
 /**
@@ -120,7 +121,9 @@ export function ensureDevVars({ adminEmail } = {}) {
   if (nextApp.APP_NAME && !nextAdmin.APP_NAME) nextAdmin.APP_NAME = nextApp.APP_NAME;
   writeVars(appFile, nextApp);
   writeVars(adminFile, nextAdmin);
-  return { created, migratedBaseDomain: migrated.length > 0, adminEmail: nextAdmin.BOOTSTRAP_OPERATOR_EMAIL };
+  const migratedBaseDomain = migrated.length > 0;
+  if (migratedBaseDomain) ok(`Moved APP_BASE_DOMAIN in apps/*/.dev.vars from ${LEGACY_DEV_BASE_DOMAIN} to ${DEV_BASE_DOMAIN}. The tenant app is now ${DEV_APP_ORIGIN}`);
+  return { created, migratedBaseDomain, adminEmail: nextAdmin.BOOTSTRAP_OPERATOR_EMAIL };
 }
 
 export function ensureDistDirs() {
