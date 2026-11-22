@@ -21,8 +21,17 @@ pnpm dev
 | URL | What |
 |---|---|
 | http://localhost:5173 | Operator console. Sign in as `admin@example.com` (set `ROSE_ADMIN_EMAIL=you@x.com pnpm dev` on first run to change it). |
-| http://localhost:5174 | Tenant app root: sign up and create a workspace. |
-| http://`<slug>`.localhost:5174 | A workspace. `*.localhost` resolves to your machine in Chrome, Firefox and Edge. For Safari add the name to `/etc/hosts`. |
+| http://rose.localhost:5174 | Tenant app root: sign up and create a workspace. |
+| http://`<slug>`.rose.localhost:5174 | A workspace. `*.localhost` resolves to your machine in Chrome, Firefox and Edge. For Safari add the name to `/etc/hosts`. |
+
+The tenant app root is `rose.localhost`, not `localhost`. Browsers treat `localhost` and
+`<slug>.localhost` as two different sites, so a cookie the root sets for the base domain
+never reaches a workspace and the handoff from root to workspace counts as cross-site.
+`rose.localhost` and `<slug>.rose.localhost` are one site, as the root domain and its
+workspaces are in production. A checkout whose `.dev.vars` still says
+`APP_BASE_DOMAIN=localhost` is moved to `rose.localhost` the next time `pnpm dev` runs,
+and the terminal says so. Any other value you set is kept. The operator console stays on
+`localhost:5173`.
 
 **Sign-in codes** are shown on the sign-in screen and printed in the terminal. No email
 is sent in development.

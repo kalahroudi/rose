@@ -62,7 +62,7 @@ docs/                 Start with architecture.md and tenancy-and-isolation.md.
 
 | Command | Use |
 |---|---|
-| `pnpm dev` | Run everything locally (console :5173, app :5174, `<slug>.localhost:5174`) |
+| `pnpm dev` | Run everything locally (console `localhost:5173`, app `rose.localhost:5174`, `<slug>.rose.localhost:5174`) |
 | `pnpm verify` | **Definition of "works"**: guard + lint + knip + script tests + formal + typecheck + all tests |
 | `pnpm guard` | Static guardrails only; also runs automatically after each edit |
 | `pnpm lint` | Lint (oxlint); also part of verify |

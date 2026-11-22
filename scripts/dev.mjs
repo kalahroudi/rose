@@ -9,12 +9,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { join } from "node:path";
-import { ADMIN_DIR, APP_DIR, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, localPersistTo, ok, spawnChild } from "./lib.mjs";
+import { ADMIN_DIR, APP_DIR, DEV_BASE_DOMAIN, ROOT, applyLocalMigrations, bin, c, ensureDevVars, ensureDistDirs, info, installGitHooks, localPersistTo, ok, spawnChild } from "./lib.mjs";
 
 const WORKERS_PORT = 8787;
+const APP_HOST = `${DEV_BASE_DOMAIN}:5174`;
 
-const { created, adminEmail } = ensureDevVars({ adminEmail: process.env.ROSE_ADMIN_EMAIL });
+const { created, migratedBaseDomain, adminEmail } = ensureDevVars({ adminEmail: process.env.ROSE_ADMIN_EMAIL });
 if (created) ok("Generated local secrets in apps/*/.dev.vars (git-ignored)");
+if (migratedBaseDomain) ok(`Moved APP_BASE_DOMAIN in apps/*/.dev.vars from localhost to ${DEV_BASE_DOMAIN}. The tenant app is now http://${APP_HOST}`);
 ensureDistDirs();
 installGitHooks();
 info("Applying local database migrations…");
@@ -102,12 +104,12 @@ function tick(host) {
   req.end();
 }
 const ticker = setInterval(() => {
-  tick("localhost:5174");
+  tick(APP_HOST);
   tick("localhost:5173");
 }, 3000);
 
 function waitForWorkers(tries = 60) {
-  const req = http.request({ host: "127.0.0.1", port: WORKERS_PORT, path: "/api/bootstrap", headers: { Host: "localhost:5174" }, timeout: 1000 }, (res) => {
+  const req = http.request({ host: "127.0.0.1", port: WORKERS_PORT, path: "/api/bootstrap", headers: { Host: APP_HOST }, timeout: 1000 }, (res) => {
     res.resume();
     banner();
   });
@@ -125,8 +127,8 @@ ${line}
 
   Operator console   ${c.cyan("http://localhost:5173")}
                      sign in as ${c.bold(adminEmail)}
-  Tenant app         ${c.cyan("http://localhost:5174")}   ${c.dim("(sign up / find your workspace)")}
-  A tenant           ${c.cyan("http://<slug>.localhost:5174")}
+  Tenant app         ${c.cyan(`http://${APP_HOST}`)}   ${c.dim("(sign up / find your workspace)")}
+  A tenant           ${c.cyan(`http://<slug>.${APP_HOST}`)}
 
   Sign-in codes are shown on the sign-in screen and printed here
   in development. No email is sent.

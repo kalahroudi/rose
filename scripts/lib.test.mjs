@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { ROOT, diagnoseOperatorSignIn, parseArgs, setDatabaseId, setRoutes, setVar } from "./lib.mjs";
 
 /** Strip // comments (outside strings) and parse. */
@@ -56,4 +58,48 @@ test("diagnoseOperatorSignIn: zero operators with a passkey on the address names
   assert.match(withKey, /console passkey/);
   const plain = diagnoseOperatorSignIn("x@example.com", { userExists: false, isOperator: false, passkeys: 0, noOperators: true });
   assert.match(plain, /not empty/);
+});
+
+async function devVarsIn(files) {
+  const dir = mkdtempSync(join(tmpdir(), "rose-devvars-"));
+  mkdirSync(join(dir, "scripts"));
+  copyFileSync(join(ROOT, "scripts/lib.mjs"), join(dir, "scripts/lib.mjs"));
+  for (const app of ["app", "admin"]) {
+    mkdirSync(join(dir, `apps/${app}`), { recursive: true });
+    if (files[app] !== undefined) writeFileSync(join(dir, `apps/${app}/.dev.vars`), files[app]);
+  }
+  const lib = await import(pathToFileURL(join(dir, "scripts/lib.mjs")).href);
+  const result = lib.ensureDevVars();
+  const read = (app) => Object.fromEntries(readFileSync(join(dir, `apps/${app}/.dev.vars`), "utf8").trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+  const out = { result, app: read("app"), admin: read("admin") };
+  rmSync(dir, { recursive: true, force: true });
+  return out;
+}
+
+test("ensureDevVars: a fresh checkout gets the rose.localhost base domain", async () => {
+  const { result, app, admin } = await devVarsIn({});
+  assert.equal(result.created, true);
+  assert.equal(result.migratedBaseDomain, false);
+  assert.equal(app.APP_BASE_DOMAIN, "rose.localhost");
+  assert.equal(admin.APP_BASE_DOMAIN, "rose.localhost");
+  assert.equal(admin.APP_URL_TEMPLATE, "http://{host}:5174");
+});
+
+test("ensureDevVars: the old localhost base domain moves to rose.localhost and keeps the keys", async () => {
+  const { result, app, admin } = await devVarsIn({
+    app: "ENVIRONMENT=development\nAPP_BASE_DOMAIN=localhost\nROSE_MASTER_KEY=appkey\n",
+    admin: "ENVIRONMENT=development\nAPP_BASE_DOMAIN=localhost\nROSE_MASTER_KEY=adminkey\n",
+  });
+  assert.equal(result.migratedBaseDomain, true);
+  assert.equal(app.APP_BASE_DOMAIN, "rose.localhost");
+  assert.equal(admin.APP_BASE_DOMAIN, "rose.localhost");
+  assert.equal(app.ROSE_MASTER_KEY, "appkey");
+  assert.equal(admin.ROSE_MASTER_KEY, "adminkey");
+});
+
+test("ensureDevVars: a base domain the developer chose is kept", async () => {
+  const { result, app, admin } = await devVarsIn({ app: "APP_BASE_DOMAIN=acme.localhost\n", admin: "APP_BASE_DOMAIN=acme.localhost\n" });
+  assert.equal(result.migratedBaseDomain, false);
+  assert.equal(app.APP_BASE_DOMAIN, "acme.localhost");
+  assert.equal(admin.APP_BASE_DOMAIN, "acme.localhost");
 });

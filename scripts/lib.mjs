@@ -86,6 +86,9 @@ function writeVars(file, vars) {
   writeFileSync(file, Object.entries(vars).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
 }
 
+export const DEV_BASE_DOMAIN = "rose.localhost";
+const LEGACY_DEV_BASE_DOMAIN = "localhost";
+
 /**
  * Make sure both workers have local development variables. Existing values are kept
  * (so local data stays decryptable); only missing keys are added.
@@ -98,24 +101,26 @@ export function ensureDevVars({ adminEmail } = {}) {
   const created = !existsSync(appFile) || !existsSync(adminFile);
   const nextApp = {
     ENVIRONMENT: "development",
-    APP_BASE_DOMAIN: "localhost",
+    APP_BASE_DOMAIN: DEV_BASE_DOMAIN,
     ROSE_MASTER_KEY: newMasterKey(),
     UPSTREAM_SIGNING_SECRET: newHexSecret(),
     ...app,
   };
   const nextAdmin = {
     ENVIRONMENT: "development",
-    APP_BASE_DOMAIN: "localhost",
+    APP_BASE_DOMAIN: DEV_BASE_DOMAIN,
     APP_URL_TEMPLATE: "http://{host}:5174",
     ROSE_MASTER_KEY: newMasterKey(),
     BOOTSTRAP_OPERATOR_EMAIL: "admin@example.com",
     ...admin,
   };
+  const migrated = [nextApp, nextAdmin].filter((vars) => vars.APP_BASE_DOMAIN === LEGACY_DEV_BASE_DOMAIN);
+  for (const vars of migrated) vars.APP_BASE_DOMAIN = DEV_BASE_DOMAIN;
   if (adminEmail) nextAdmin.BOOTSTRAP_OPERATOR_EMAIL = adminEmail.trim().toLowerCase();
   if (nextApp.APP_NAME && !nextAdmin.APP_NAME) nextAdmin.APP_NAME = nextApp.APP_NAME;
   writeVars(appFile, nextApp);
   writeVars(adminFile, nextAdmin);
-  return { created, adminEmail: nextAdmin.BOOTSTRAP_OPERATOR_EMAIL };
+  return { created, migratedBaseDomain: migrated.length > 0, adminEmail: nextAdmin.BOOTSTRAP_OPERATOR_EMAIL };
 }
 
 export function ensureDistDirs() {

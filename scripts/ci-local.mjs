@@ -168,7 +168,7 @@ async function waitForStack(logDir) {
   };
   while (Date.now() < deadline) {
     if (!devStack) throw new Error(`the local stack exited early:\n${readLog(logDir)}`);
-    const app = await get("http://localhost:5174/api/bootstrap");
+    const app = await get("http://rose.localhost:5174/api/bootstrap");
     if (app && app.body.includes('"root"')) {
       const admin = await get("http://localhost:5173/api/bootstrap");
       if (admin && admin.status >= 200 && admin.status < 300) {

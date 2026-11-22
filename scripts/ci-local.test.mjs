@@ -19,7 +19,7 @@ const read = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 /** Commands ci.yml runs that the runner implements itself instead of shelling out to. */
 const NATIVE = new Map([
   [
-    "nohup node scripts/dev.mjs > dev.log 2>&1 & for i in $(seq 1 90); do curl -sf http://localhost:5174/api/bootstrap | grep -q '\"root\"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0 sleep 1 done cat dev.log; exit 1",
+    "nohup node scripts/dev.mjs > dev.log 2>&1 & for i in $(seq 1 90); do curl -sf http://rose.localhost:5174/api/bootstrap | grep -q '\"root\"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0 sleep 1 done cat dev.log; exit 1",
     "Start the local stack: ci.yml backgrounds scripts/dev.mjs and polls it with curl; ci-local.mjs does that natively (fetch) and stops the process group afterwards, so there is no `run:` for it.",
   ],
   [
