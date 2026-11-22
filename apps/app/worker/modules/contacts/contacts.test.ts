@@ -74,6 +74,15 @@ describe("contacts", () => {
     expect(audit.items).toHaveLength(1);
   });
 
+  it("accepts a maximum-length import of non-ASCII text (3 bytes per character) without a 413", async () => {
+    const t = await createTestTenant(env, SELF);
+    const csv = `name\n${"€".repeat(90_000 - 5)}`;
+    expect(csv.length).toBe(90_000);
+    const res = await t.fetch("/api/m/contacts/import", { body: { csv } });
+    expect(res.status).not.toBe(413);
+    expect(res.status).toBe(201);
+  });
+
   it("never stores the import CSV in clear text in the control database and clears it when done", async () => {
     const t = await createTestTenant(env, SELF);
     const res = await t.fetch("/api/m/contacts/import", { body: { csv: "name,email,company\nLeaky,leaky@example.com,Acme" } });

@@ -4,7 +4,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ZodType } from "zod";
 import { consumeRateLimit } from "../control/rate-limit";
 import { type CoreEnv, isDev } from "../env";
-import { AppError, badRequest, forbidden, invalid, misconfigured, tooMany } from "../errors";
+import { AppError, badRequest, forbidden, invalid, misconfigured, tooLarge, tooMany } from "../errors";
 import { newId } from "../ids";
 
 export interface BaseVars {
@@ -65,17 +65,41 @@ export function errorHandler(err: unknown, c: Context): Response {
   return c.json({ error: { code: "internal", message: "Something went wrong on our side. Try again.", requestId } }, 500);
 }
 
-const MAX_BODY = 100_000;
+/** Largest accepted JSON body in bytes: fits 90,000 three-byte characters plus the envelope. */
+export const MAX_BODY = 300_000;
+
+async function readCapped(req: Request): Promise<string> {
+  const body: ReadableStream<Uint8Array> | null = req.body;
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY) {
+      await reader.cancel();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 /** Parse and validate a JSON body. Unknown keys are dropped by the schema; size is capped. */
 export async function readJson<T>(c: Context, schema: ZodType<T>): Promise<T> {
   if (!(c.req.header("Content-Type") ?? "").toLowerCase().startsWith("application/json")) {
     throw badRequest("Send JSON with Content-Type: application/json.");
   }
-  // Refuse an oversized body from its declared length, before spending time reading it.
-  if (Number(c.req.header("Content-Length") ?? 0) > MAX_BODY * 4) throw new AppError(413, "too_large", "Request body is too large.");
-  const text = await c.req.text();
-  if (text.length > MAX_BODY) throw new AppError(413, "too_large", "Request body is too large.");
+  if (Number(c.req.header("Content-Length") ?? 0) > MAX_BODY) throw tooLarge();
+  const text = await readCapped(c.req.raw);
   let raw: unknown;
   try {
     raw = JSON.parse(text);

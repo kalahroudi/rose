@@ -116,31 +116,37 @@ The log line itself and the `fields` envelope are not asserted.
 
 - `Content-Type` must start with `application/json`, compared after lower-casing. Any
   other type is a 400.
-- A declared `Content-Length` above 400,000 bytes is refused with 413 before the body is
-  read. `MAX_BODY` is 100,000 characters, and the header gate is four times that.
-- A decoded body longer than 100,000 characters is refused with 413.
-- A body that is not valid JSON is a 400.
+- One limit applies, `MAX_BODY`: 300,000 bytes. A declared `Content-Length` above it is
+  refused with 413 before the body is read.
+- A body whose bytes read exceed `MAX_BODY` is refused with 413. A body of exactly
+  300,000 bytes is accepted.
+- A body that is not valid JSON, or is empty, is a 400.
 
 The declared-length gate exists so an oversized upload is refused without spending time
-reading it. The gate covers only a length the client declares. A chunked body carries no
-`Content-Length`, so the gate does not apply and `readJson` reads the whole body before
-the 100,000-character cap runs. `parse` then runs the zod schema. Unknown object keys are
-dropped, because a zod object strips keys it does not declare by default, so the route
-never sees them. A
-failed parse becomes `invalid("Some fields need attention.", fields)`, a 422. `fields`
-maps each dotted issue path, or `_` for a root issue, to the first message for that path.
+reading it. It covers only a length the client declares. A chunked body carries
+no `Content-Length`, so `readJson` reads the stream chunk by chunk, sums the byte lengths,
+and cancels the stream on the first chunk that takes the total over `MAX_BODY`. Memory per
+request is therefore bounded by the cap plus one chunk, not by the platform body limit.
+The bytes are decoded only after the cap check passes.
 
-The text cap counts UTF-16 code units, because it reads `text.length`. The declared-length
-gate counts bytes. One UTF-16 code unit encodes to at most three UTF-8 bytes, so the
-largest body that can pass the text cap is about 300,000 bytes. The four-times gate sits
-above that, so it never refuses a body the text check would accept; it only stops a huge
-upload early.
+The cap counts bytes, not UTF-16 code units, so multi-byte text is not undercounted. The
+300,000-byte size lets a 90,000-character contacts import through at three bytes per
+character.
+The 413 is thrown outside the JSON parse step so it is not turned into a 400.
 
-Tests: "does not leak internals on errors" (`packages/core/test/auth.test.ts`) sends an
-empty body and expects 400. `apps/admin/worker/test/no-tenant-creation.test.ts` sends
+`parse` then runs the zod schema. Unknown object keys are dropped, because a zod object
+strips keys it does not declare by default, so the route never sees them. A failed parse
+becomes `invalid("Some fields need attention.", fields)`, a 422. `fields` maps each dotted
+issue path, or `_` for a root issue, to the first message for that path.
+
+Tests: `packages/core/test/read-json.test.ts` covers a chunked body over the cap (413, the
+stream is cancelled after a few pulls), exactly 300,000 bytes, 300,001 bytes, multi-byte
+UTF-8 counted in bytes, a declared length over the gate (413 with no pull), and an empty
+body (400). The contacts test posts 90,000 non-ASCII characters to `/import` and expects
+no 413. "does not leak internals on errors" (`packages/core/test/auth.test.ts`) sends
+an empty body and expects 400. `apps/admin/worker/test/no-tenant-creation.test.ts` sends
 invalid JSON and a 2,000,000-byte body and expects a client error without creating
-anything. A wrong `Content-Type`, the exact 413 thresholds and the dropped-key behaviour
-have no dedicated test.
+anything. A wrong `Content-Type` and the dropped-key behaviour have no dedicated test.
 
 ## Client address and requesters (`clientIp`, `requesterKey`)
 
@@ -302,13 +308,8 @@ Tests: "inherited object properties are not valid sort columns"
   has no test. The malformed-origin branch does, through `Origin: null`.
 - `errorHandler`'s log line is not asserted; the test only checks that the response body
   leaks nothing.
-- The exact `readJson` thresholds are not asserted. The 2,000,000-byte test accepts any of
-  400, 404, 405, 413 or 422.
 - `fitBytes` can split a surrogate pair when it trims, as described above. No test covers
   a search term that ends this way.
-- A chunked request body has no `Content-Length`, so the declared-length gate does not
-  apply to it. `readJson` buffers the whole body and only then applies the
-  100,000-character cap. The code fix is tracked as Noty bug 0ADE07EA.
 - `listQuerySchema` accepts `page` up to 100,000, so `offsetOf` can ask SQLite to skip
   about ten million rows at the maximum page size of 100. Every list also runs an uncapped
   `COUNT(*)` for its total, so the cap limits the rows returned, not the rows scanned. The
@@ -332,5 +333,5 @@ page states what it does.
 - `requesterKey` says IPv4 is unchanged and unparseable input is returned as-is. The
   input is trimmed, lower-cased and zone-stripped first, and a colon-free value is
   returned without IPv4 validation.
-- `readJson` says the size "is capped" without saying that two caps apply, one in bytes
-  from the declared length and one in UTF-16 code units from the decoded text.
+- `readJson` says the size "is capped" without saying how: one limit, 300,000 bytes
+  (`MAX_BODY`), applies to both the declared length and the bytes actually read.
