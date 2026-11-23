@@ -100,7 +100,7 @@ jobs:
         run: |
           nohup node scripts/dev.mjs > dev.log 2>&1 &
           for i in $(seq 1 90); do
-            curl -sf http://localhost:5174/api/bootstrap | grep -q '"root"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0
+            curl -sf http://rose.localhost:5174/api/bootstrap | grep -q '"root"' && curl -sf http://localhost:5173/api/bootstrap > /dev/null && exit 0
             sleep 1
           done
           cat dev.log; exit 1
