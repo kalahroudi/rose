@@ -128,6 +128,7 @@ migrations the next time it starts after a deploy.
 | `EMAIL` | both | `send_email` binding | Cloudflare Email Service sender, used when `EMAIL_PROVIDER` is `cloudflare` |
 | `RESEND_API_KEY` | both | secret, optional | Only when `EMAIL_PROVIDER` is `resend` |
 | `BOOTSTRAP_OPERATOR_EMAIL` | admin | var | May become the first operator while there are none |
+| `ADMIN_HOST` | admin | var | The console's hostname, written by `pnpm setup` next to the route. Required in production; `/api/auth` answers 404 on any other host. Development uses the request host |
 | `APP_URL_TEMPLATE` | admin | var | How the console links to tenant apps, `https://{host}` |
 | `MAX_WORKSPACES_PER_USER` | app | var, optional | Most workspaces one person may create at signup. Any positive integer; empty, `0`, negative or non-numeric values mean the default, 5 |
 | `UPSTREAM_MODE`, `UPSTREAM_ORIGIN` | app | var | `off` \| `origin` \| `dispatch` |

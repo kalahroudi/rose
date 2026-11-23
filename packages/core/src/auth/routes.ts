@@ -88,16 +88,16 @@ async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Pr
 async function notifyPasskeyAdded(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
   const env = c.env as CoreEnv;
   const host = new URL(c.req.url).hostname;
-  const recipients = [s.email, ...(await realm.admins(s.userId))];
-  c.executionCtx.waitUntil(
-    Promise.all(
+  const logFailure = (err: unknown) => console.error(JSON.stringify({ level: "error", at: "new-credential-email", error: String(err) }));
+  const send = async (): Promise<void> => {
+    const recipients = [s.email, ...(await realm.admins(s.userId))];
+    await Promise.all(
       recipients.map((to) =>
-        sendEmail(env, { to, subject: `New passkey for ${s.email} in ${realm.displayName}`, text: `A passkey was added for ${s.email} in ${realm.displayName} on ${host}.\n\nIf this is unexpected, remove it on the account page and review the audit log.` }).catch((err) =>
-          console.error(JSON.stringify({ level: "error", at: "new-credential-email", error: String(err) })),
-        ),
+        sendEmail(env, { to, subject: `New passkey for ${s.email} in ${realm.displayName}`, text: `A passkey was added for ${s.email} in ${realm.displayName} on ${host}.\n\nIf this is unexpected, remove it on the account page and review the audit log.` }).catch(logFailure),
       ),
-    ),
-  );
+    );
+  };
+  c.executionCtx.waitUntil(send().catch(logFailure));
 }
 
 const emailBody = z.object({ email: z.string().max(254) });
@@ -166,6 +166,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.post("/passkey/register/options", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
+    await rateLimit(c, `pk-reg:${realm.scope}:${s.userId}`);
     await assertFreshForPasskeys(c, realm, s);
     return c.json(await beginRegistration(c.env.DB, site(c, realm), { id: s.userId, email: s.email, name: s.name }));
   });
@@ -173,6 +174,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
   app.post("/passkey/register/verify", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
+    await rateLimit(c, `pk-reg:${realm.scope}:${s.userId}`);
     await assertFreshForPasskeys(c, realm, s);
     const body = await readJson(c, z.object({ id: z.string().max(64), name: z.string().max(60).default("Passkey"), response: z.looseObject({ id: z.string().max(1024) }) }));
     await finishRegistration(c.env.DB, site(c, realm), s.userId, body.id, body.response as never, body.name);

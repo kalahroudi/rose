@@ -46,6 +46,9 @@ async function takeChallenge(db: D1Database, id: string, kind: "register" | "log
     .first<{ challenge: string; user_id: string | null }>();
 }
 
+/** Most passkeys one person may hold in one scope; also the page size of `listPasskeys`. */
+const MAX_PASSKEYS_PER_USER = 50;
+
 export async function beginRegistration(db: D1Database, site: PasskeySite, user: { id: string; email: string; name: string }) {
   const existing = await db.prepare("SELECT credential_id FROM passkeys WHERE user_id = ? AND scope = ?").bind(user.id, site.scope).all<{ credential_id: string }>();
   const options = await generateRegistrationOptions({
@@ -73,10 +76,15 @@ export async function finishRegistration(db: D1Database, site: PasskeySite, user
   }).catch(() => null);
   if (!result?.verified) throw unauthorized("That passkey could not be verified.");
   const cred = result.registrationInfo.credential;
-  await db
-    .prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(cred.id, userId, site.scope, site.rpId, toB64Url(cred.publicKey), cred.counter, JSON.stringify(cred.transports ?? []), name.trim().slice(0, 60) || "Passkey", now())
+  const res = await db
+    .prepare(
+      `INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, counter, transports, name, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM passkeys WHERE user_id = ? AND scope = ?) < ${MAX_PASSKEYS_PER_USER}`,
+    )
+    .bind(cred.id, userId, site.scope, site.rpId, toB64Url(cred.publicKey), cred.counter, JSON.stringify(cred.transports ?? []), name.trim().slice(0, 60) || "Passkey", now(), userId, site.scope)
     .run();
+  if (res.meta.changes === 0) throw conflict(`You can have at most ${MAX_PASSKEYS_PER_USER} passkeys. Remove one first.`);
 }
 
 export async function beginLogin(db: D1Database, site: PasskeySite) {
@@ -115,11 +123,11 @@ export interface PasskeyItem {
   last_used_at: number | null;
 }
 
-const USABLE = "(rp_id = ? OR EXISTS (SELECT 1 FROM tenant_domains d WHERE d.tenant_id = passkeys.scope AND d.hostname = passkeys.rp_id AND d.status = 'active'))";
+const USABLE = "(rp_id = ? OR EXISTS (SELECT 1 FROM tenant_domains d WHERE d.tenant_id = passkeys.scope AND d.hostname = passkeys.rp_id))";
 
 export async function listPasskeys(db: D1Database, userId: string, scope: string, homeHost: string): Promise<PasskeyItem[]> {
   const r = await db
-    .prepare(`SELECT credential_id AS id, name, rp_id AS host, ${USABLE} AS usable, created_at, last_used_at FROM passkeys WHERE user_id = ? AND scope = ? ORDER BY created_at LIMIT 50`)
+    .prepare(`SELECT credential_id AS id, name, rp_id AS host, ${USABLE} AS usable, created_at, last_used_at FROM passkeys WHERE user_id = ? AND scope = ? ORDER BY created_at LIMIT ${MAX_PASSKEYS_PER_USER}`)
     .bind(homeHost, userId, scope)
     .all<Omit<PasskeyItem, "usable"> & { usable: number }>();
   return r.results.map((p) => ({ ...p, usable: p.usable === 1 }));

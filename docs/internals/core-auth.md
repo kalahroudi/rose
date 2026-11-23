@@ -104,10 +104,11 @@ session was created, and, when a usable passkey exists, a session whose method i
 `passkey`.
 
 A passkey is usable when its RP ID is a host the realm still serves: the realm's
-`homeHost`, or an `active` row in `tenant_domains` for the passkey's own scope. For a
-tenant, `homeHost` is `<slug>.<APP_BASE_DOMAIN>`; for the operator console it is the
-request's hostname. A passkey on any other host (a removed or pending custom domain, an old
-base domain) can not sign in anywhere, so it does not count: not in `codeDisabled`,
+`homeHost`, or any row in `tenant_domains` for the passkey's own scope, whatever its
+status (a domain that is `pending` or flips back to `pending` on a recheck still counts).
+For a tenant, `homeHost` is `<slug>.<APP_BASE_DOMAIN>`; for the operator console it is
+`ADMIN_HOST` (the request's hostname in development only). A passkey on any other host (a
+removed custom domain, an old base domain) can not sign in anywhere, so it does not count: not in `codeDisabled`,
 `assertFreshForPasskeys`, the owner-change and workspace-delete checks in `tenant-app.ts`,
 or `hasPasskey` in both bootstraps. A passkey on another live host of the same tenant
 still counts, so a fresh code session on the base host can not enrol a passkey for
@@ -123,6 +124,10 @@ deletion. Covered by "a stale session can not enrol or remove passkeys"
   challenge row is the only state. Login options are rate limited per requester
   (`pk-ip:<requester>`, using `requesterKey`: IPv4 address or IPv6 /64 prefix, not the raw
   IP).
+- `POST /passkey/register/options` and `/passkey/register/verify` are rate limited per
+  person (`pk-reg:<scope>:<userId>`); `finishRegistration` refuses the 51st passkey with
+  409 inside the INSERT itself. The add-passkey emails, including the `realm.admins()`
+  lookup, run inside `waitUntil`, so a failure there can not fail a saved registration.
 - `POST /passkey/register/options`, `/passkey/register/verify` and
   `DELETE /passkeys/:id` require a session plus a fresh, passkey-backed sign-in when a
   usable passkey exists.
@@ -235,10 +240,6 @@ either way.
   passkeys are all on hosts the realm no longer serves is protected by its mailbox only,
   the same as an account with no passkey, until it enrols a new one. The add-passkey
   email to the person and the admins is the compensating signal.
-- **The console's live host is the request host.** The operator console has no list of
-  its own hostnames, so `homeHost` is whatever host the request came in on. If the
-  console is served on a second hostname, passkeys from the first one do not count
-  there, and an operator can sign in with an emailed code on the second one.
 - A lost device on a host that is still live is not covered: the passkey still counts,
   so the person needs it to change passkeys. Admin and operator recovery for that case
   is separate work.

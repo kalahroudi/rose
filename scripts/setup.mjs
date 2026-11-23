@@ -174,6 +174,7 @@ configure(appCfgPath, (t) => setRoutes(common(t), [{ pattern: `${domain}/*`, zon
 configure(adminCfgPath, (t) => {
   let s = common(t);
   s = setVar(s, "APP_URL_TEMPLATE", "https://{host}");
+  s = setVar(s, "ADMIN_HOST", adminHost);
   s = setVar(s, "BOOTSTRAP_OPERATOR_EMAIL", operatorEmail);
   return setRoutes(s, [{ pattern: `${adminHost}/*`, zone_name: adminZone }]);
 });
