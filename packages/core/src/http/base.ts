@@ -2,6 +2,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ZodType } from "zod";
+import { sha256Hex } from "../crypto";
 import { consumeRateLimit } from "../control/rate-limit";
 import { type CoreEnv, isDev } from "../env";
 import { AppError, badRequest, forbidden, invalid, misconfigured, tooLarge, tooMany } from "../errors";
@@ -172,14 +173,19 @@ export async function rateLimit(c: AnyCtx | Context, key: string): Promise<void>
 
 // ── Session cookie ─────────────────────────────────────────────────────────────
 
+function cookieSecure(c: Context): boolean {
+  const secure = new URL(c.req.url).protocol === "https:";
+  if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
+  return secure;
+}
+
 /**
  * `__Host-` cookies are bound to the exact host (no Domain attribute, Secure, Path=/), so a
  * tenant on one subdomain can never read or overwrite another tenant's session cookie.
  * Plain-HTTP localhost development can not use the prefix, so it is dropped there only.
  */
 function cookieSpec(c: Context, base: string): { name: string; secure: boolean } {
-  const secure = new URL(c.req.url).protocol === "https:";
-  if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
+  const secure = cookieSecure(c);
   return { name: secure ? `__Host-${base}` : base, secure };
 }
 
@@ -195,4 +201,36 @@ export function readSessionCookie(c: Context, base: string): string | undefined 
 export function clearSessionCookie(c: Context, base: string): void {
   const { name, secure } = cookieSpec(c, base);
   deleteCookie(c, name, { path: "/", secure });
+}
+
+// ── Handoff cookie ─────────────────────────────────────────────────────────────
+
+/**
+ * `__Secure-` cookie shared by the root host and the workspace hosts (Domain is the base domain),
+ * sent only to `/auth/handoff`, and named after the handoff token so concurrent handoffs in one
+ * browser do not overwrite each other. Plain-HTTP localhost development drops the prefix.
+ */
+export interface HandoffCookie {
+  name: string;
+  secure: boolean;
+  domain: string;
+}
+
+export async function handoffCookie(c: Context, token: string): Promise<HandoffCookie> {
+  const secure = cookieSecure(c);
+  const base = `rose_handoff_${(await sha256Hex(token)).slice(0, 16)}`;
+  return { name: secure ? `__Secure-${base}` : base, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
+}
+
+export async function setHandoffCookie(c: Context, token: string, binding: string, maxAge: number): Promise<void> {
+  const { name, secure, domain } = await handoffCookie(c, token);
+  setCookie(c, name, binding, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge });
+}
+
+export function readHandoffCookie(c: Context, cookie: HandoffCookie): string | undefined {
+  return getCookie(c, cookie.name);
+}
+
+export function clearHandoffCookie(c: Context, { name, secure, domain }: HandoffCookie): void {
+  deleteCookie(c, name, { domain, path: "/auth/handoff", secure });
 }

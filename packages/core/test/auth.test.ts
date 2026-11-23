@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createTenantWorker } from "../src";
 import { requesterKey } from "../src/http/base";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
-import { consumeHandoff, createHandoff, createSession, readSession } from "../src/control/sessions";
+import { sha256Hex } from "../src/crypto";
+import { consumeHandoff, createHandoff, createSession, HANDOFF_TOKEN_MAX, readSession } from "../src/control/sessions";
 import { createTenant } from "../src/control/tenants";
 import { addMembership, ensureUser, getMembership } from "../src/control/users";
 import { maxWorkspacesPerUser } from "../src/env";
 import { createTestTenant } from "../src/testing";
+import { cookiePair, handoffCookieName, hasCookie } from "./cookie-helpers";
 import { ageOut } from "./otp-helpers";
 import { notes } from "./worker";
 
@@ -330,35 +332,209 @@ describe("sessions and handoffs", () => {
     expect(await consumeHandoff(env.DB, t1, "session", a.id)).toBeNull();
   });
 
+  it("a bound handoff is consumable only with its binding", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "browser-a" });
+    expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-b")).toBeNull();
+    expect(await consumeHandoff(env.DB, token, "session", a.id, "")).toBeNull();
+    expect(await consumeHandoff(env.DB, token, "session", a.id)).toBeNull();
+    expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-a")).toBe(a.userId);
+    expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-a")).toBeNull();
+  });
+
+  it("a bound handoff sent with an empty handoff cookie is refused and not consumed", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const name = await handoffCookieName(token);
+    const empty = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=` } });
+    expect(hasCookie(empty, "__Host-rose_session")).toBe(false);
+    const ok = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=nonce` } });
+    expect(hasCookie(ok, "__Host-rose_session")).toBe(true);
+  });
+
   it("a handoff for tenant A does not sign you in to tenant B", async () => {
     const a = await createTestTenant(env, SELF);
     const b = await createTestTenant(env, SELF);
-    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id });
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
     const res = await SELF.fetch(`${b.origin}/auth/handoff?token=${token}`, { redirect: "manual" });
     expect(res.status).toBe(302);
     expect(res.headers.get("Set-Cookie")).toBeNull();
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
+    const onB = await SELF.fetch(`${b.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } });
+    expect(onB.status).toBe(302);
+    expect(hasCookie(onB, "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("parallel consumes of one bound handoff start exactly one session", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
+    const results = await Promise.all(Array.from({ length: 8 }, () => SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } })));
+    expect(results.filter((r) => hasCookie(r, "__Host-rose_session"))).toHaveLength(1);
   });
 });
 
 describe("self-service signup on the root host", () => {
   const root = `https://${env.APP_BASE_DOMAIN}`;
+  type Send = (req: Request) => Promise<Response>;
+  /** POST /api/root/enter for a new workspace; returns the response, the handoff URL and the per-handoff cookie it set. */
+  const enterWorkspace = async (slug: string, opts: { ticket?: string; origin?: string; send?: Send } = {}) => {
+    const { origin = root, send = (req: Request) => SELF.fetch(req) } = opts;
+    const ticket = opts.ticket ?? (await createHandoff(env.DB, { purpose: "signup", userId: (await ensureUser(env.DB, `${slug}@example.com`)).id, scope: "root", ttlMs: 15 * 60_000 }));
+    const entered = await send(new Request(`${origin}/api/root/enter`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ ticket, create: { name: slug, slug } }), redirect: "manual" }));
+    expect(entered.ok).toBe(true);
+    const { url } = await entered.json<{ url: string }>();
+    const name = await handoffCookieName(new URL(url).searchParams.get("token")!, origin.startsWith("https:"));
+    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${name}=`)) ?? "";
+    return { entered, url, set, handoffCookie: cookiePair(entered, name) };
+  };
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
     const { devCode } = await (await post(root, "/api/root/code/request", { email: "founder@example.com" })).json<{ devCode: string }>();
     const verified = await (await post(root, "/api/root/code/verify", { email: "founder@example.com", code: devCode })).json<{ ticket: string; workspaces: unknown[] }>();
     expect(verified.workspaces).toEqual([]);
-    const entered = await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Acme Inc", slug: "acme-inc" } });
+    const { entered, url, handoffCookie } = await enterWorkspace("acme-inc", { ticket: verified.ticket });
     expect(entered.status).toBe(200);
-    const { url } = await entered.json<{ url: string }>();
     expect(url).toMatch(/^https:\/\/acme-inc\.rose\.test\/auth\/handoff\?token=/);
-    const landed = await SELF.fetch(url, { redirect: "manual" });
-    const cookie = cookieOf(landed);
+    const landed = await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } });
+    const cookie = cookiePair(landed, "__Host-rose_session");
     expect(cookie).toMatch(/^__Host-rose_session=/);
     const boot = await (await SELF.fetch("https://acme-inc.rose.test/api/bootstrap", { headers: { Cookie: cookie } })).json<{ session: { role: string } }>();
     expect(boot.session.role).toBe("owner");
-    // The ticket and the handoff are both spent.
+    // The ticket and the handoff are both spent, even when replayed with the handoff cookie.
     expect((await post(root, "/api/root/enter", { ticket: verified.ticket, slug: "acme-inc" })).status).toBe(401);
     expect((await SELF.fetch(url, { redirect: "manual" })).headers.get("Set-Cookie")).toBeNull();
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(false);
+  });
+
+  it("the enter response sets a scoped, short-lived handoff cookie", async () => {
+    const { entered, set } = await enterWorkspace("attrs-co");
+    expect(entered.status).toBe(200);
+    expect(set).toMatch(/^__Secure-rose_handoff_[0-9a-f]{16}=[^;]+;/);
+    expect(set).toMatch(/Domain=rose\.test/);
+    expect(set).toMatch(/Path=\/auth\/handoff/);
+    expect(set).toMatch(/HttpOnly/);
+    expect(set).toMatch(/Secure/);
+    expect(set).toMatch(/SameSite=Lax/);
+    expect(set).toMatch(/Max-Age=60/);
+  });
+
+  it("a handoff without its browser cookie starts no session and leaves the token unspent", async () => {
+    const { entered, url, handoffCookie } = await enterWorkspace("nocookie-ws");
+    expect(entered.status).toBe(200);
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual" }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("two tabs entering workspaces at once get distinct handoff cookies that each work", async () => {
+    const [tabA, tabB] = await Promise.all([enterWorkspace("tab-a-ws"), enterWorkspace("tab-b-ws")]);
+    for (const { entered } of [tabA, tabB]) {
+      expect(entered.status).toBe(200);
+    }
+    expect(tabA.handoffCookie).not.toBe(tabB.handoffCookie);
+    expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(true);
+    expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("on the dev host shape (http rose.localhost:5174 to acme.rose.localhost:5174) the bound handoff works same-site and cross-site is refused", async () => {
+    const worker = createTenantWorker({ modules: [notes] });
+    const devEnv = { ...env, APP_BASE_DOMAIN: "rose.localhost" };
+    const send: Send = async (req) => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(req, devEnv, ctx);
+      await waitOnExecutionContext(ctx);
+      return res;
+    };
+    const { entered, url, set, handoffCookie } = await enterWorkspace("acme", { origin: "http://rose.localhost:5174", send });
+    expect(entered.status).toBe(200);
+    expect(url).toMatch(/^http:\/\/acme\.rose\.localhost:5174\/auth\/handoff\?token=/);
+    expect(set).toMatch(/^rose_handoff_[0-9a-f]{16}=[^;]+;/);
+    expect(set).toMatch(/Domain=rose\.localhost/);
+    const visit = (site: string) => send(new Request(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": site } }));
+    expect(hasCookie(await visit("cross-site"), "rose_session")).toBe(false);
+    expect(hasCookie(await visit("same-site"), "rose_session")).toBe(true);
+  });
+
+  it("a handoff with another browser's nonce starts no session and leaves the token unspent", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "right-nonce" });
+    const url = `${a.origin}/auth/handoff?token=${token}`;
+    const handoffCookie = `${await handoffCookieName(token)}=right-nonce`;
+    // The right cookie name carrying another browser's value: the bound hash does not match.
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: `${await handoffCookieName(token)}=someone-elses-nonce` } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("Sec-Fetch-Site cross-site starts no session even with the right cookie", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const url = `${a.origin}/auth/handoff?token=${token}`;
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": "cross-site" } }), "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": "same-site" } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("Sec-Fetch-Site same-origin and absent are allowed", async () => {
+    const a = await createTestTenant(env, SELF);
+    for (const site of ["same-origin", "none", undefined] as const) {
+      const nonce = site ?? "absent";
+      const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: nonce });
+      const url = `${a.origin}/auth/handoff?token=${token}`;
+      const headers: Record<string, string> = { Cookie: `${await handoffCookieName(token)}=${nonce}` };
+      if (site) headers["Sec-Fetch-Site"] = site;
+      expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers }), "__Host-rose_session")).toBe(true);
+    }
+  });
+
+  it("the handoff response clears the handoff cookie it was sent, matching or not", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const url = `${a.origin}/auth/handoff?token=${token}`;
+    const name = await handoffCookieName(token);
+    for (const value of ["wrong", "nonce"]) {
+      const clear = (await SELF.fetch(url, { redirect: "manual", headers: { Cookie: `${name}=${value}` } })).headers.getSetCookie().find((s) => s.startsWith(`${name}=`))!;
+      expect(clear).toMatch(new RegExp(`^${name}=;`));
+      expect(clear).toMatch(/Max-Age=0/);
+      expect(clear).toMatch(/Domain=rose\.test/);
+      expect(clear).toMatch(/Path=\/auth\/handoff/);
+    }
+  });
+
+  it("an over-long handoff token is refused without reading, consuming or clearing anything", async () => {
+    const a = await createTestTenant(env, SELF);
+    const plant = async (token: string) => {
+      const hash = await sha256Hex(`${token}.nonce`);
+      await env.DB.prepare("INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at) VALUES (?, 'session', ?, ?, ?)").bind(hash, a.userId, a.id, Date.now() + 60_000).run();
+      return hash;
+    };
+    const visit = async (token: string) => SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${await handoffCookieName(token)}=nonce` } });
+    const remaining = (hash: string) => env.DB.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE token_hash = ?").bind(hash).first<number>("n");
+    const atCap = "a".repeat(HANDOFF_TOKEN_MAX);
+    const overCap = "b".repeat(HANDOFF_TOKEN_MAX + 1);
+    const atCapHash = await plant(atCap);
+    const overCapHash = await plant(overCap);
+    const refused = await visit(overCap);
+    expect(refused.status).toBe(302);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+    expect(await remaining(overCapHash)).toBe(1);
+    expect(hasCookie(await visit(atCap), "__Host-rose_session")).toBe(true);
+    expect(await remaining(atCapHash)).toBe(0);
+  });
+
+  it("an over-long handoff cookie nonce matches nothing, is not consumed, and the cookie is cleared", async () => {
+    const a = await createTestTenant(env, SELF);
+    const long = "n".repeat(HANDOFF_TOKEN_MAX + 1);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: long });
+    const name = await handoffCookieName(token);
+    const res = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=${long}` } });
+    expect(res.status).toBe(302);
+    expect(hasCookie(res, "__Host-rose_session")).toBe(false);
+    expect(res.headers.getSetCookie().find((s) => s.startsWith(`${name}=`))).toMatch(/Max-Age=0/);
+    const hash = await sha256Hex(`${token}.${long}`);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE token_hash = ?").bind(hash).first<number>("n")).toBe(1);
   });
 
   it("the sign-in key verifies the email on the root host and returns a ticket", async () => {
