@@ -11,7 +11,7 @@ app.onError(errorHandler);
 app.post("/", async (c) => c.json(await readJson(c, schema)));
 app.post("/twice", async (c) => {
   const first = await readJson(c, schema);
-  const second = schema.parse(await c.req.json());
+  const second = await readJson(c, schema);
   return c.json({ same: first.v === second.v });
 });
 
