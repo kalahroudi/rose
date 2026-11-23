@@ -8,12 +8,14 @@ import { sendEmail } from "../email";
 import { type CoreEnv, isDev } from "../env";
 import { unauthorized } from "../errors";
 import { clearSessionCookie, clientIp, rateLimit, requesterKey, readJson, readSessionCookie, setSessionCookie, type BaseVars } from "../http/base";
-import { beginLogin, beginRegistration, deletePasskey, finishLogin, finishRegistration, listPasskeys, type PasskeySite } from "./passkeys";
+import { beginLogin, beginRegistration, deletePasskey, finishLogin, finishRegistration, hasUsablePasskey, listPasskeys, type PasskeySite } from "./passkeys";
 
 export interface AuthRealm {
   scope: string;
   displayName: string;
   cookie: string;
+  homeHost: string;
+  admins(exceptUserId: string): Promise<string[]>;
   eligible(email: string): Promise<boolean>;
   admit(user: UserRow): Promise<boolean>;
   audit(event: { actor: string; action: string; ip: string | null }): Promise<void>;
@@ -80,7 +82,22 @@ export async function checkLink(c: Context, scope: string, email: string, key: s
 async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Promise<boolean> {
   if (!realm.enforcePasskey) return false;
   const user = await getUserByEmail(db, email);
-  return !!user && (await listPasskeys(db, user.id, realm.scope)).length > 0;
+  return !!user && (await hasUsablePasskey(db, user.id, realm.scope, realm.homeHost));
+}
+
+async function notifyPasskeyAdded(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
+  const env = c.env as CoreEnv;
+  const host = new URL(c.req.url).hostname;
+  const recipients = [s.email, ...(await realm.admins(s.userId))];
+  c.executionCtx.waitUntil(
+    Promise.all(
+      recipients.map((to) =>
+        sendEmail(env, { to, subject: `New passkey for ${s.email} in ${realm.displayName}`, text: `A passkey was added for ${s.email} in ${realm.displayName} on ${host}.\n\nIf this is unexpected, remove it on the account page and review the audit log.` }).catch((err) =>
+          console.error(JSON.stringify({ level: "error", at: "new-credential-email", error: String(err) })),
+        ),
+      ),
+    ),
+  );
 }
 
 const emailBody = z.object({ email: z.string().max(254) });
@@ -160,13 +177,14 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     const body = await readJson(c, z.object({ id: z.string().max(64), name: z.string().max(60).default("Passkey"), response: z.looseObject({ id: z.string().max(1024) }) }));
     await finishRegistration(c.env.DB, site(c, realm), s.userId, body.id, body.response as never, body.name);
     await realm.audit({ actor: s.email, action: "auth.passkey.add", ip: clientIp(c) });
+    await notifyPasskeyAdded(c, realm, s);
     return c.json({ ok: true });
   });
 
   app.get("/passkeys", async (c) => {
     const realm = await getRealm(c);
     const s = await requireSession(c, realm);
-    return c.json({ items: await listPasskeys(c.env.DB, s.userId, realm.scope) });
+    return c.json({ items: await listPasskeys(c.env.DB, s.userId, realm.scope, realm.homeHost) });
   });
 
   app.delete("/passkeys/:id", async (c) => {
@@ -212,6 +230,5 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
 }
 
 async function assertFreshForPasskeys(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
-  const has = (await listPasskeys((c.env as CoreEnv).DB, s.userId, realm.scope)).length > 0;
-  assertFreshSession(s, { passkey: has });
+  assertFreshSession(s, { passkey: await hasUsablePasskey((c.env as CoreEnv).DB, s.userId, realm.scope, realm.homeHost) });
 }

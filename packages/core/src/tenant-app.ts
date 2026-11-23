@@ -3,7 +3,7 @@ import { Hono, type Context } from "hono";
 import { etag } from "hono/etag";
 import { z } from "zod";
 import { createAuthRoutes, checkCode, checkLink, currentSession, requestCode, startSession, type AuthRealm } from "./auth/routes";
-import { listPasskeys } from "./auth/passkeys";
+import { hasUsablePasskey } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { normalizeKey } from "./control/otp";
 import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
@@ -157,6 +157,7 @@ export function createTenantApp(options: TenantAppOptions) {
     const u = new URL(c.req.url);
     return `${u.protocol}//${slug}.${c.env.APP_BASE_DOMAIN}${u.port ? `:${u.port}` : ""}${path}`;
   };
+  const baseHost = (c: Ctx, t: { slug: string }): string => `${t.slug}.${c.env.APP_BASE_DOMAIN.toLowerCase()}`;
 
   /** Audit a new member in the workspace's own log and tell the other owners (only when there are several). */
   const recordJoin = async (c: Ctx, tenant: TenantRow, user: UserRow, role: Role): Promise<void> => {
@@ -180,6 +181,9 @@ export function createTenantApp(options: TenantAppOptions) {
     scope: tenant.id,
     displayName: tenant.name,
     cookie: SESSION_COOKIE,
+    homeHost: baseHost(c, tenant),
+    admins: async (exceptUserId) =>
+      (await c.env.DB.prepare("SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN ('owner', 'admin') AND m.user_id != ? LIMIT 100").bind(tenant.id, exceptUserId).all<{ email: string }>()).results.map((r) => r.email),
     eligible: async (email) => {
       const member = await c.env.DB.prepare("SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND u.email = ?").bind(tenant.id, email).first();
       return !!member || !!(await getPendingInvitation(c.env.DB, tenant.id, email));
@@ -215,10 +219,10 @@ export function createTenantApp(options: TenantAppOptions) {
     if (t.status !== "active") return c.json({ ...base, host: "tenant", tenant, session: null });
     const s = await currentSession(c, realmFor(c, t));
     if (!s) return c.json({ ...base, host: "tenant", tenant, session: null });
-    const passkeys = await listPasskeys(c.env.DB, s.userId, t.id);
+    const hasPasskey = await hasUsablePasskey(c.env.DB, s.userId, t.id, baseHost(c, t));
     return c.json({
       ...base, host: "tenant", tenant,
-      session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, permissions: permissionsOf(permissions, s.role as Role), hasPasskey: passkeys.length > 0, method: s.method },
+      session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, permissions: permissionsOf(permissions, s.role as Role), hasPasskey, method: s.method },
     });
   });
 
@@ -376,7 +380,7 @@ export function createTenantApp(options: TenantAppOptions) {
     const t = c.get("tenant");
     const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
     if (!session) throw unauthorized();
-    assertFreshSession(session, { passkey: (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0 });
+    assertFreshSession(session, { passkey: await hasUsablePasskey(c.env.DB, actor.id, t.id, baseHost(c, t)) });
   };
   app.patch("/api/members/:userId", async (c) => {
     const actor = need(c, "members:manage");
@@ -473,8 +477,7 @@ export function createTenantApp(options: TenantAppOptions) {
     const session = await currentSession(c, { scope: t.id, cookie: SESSION_COOKIE });
     if (!session) throw unauthorized();
     // A recent sign-in is required; people who registered a passkey must have used it.
-    const hasPasskey = (await listPasskeys(c.env.DB, actor.id, t.id)).length > 0;
-    assertFreshSession(session, { passkey: hasPasskey });
+    assertFreshSession(session, { passkey: await hasUsablePasskey(c.env.DB, actor.id, t.id, baseHost(c, t)) });
     const res = await requestTenantDeletion(c.env.DB, t.id, { title: `Delete workspace ${t.slug}`, createdBy: actor.label });
     invalidateHostCache();
     if (!res.created) return c.json({ ok: true, deleteAfter: res.deleteAfter }, 202);

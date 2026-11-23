@@ -221,6 +221,8 @@ export function SignIn<R = { ok: true }>({ title, subtitle, base, passkeys, onDo
 interface PasskeyItem {
   id: string;
   name: string;
+  host: string;
+  usable: boolean;
   created_at: number;
   last_used_at: number | null;
 }
@@ -294,7 +296,7 @@ export function SecurityPanel({ base = "/api/auth" }: { base?: string }) {
                 <tbody>
                   {passkeys.data!.items.map((p) => (
                     <tr key={p.id}>
-                      <td><strong>{p.name}</strong><div className="hint">Added <Time at={p.created_at} /> · Last used <Time at={p.last_used_at} /></div></td>
+                      <td><div className="row"><strong>{p.name}</strong>{p.usable ? null : <Badge tone="warn">Old address, can't be used</Badge>}</div><div className="hint">{p.usable ? null : <>{p.host} · </>}Added <Time at={p.created_at} /> · Last used <Time at={p.last_used_at} /></div></td>
                       <td className="col-actions"><Button size="sm" variant="ghost" icon="trash" onClick={() => void removePasskey(p)}>Remove</Button></td>
                     </tr>
                   ))}
