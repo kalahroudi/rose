@@ -25,8 +25,8 @@ No Cloudflare account or configuration needed. Then open:
 | | |
 |---|---|
 | **Operator console** | http://localhost:5173 — sign in as `admin@example.com` |
-| **Tenant app** | http://localhost:5174 — sign up, create a workspace |
-| **A workspace** | http://`<slug>`.localhost:5174 |
+| **Tenant app** | http://rose.localhost:5174 — sign up, create a workspace |
+| **A workspace** | http://`<slug>`.rose.localhost:5174 |
 
 Sign-in codes are shown on screen in development.
 

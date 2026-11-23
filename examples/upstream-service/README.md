@@ -50,7 +50,7 @@ UPSTREAM_MODE=origin
 UPSTREAM_ORIGIN=http://127.0.0.1:8799
 ```
 
-Sign in to a workspace and open `http://<slug>.localhost:5174/svc/whoami`.
+Sign in to a workspace and open `http://<slug>.rose.localhost:5174/svc/whoami`.
 
 See [docs/multi-tenanting-a-service.md](../../docs/multi-tenanting-a-service.md) for
 origin mode, Workers for Platforms dispatch mode and custom domains.
