@@ -28,4 +28,15 @@ describe("operators with a passkey can not sign in by emailed code", () => {
     expect(late.status).toBe(401);
     expect(late.headers.get("Set-Cookie")).toBeNull();
   });
+
+  it("still sends codes when the only passkey belongs to another console host", async () => {
+    const email = "moved@example.com";
+    await env.DB.prepare("INSERT INTO users (id, email, created_at) VALUES ('us_moved', ?, 0)").bind(email).run();
+    await env.DB.prepare("INSERT INTO operators (user_id, role, created_at) VALUES ('us_moved', 'owner', 0)").run();
+    await env.DB.prepare("INSERT INTO passkeys (credential_id, user_id, scope, rp_id, public_key, created_at) VALUES ('cred-old-host', 'us_moved', 'platform', 'old-admin.rose.test', 'k', ?)").bind(Date.now()).run();
+
+    const { devCode } = await (await post("/api/auth/code/request", { email })).json<{ devCode?: string }>();
+    expect(devCode).toBeTruthy();
+    expect((await post("/api/auth/code/verify", { email, code: devCode })).status).toBe(200);
+  });
 });
