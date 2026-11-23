@@ -58,13 +58,13 @@ describe("contacts", () => {
   describe("status filter", () => {
     const seed = async () => {
       const t = await createTestTenant(env, SELF);
-      const a = (await json<{ id: string }>(t.fetch("/api/m/contacts", { body: { name: "A", status: "lead" } }))).id;
+      await t.fetch("/api/m/contacts", { body: { name: "A", status: "lead" } });
       await t.fetch("/api/m/contacts", { body: { name: "B", status: "active" } });
-      return { t, a };
+      return t;
     };
 
     it.each(["Archived", "bogus"])("bulk rejects unknown status %s and changes nothing", async (status) => {
-      const { t } = await seed();
+      const t = await seed();
       for (const action of ["delete", "archive", "activate"]) {
         expect((await t.fetch("/api/m/contacts/bulk", { body: { action, filter: { status } } })).status).toBe(422);
       }
@@ -74,18 +74,18 @@ describe("contacts", () => {
     });
 
     it("bulk with a valid status only touches that status", async () => {
-      const { t } = await seed();
+      const t = await seed();
       expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { status: "lead" } } }))).toEqual({ affected: 1 });
       expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(1);
     });
 
     it("bulk with an empty status matches every contact", async () => {
-      const { t } = await seed();
+      const t = await seed();
       expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { status: "" } } }))).toEqual({ affected: 2 });
     });
 
     it("list rejects an unknown status and still filters by a valid one", async () => {
-      const { t } = await seed();
+      const t = await seed();
       expect((await t.fetch("/api/m/contacts?status=bogus")).status).toBe(422);
       expect((await json<List>(t.fetch("/api/m/contacts?status=lead"))).total).toBe(1);
       expect((await json<List>(t.fetch("/api/m/contacts?status="))).total).toBe(2);
