@@ -4,7 +4,7 @@
 export interface Bootstrap {
   app: { name: string; baseDomain: string; appUrlTemplate: string };
   dev: boolean;
-  session: { user: { id: string; email: string; name: string }; role: "owner" | "operator"; hasPasskey: boolean; method: string } | null;
+  session: { user: { id: string; email: string; name: string }; role: "owner" | "operator"; hasPasskey: boolean } | null;
 }
 
 export type TenantStatus = "active" | "suspended" | "pending_deletion" | "deleting";
@@ -45,7 +45,6 @@ export interface Domain {
 export interface DomainDetail {
   records?: { type: string; name: string; value: string }[];
   errors?: string[];
-  ssl?: string;
   note?: string;
 }
 

@@ -15,7 +15,6 @@ export function OperatorsPage() {
   const toast = useToast();
   const invalidate = useInvalidate();
   const [adding, setAdding] = useState(false);
-  const [fresh, setFresh] = useState<string | null>(null);
   const q = useQuery({ queryKey: ["operators", list.query], queryFn: () => api<PageData<Operator>>(`/api/operators?${list.query}`), placeholderData: keepPreviousData });
 
   const help: HelpContent = {
@@ -60,7 +59,6 @@ export function OperatorsPage() {
             fetching={q.isFetching}
             columns={columns}
             rowKey={(o) => o.user_id}
-            freshKey={fresh}
             noun={["operator", "operators"]}
             searchPlaceholder="Search by email"
             {...(isOwner && {
@@ -81,7 +79,6 @@ export function OperatorsPage() {
         onSubmit={async (v) => {
           await api("/api/operators", { body: v });
           await invalidate("operator.change");
-          setFresh(null);
           toast.success(`${v.email} can now sign in`);
         }}
       >
