@@ -166,6 +166,14 @@ describe("setTenantStatus", () => {
   });
 });
 
+describe("setTenantStatus with many ids", () => {
+  it.each([1, 99, 100])("suspends %i tenants by id", async (n) => {
+    const made = await Promise.all(Array.from({ length: n }, (_, i) => createTenant(env.DB, { name: `Bulk ${i}`, slug: slug() })));
+    expect(await setTenantStatus(env.DB, { ids: made.map((t) => t.id) }, "suspended")).toBe(n);
+    expect((await statusOf(made[n - 1]!.id))!.status).toBe("suspended");
+  });
+});
+
 describe("tenantCounts", () => {
   it("totals every status and reconciles", async () => {
     await createTenant(env.DB, { name: "Active", slug: slug() });

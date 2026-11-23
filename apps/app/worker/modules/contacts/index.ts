@@ -206,7 +206,7 @@ export const contacts = defineModule({
           }),
         );
         let w: { sql: string; args: SqlValue[] };
-        if (body.ids?.length) w = { sql: `WHERE id IN (${body.ids.map(() => "?").join(",")})`, args: body.ids };
+        if (body.ids?.length) w = { sql: "WHERE id IN (SELECT value FROM json_each(?))", args: [JSON.stringify(body.ids)] };
         else if (body.filter) w = await where(ctx, body.filter);
         else throw invalid("Select at least one contact.");
         const affected =
