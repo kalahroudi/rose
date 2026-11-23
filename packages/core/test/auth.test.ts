@@ -342,10 +342,23 @@ describe("sessions and handoffs", () => {
   it("a handoff for tenant A does not sign you in to tenant B", async () => {
     const a = await createTestTenant(env, SELF);
     const b = await createTestTenant(env, SELF);
-    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id });
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
     const res = await SELF.fetch(`${b.origin}/auth/handoff?token=${token}`, { redirect: "manual" });
     expect(res.status).toBe(302);
     expect(res.headers.get("Set-Cookie")).toBeNull();
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
+    const onB = await SELF.fetch(`${b.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } });
+    expect(onB.status).toBe(302);
+    expect(hasCookie(onB, "__Host-rose_session")).toBe(false);
+    expect(hasCookie(await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("parallel consumes of one bound handoff start exactly one session", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const handoffCookie = `${await handoffCookieName(token)}=nonce`;
+    const results = await Promise.all(Array.from({ length: 8 }, () => SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: handoffCookie } })));
+    expect(results.filter((r) => hasCookie(r, "__Host-rose_session"))).toHaveLength(1);
   });
 });
 
@@ -402,8 +415,7 @@ describe("self-service signup on the root host", () => {
   });
 
   it("two tabs entering workspaces at once get distinct handoff cookies that each work", async () => {
-    const tabA = await enterWorkspace("tab-a-ws");
-    const tabB = await enterWorkspace("tab-b-ws");
+    const [tabA, tabB] = await Promise.all([enterWorkspace("tab-a-ws"), enterWorkspace("tab-b-ws")]);
     for (const { entered } of [tabA, tabB]) {
       expect(entered.status).toBe(200);
     }

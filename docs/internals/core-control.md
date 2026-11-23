@@ -341,9 +341,10 @@ with it. A request carrying `Sec-Fetch-Site: cross-site` is treated as having no
 so it starts no session and leaves the token unspent. `same-site`, `same-origin` and an
 absent header are accepted. Root and workspace hosts are same-site in production and in
 development (`rose.localhost` and `<slug>.rose.localhost`), so there is no development
-bypass. The response always clears the cookie it was sent, whether it matched or not.
-Covered in `packages/core/test/auth.test.ts` by "a bound handoff is consumable only with
-its binding", "the enter response sets a scoped, short-lived handoff cookie", "a handoff
+bypass. The response clears the cookie it was sent, whether it matched or not, except on
+cross-site requests. Covered in `packages/core/test/auth.test.ts` by "a bound handoff is
+consumable only with its binding", "parallel consumes of one bound handoff start exactly
+one session", "the enter response sets a scoped, short-lived handoff cookie", "a handoff
 without its browser cookie starts no session and leaves the token unspent", "two tabs
 entering workspaces at once get distinct handoff cookies that each work", "a handoff with
 another browser's nonce starts no session and leaves the token unspent", "Sec-Fetch-Site
