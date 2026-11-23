@@ -160,11 +160,19 @@ export function createTenantApp(options: TenantAppOptions) {
     return `${u.protocol}//${tenantHost(c, slug)}${u.port ? `:${u.port}` : ""}${path}`;
   };
 
+  const memberEmails = async (db: D1Database, tenantId: string, roles: readonly [Role, ...Role[]], exceptUserId: string): Promise<string[]> => {
+    const placeholders = roles.map(() => "?").join(", ");
+    const { results } = await db
+      .prepare(`SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN (${placeholders}) AND m.user_id != ? LIMIT 100`)
+      .bind(tenantId, ...roles, exceptUserId)
+      .all<{ email: string }>();
+    return results.map((r) => r.email);
+  };
+
   /** Audit a new member in the workspace's own log and tell the other owners (only when there are several). */
   const recordJoin = async (c: Ctx, tenant: TenantRow, user: UserRow, role: Role): Promise<void> => {
     await writeTenantAudit(new TenantDb(c.env, bindTenant(tenant)), { actor: user.email, action: "member.join", target: user.id, meta: { role }, ip: clientIp(c) });
-    const owners = (await c.env.DB.prepare("SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role = 'owner' AND m.user_id != ? LIMIT 100").bind(tenant.id, user.id).all<{ email: string }>()).results;
-    const others = owners.map((o) => o.email);
+    const others = await memberEmails(c.env.DB, tenant.id, ["owner"], user.id);
     if (role !== "owner" && others.length < 2) return;
     if (role === "owner" && others.length < 1) return;
     c.executionCtx.waitUntil(
@@ -183,8 +191,7 @@ export function createTenantApp(options: TenantAppOptions) {
     displayName: tenant.name,
     cookie: SESSION_COOKIE,
     homeHost: tenantHost(c, tenant.slug),
-    admins: async (exceptUserId) =>
-      (await c.env.DB.prepare("SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN ('owner', 'admin') AND m.user_id != ? LIMIT 100").bind(tenant.id, exceptUserId).all<{ email: string }>()).results.map((r) => r.email),
+    admins: (exceptUserId) => memberEmails(c.env.DB, tenant.id, ["owner", "admin"], exceptUserId),
     eligible: async (email) => {
       const member = await c.env.DB.prepare("SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND u.email = ?").bind(tenant.id, email).first();
       return !!member || !!(await getPendingInvitation(c.env.DB, tenant.id, email));

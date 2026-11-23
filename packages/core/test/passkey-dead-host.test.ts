@@ -21,6 +21,19 @@ const passkeyList = async (t: TestTenant, cookie: string) =>
 
 const freshCodeCookie = async (t: TestTenant) => `__Host-rose_session=${(await createSession(env.DB, { userId: t.userId, scope: t.id, method: "code" })).token}`;
 
+const worker = createTenantWorker({ modules: [notes] });
+
+const postWithCtx = async (t: TestTenant, cookie: string, path: string, body: unknown) => {
+  const ctx = createExecutionContext();
+  const res = await worker.fetch(
+    new Request(t.origin + path, { method: "POST", headers: { Origin: t.origin, Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    env,
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  return res;
+};
+
 describe("passkeys on a host the workspace no longer serves", () => {
   it("do not count: a fresh code session can enrol, remove, invite an owner and delete the workspace", async () => {
     const t = await createTestTenant(env, SELF);
@@ -71,7 +84,7 @@ describe("passkeys on a host the workspace no longer serves", () => {
     expect((await t.fetch("/api/workspace/delete", { cookie, body: { confirm: t.slug } })).status).toBe(403);
   });
 
-  it("limits passkey registration per person and caps passkeys at 50", async () => {
+  it("limits passkey registration per person", async () => {
     const t = await createTestTenant(env, SELF);
     await addPasskey(t, `cred-limit-${t.slug}`, "gone.custom.example");
     const cookie = await freshCodeCookie(t);
@@ -80,31 +93,24 @@ describe("passkeys on a host the workspace no longer serves", () => {
     expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
     expect(statuses[20]).toBe(429);
     expect((await t.fetch("/api/auth/passkey/register/verify", { cookie, body: {} })).status).toBe(429);
+  });
 
-    const u = await createTestTenant(env, SELF);
-    for (let i = 0; i < 49; i++) await addPasskey(u, `cred-fill-${u.slug}-${i}`, "gone.custom.example");
-    const ucookie = await freshCodeCookie(u);
-    const worker = createTenantWorker({ modules: [notes] });
-    const post = (path: string, body: unknown) => new Request(u.origin + path, { method: "POST", headers: { Origin: u.origin, Cookie: ucookie, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const begin = async () => {
-      const ctx = createExecutionContext();
-      const res = await worker.fetch(post("/api/auth/passkey/register/options", {}), env, ctx);
-      await waitOnExecutionContext(ctx);
-      return res.json<{ id: string; options: { challenge: string } }>();
-    };
-    // Both challenges are issued while no passkey counts yet; the first enrolment then makes one count.
-    const begun = [await begin(), await begin()];
-    const enrol = async () => {
-      const ctx = createExecutionContext();
-      const ch = begun.shift()!;
-      const res = await worker.fetch(post("/api/auth/passkey/register/verify", { id: ch.id, name: "Laptop", response: await noneAttestation(u.host, u.origin, ch.options.challenge) }), env, ctx);
-      await waitOnExecutionContext(ctx);
-      return res.status;
-    };
-    expect(await enrol()).toBe(200);
-    await env.DB.prepare("UPDATE passkeys SET rp_id = 'gone.custom.example' WHERE user_id = ? AND scope = ?").bind(u.userId, u.id).run();
-    expect(await enrol()).toBe(409);
-    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ? AND scope = ?").bind(u.userId, u.id).first<{ n: number }>();
+  it("caps passkeys at 50 even under concurrent registration", async () => {
+    const t = await createTestTenant(env, SELF);
+    for (let i = 0; i < 49; i++) await addPasskey(t, `cred-fill-${t.slug}-${i}`, "gone.custom.example");
+    const cookie = await freshCodeCookie(t);
+    const begin = async () => (await postWithCtx(t, cookie, "/api/auth/passkey/register/options", {})).json<{ id: string; options: { challenge: string } }>();
+    const [a, b] = [await begin(), await begin()];
+    const [attA, attB] = await Promise.all([
+      noneAttestation(t.host, t.origin, a.options.challenge),
+      noneAttestation(t.host, t.origin, b.options.challenge),
+    ]);
+    const results = await Promise.all([
+      postWithCtx(t, cookie, "/api/auth/passkey/register/verify", { id: a.id, name: "Laptop", response: attA }),
+      postWithCtx(t, cookie, "/api/auth/passkey/register/verify", { id: b.id, name: "Phone", response: attB }),
+    ]);
+    expect(results.map((r) => r.status).sort((x, y) => x - y)).toEqual([200, 409]);
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ? AND scope = ?").bind(t.userId, t.id).first<{ n: number }>();
     expect(count?.n).toBe(50);
   });
 
@@ -116,17 +122,10 @@ describe("passkeys on a host the workspace no longer serves", () => {
     await addMembership(env.DB, t.id, member.id, "member");
     await addPasskey(t, "cred-gone", "gone.custom.example");
     const cookie = await freshCodeCookie(t);
-    const worker = createTenantWorker({ modules: [notes] });
-    const call = async (path: string, body: unknown) => {
-      const ctx = createExecutionContext();
-      const res = await worker.fetch(new Request(t.origin + path, { method: "POST", headers: { Origin: t.origin, Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) }), env, ctx);
-      await waitOnExecutionContext(ctx);
-      return res;
-    };
 
-    const begin = await (await call("/api/auth/passkey/register/options", {})).json<{ id: string; options: { challenge: string } }>();
+    const begin = await (await postWithCtx(t, cookie, "/api/auth/passkey/register/options", {})).json<{ id: string; options: { challenge: string } }>();
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const res = await call("/api/auth/passkey/register/verify", { id: begin.id, name: "Laptop", response: await noneAttestation(t.host, t.origin, begin.options.challenge) });
+    const res = await postWithCtx(t, cookie, "/api/auth/passkey/register/verify", { id: begin.id, name: "Laptop", response: await noneAttestation(t.host, t.origin, begin.options.challenge) });
     const sent = log.mock.calls.map((args) => String(args[0])).filter((line) => line.includes("New passkey for"));
     log.mockRestore();
 
