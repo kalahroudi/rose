@@ -42,17 +42,19 @@ describe("stale-run reclaim", () => {
     expect(calls).toBe(2);
   });
 
+  it("every registered tenant handler declares itself idempotent", () => {
+    const mod = { id: "x", migrations: [], jobs: { go: () => Promise.resolve(null) } } as never;
+    for (const [name, h] of Object.entries(tenantJobHandlers([mod]))) expect(h.idempotent, name).toBe(true);
+    expect(idempotent(() => Promise.resolve({ done: true } as JobOutcome)).idempotent).toBe(true);
+  });
+});
+
+describe("runDueJobs", () => {
   it("claims a due job when more than 100 handler types are registered", async () => {
     const handlers: Record<string, () => Promise<JobOutcome>> = {};
     for (let i = 0; i < 150; i++) handlers[`t.many.${i}`] = () => Promise.resolve({ done: true });
     const job = await enqueueJob(env, { type: "t.many.149", scope: "platform", title: "many types", payload: {} });
     expect(await runDueJobs(env, handlers)).toBe(1);
     expect(await row(job.id)).toMatchObject({ status: "succeeded" });
-  });
-
-  it("every registered tenant handler declares itself idempotent", () => {
-    const mod = { id: "x", migrations: [], jobs: { go: () => Promise.resolve(null) } } as never;
-    for (const [name, h] of Object.entries(tenantJobHandlers([mod]))) expect(h.idempotent, name).toBe(true);
-    expect(idempotent(() => Promise.resolve({ done: true } as JobOutcome)).idempotent).toBe(true);
   });
 });

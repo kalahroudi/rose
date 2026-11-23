@@ -127,7 +127,8 @@ export async function runDueJobs<E extends JobEnv>(env: E, handlers: Record<stri
   const t = now();
   const due = await env.DB
     .prepare(
-      `SELECT * FROM jobs WHERE type IN (SELECT value FROM json_each(?)) AND run_after <= ?
+      `SELECT id, type, scope, title, status, payload, result, error, attempts, claim, run_after, created_by, created_at, updated_at
+       FROM jobs WHERE type IN (SELECT value FROM json_each(?)) AND run_after <= ?
        AND (status = 'queued' OR (status = 'running' AND updated_at < ?)) ORDER BY run_after LIMIT ?`,
     )
     .bind(JSON.stringify(types), t, t - STALE_RUNNING, limit)

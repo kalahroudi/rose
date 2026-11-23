@@ -651,7 +651,8 @@ the job when it is due.
 
 `runDueJobs` is the safety net: it selects up to `limit` (10) jobs of the registered
 types that are due and either `queued` or stuck `running`, oldest deadline first, and
-runs each through the same claim.
+runs each through the same claim. The type list is bound as one JSON array through
+`json_each(?)`, so more than 100 registered handlers stay under the 100-parameter limit.
 
 ### Listing and retry
 
