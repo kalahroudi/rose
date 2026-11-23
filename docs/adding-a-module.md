@@ -186,7 +186,7 @@ return { jobId: await ctx.enqueue("export", "Export orders", { format: "csv" }) 
 The job starts within a second or two of being queued (a Cloudflare Queue wakes the
 worker), for the tenant that queued it, with retries. It appears in the app's
 notification centre. Payloads are stored in the control plane in clear text and are
-limited by the 100 KB request cap: do not put secrets in them.
+limited by the 300,000-byte request cap: do not put secrets in them.
 
 ## Changing a schema later
 
