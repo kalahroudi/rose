@@ -351,43 +351,40 @@ describe("sessions and handoffs", () => {
 
 describe("self-service signup on the root host", () => {
   const root = `https://${env.APP_BASE_DOMAIN}`;
-  const verifyEmail = async (email: string) => {
-    const { devCode } = await (await post(root, "/api/root/code/request", { email })).json<{ devCode: string }>();
-    return (await (await post(root, "/api/root/code/verify", { email, code: devCode })).json<{ ticket: string }>()).ticket;
-  };
-  const enterWorkspace = async (email: string, slug: string) => {
-    const entered = await post(root, "/api/root/enter", { ticket: await verifyEmail(email), create: { name: slug, slug } });
-    expect(entered.status).toBe(200);
+  type Send = (req: Request) => Promise<Response>;
+  /** POST /api/root/enter for a new workspace; returns the response, the handoff URL and the per-handoff cookie it set. */
+  const enterWorkspace = async (slug: string, opts: { ticket?: string; origin?: string; send?: Send } = {}) => {
+    const { origin = root, send = (req: Request) => SELF.fetch(req) } = opts;
+    const ticket = opts.ticket ?? (await createHandoff(env.DB, { purpose: "signup", userId: (await ensureUser(env.DB, `${slug}@example.com`)).id, scope: "root", ttlMs: 15 * 60_000 }));
+    const entered = await send(new Request(`${origin}/api/root/enter`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ ticket, create: { name: slug, slug } }), redirect: "manual" }));
+    if (!entered.ok) return { entered, url: "", name: "", set: "", handoffCookie: "" };
     const { url } = await entered.json<{ url: string }>();
-    return { url, handoffCookie: cookiePair(entered, await handoffCookieName(new URL(url).searchParams.get("token")!)) };
+    const name = await handoffCookieName(new URL(url).searchParams.get("token")!, origin.startsWith("https:"));
+    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${name}=`)) ?? "";
+    return { entered, url, name, set, handoffCookie: set.split(";")[0]! };
   };
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
     const { devCode } = await (await post(root, "/api/root/code/request", { email: "founder@example.com" })).json<{ devCode: string }>();
     const verified = await (await post(root, "/api/root/code/verify", { email: "founder@example.com", code: devCode })).json<{ ticket: string; workspaces: unknown[] }>();
     expect(verified.workspaces).toEqual([]);
-    const entered = await post(root, "/api/root/enter", { ticket: verified.ticket, create: { name: "Acme Inc", slug: "acme-inc" } });
+    const { entered, url, handoffCookie } = await enterWorkspace("acme-inc", { ticket: verified.ticket });
     expect(entered.status).toBe(200);
-    const { url } = await entered.json<{ url: string }>();
     expect(url).toMatch(/^https:\/\/acme-inc\.rose\.test\/auth\/handoff\?token=/);
-    const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
-    const handoffCookie = cookiePair(entered, handoffName);
     const landed = await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } });
     const cookie = cookiePair(landed, "__Host-rose_session");
     expect(cookie).toMatch(/^__Host-rose_session=/);
     const boot = await (await SELF.fetch("https://acme-inc.rose.test/api/bootstrap", { headers: { Cookie: cookie } })).json<{ session: { role: string } }>();
     expect(boot.session.role).toBe("owner");
-    // The ticket and the handoff are both spent.
+    // The ticket and the handoff are both spent, even when replayed with the handoff cookie.
     expect((await post(root, "/api/root/enter", { ticket: verified.ticket, slug: "acme-inc" })).status).toBe(401);
     expect((await SELF.fetch(url, { redirect: "manual" })).headers.get("Set-Cookie")).toBeNull();
+    expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(false);
   });
 
   it("the enter response sets a scoped, short-lived handoff cookie", async () => {
-    const entered = await post(root, "/api/root/enter", { ticket: await verifyEmail("attrs@example.com"), create: { name: "Attrs Co", slug: "attrs-co" } });
+    const { entered, set } = await enterWorkspace("attrs-co");
     expect(entered.status).toBe(200);
-    const { url } = await entered.json<{ url: string }>();
-    const name = await handoffCookieName(new URL(url).searchParams.get("token")!);
-    const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${name}=`))!;
     expect(set).toMatch(/^__Secure-rose_handoff_[0-9a-f]{16}=[^;]+;/);
     expect(set).toMatch(/Domain=rose\.test/);
     expect(set).toMatch(/Path=\/auth\/handoff/);
@@ -398,28 +395,42 @@ describe("self-service signup on the root host", () => {
   });
 
   it("a handoff without its browser cookie starts no session and leaves the token unspent", async () => {
-    const { url, handoffCookie } = await enterWorkspace("nocookie@example.com", "nocookie-ws");
+    const { entered, url, handoffCookie } = await enterWorkspace("nocookie-ws");
+    expect(entered.status).toBe(200);
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual" }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(url, { redirect: "manual", headers: { Cookie: handoffCookie } }), "__Host-rose_session")).toBe(true);
   });
 
   it("two tabs entering workspaces at once get distinct handoff cookies that each work", async () => {
-    const enter = async (email: string, slug: string) => {
-      const user = await ensureUser(env.DB, email);
-      const ticket = await createHandoff(env.DB, { purpose: "signup", userId: user.id, scope: "root", ttlMs: 15 * 60_000 });
-      const entered = await post(root, "/api/root/enter", { ticket, create: { name: slug, slug } });
+    const tabA = await enterWorkspace("tab-a-ws");
+    const tabB = await enterWorkspace("tab-b-ws");
+    for (const { entered } of [tabA, tabB]) {
       expect(entered.status).toBe(200);
-      const { url } = await entered.json<{ url: string }>();
-      const handoffName = await handoffCookieName(new URL(url).searchParams.get("token")!);
-      return { url, handoffCookie: cookiePair(entered, handoffName) };
-    };
-    const tabA = await enter("tab-a@example.com", "tab-a-ws");
-    const tabB = await enter("tab-b@example.com", "tab-b-ws");
+    }
     expect(tabA.handoffCookie).not.toBe(tabB.handoffCookie);
     expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(false);
     expect(hasCookie(await SELF.fetch(tabA.url, { redirect: "manual", headers: { Cookie: tabA.handoffCookie } }), "__Host-rose_session")).toBe(true);
     expect(hasCookie(await SELF.fetch(tabB.url, { redirect: "manual", headers: { Cookie: tabB.handoffCookie } }), "__Host-rose_session")).toBe(true);
+  });
+
+  it("on the dev host shape (http rose.localhost:5174 to acme.rose.localhost:5174) the bound handoff works same-site and cross-site is refused", async () => {
+    const worker = createTenantWorker({ modules: [notes] });
+    const devEnv = { ...env, APP_BASE_DOMAIN: "rose.localhost" };
+    const send: Send = async (req) => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(req, devEnv, ctx);
+      await waitOnExecutionContext(ctx);
+      return res;
+    };
+    const { entered, url, set, handoffCookie } = await enterWorkspace("acme", { origin: "http://rose.localhost:5174", send });
+    expect(entered.status).toBe(200);
+    expect(url).toMatch(/^http:\/\/acme\.rose\.localhost:5174\/auth\/handoff\?token=/);
+    expect(set).toMatch(/^rose_handoff_[0-9a-f]{16}=[^;]+;/);
+    expect(set).toMatch(/Domain=rose\.localhost/);
+    const visit = (site: string) => send(new Request(url, { redirect: "manual", headers: { Cookie: handoffCookie, "Sec-Fetch-Site": site } }));
+    expect(hasCookie(await visit("cross-site"), "rose_session")).toBe(false);
+    expect(hasCookie(await visit("same-site"), "rose_session")).toBe(true);
   });
 
   it("a handoff with another browser's nonce starts no session and leaves the token unspent", async () => {

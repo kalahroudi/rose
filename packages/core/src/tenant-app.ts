@@ -7,7 +7,7 @@ import { listPasskeys } from "./auth/passkeys";
 import { writePlatformAudit } from "./control/audit";
 import { normalizeKey } from "./control/otp";
 import { enqueueJob, listJobs, notifyJob, runDueJobs, runJobMessages, idempotent, type JobHandler } from "./control/jobs";
-import { assertFreshSession, consumeHandoff, createHandoff, peekHandoff, sweepExpired } from "./control/sessions";
+import { assertFreshSession, consumeHandoff, createHandoff, HANDOFF_TTL_MS, peekHandoff, sweepExpired } from "./control/sessions";
 import { ROOT_SCOPE, refuseInactiveTenant } from "./control/tenant-guard";
 import { countOwnedWorkspaces, createTenantForOwner, beginTenantPurge, deleteTenantRecords, getTenant, recoverStuckPurges, requestTenantDeletion, slugAvailable, updateTenant, validateSlug, type TenantRow } from "./control/tenants";
 import {
@@ -292,7 +292,7 @@ export function createTenantApp(options: TenantAppOptions) {
     }
     const nonce = randomToken();
     const handoff = await createHandoff(c.env.DB, { purpose: "session", userId, scope: tenant.id, binding: nonce });
-    await setHandoffCookie(c, handoff, nonce);
+    await setHandoffCookie(c, handoff, nonce, HANDOFF_TTL_MS / 1000);
     return c.json({ url: tenantUrl(c, tenant.slug, `/auth/handoff?token=${handoff}`) });
   });
 

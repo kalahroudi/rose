@@ -107,7 +107,7 @@ export async function revokeSessionById(db: D1Database, userId: string, scope: s
   if (r.meta.changes === 0) throw notFound();
 }
 
-async function handoffHash(token: string, binding?: string): Promise<string> {
+function handoffHash(token: string, binding?: string): Promise<string> {
   return sha256Hex(binding ? `${token}.${binding}` : token);
 }
 

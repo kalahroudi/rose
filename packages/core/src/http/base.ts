@@ -4,7 +4,6 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ZodType } from "zod";
 import { sha256Hex } from "../crypto";
 import { consumeRateLimit } from "../control/rate-limit";
-import { HANDOFF_TTL_MS } from "../control/sessions";
 import { type CoreEnv, isDev } from "../env";
 import { AppError, badRequest, forbidden, invalid, misconfigured, tooMany } from "../errors";
 import { newId } from "../ids";
@@ -149,17 +148,17 @@ export async function rateLimit(c: AnyCtx | Context, key: string): Promise<void>
 
 // ── Session cookie ─────────────────────────────────────────────────────────────
 
-/**
- * `__Host-` cookies are bound to the exact host (no Domain attribute, Secure, Path=/), so a
- * tenant on one subdomain can never read or overwrite another tenant's session cookie.
- * Plain-HTTP localhost development can not use the prefix, so it is dropped there only.
- */
 function cookieSecure(c: Context): boolean {
   const secure = new URL(c.req.url).protocol === "https:";
   if (!secure && !isDev(c.env as CoreEnv)) throw misconfigured("Sessions require HTTPS.");
   return secure;
 }
 
+/**
+ * `__Host-` cookies are bound to the exact host (no Domain attribute, Secure, Path=/), so a
+ * tenant on one subdomain can never read or overwrite another tenant's session cookie.
+ * Plain-HTTP localhost development can not use the prefix, so it is dropped there only.
+ */
 function cookieSpec(c: Context, base: string): { name: string; secure: boolean } {
   const secure = cookieSecure(c);
   return { name: secure ? `__Host-${base}` : base, secure };
@@ -181,27 +180,27 @@ export function clearSessionCookie(c: Context, base: string): void {
 
 // ── Handoff cookie ─────────────────────────────────────────────────────────────
 
-const HANDOFF_COOKIE = "rose_handoff";
-
-async function handoffCookieName(token: string): Promise<string> {
-  return `${HANDOFF_COOKIE}_${(await sha256Hex(token)).slice(0, 16)}`;
-}
-
-function handoffCookieSpec(c: Context, base: string): { name: string; secure: boolean; domain: string } {
+/**
+ * `__Secure-` cookie shared by the root host and the workspace hosts (Domain is the base domain),
+ * sent only to `/auth/handoff`, and named after the handoff token so concurrent handoffs in one
+ * browser do not overwrite each other. Plain-HTTP localhost development drops the prefix.
+ */
+async function handoffCookieSpec(c: Context, token: string): Promise<{ name: string; secure: boolean; domain: string }> {
   const secure = cookieSecure(c);
+  const base = `rose_handoff_${(await sha256Hex(token)).slice(0, 16)}`;
   return { name: secure ? `__Secure-${base}` : base, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
 }
 
-export async function setHandoffCookie(c: Context, token: string, binding: string): Promise<void> {
-  const { name, secure, domain } = handoffCookieSpec(c, await handoffCookieName(token));
-  setCookie(c, name, binding, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge: HANDOFF_TTL_MS / 1000 });
+export async function setHandoffCookie(c: Context, token: string, binding: string, maxAge: number): Promise<void> {
+  const { name, secure, domain } = await handoffCookieSpec(c, token);
+  setCookie(c, name, binding, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge });
 }
 
 export async function readHandoffCookie(c: Context, token: string): Promise<string | undefined> {
-  return getCookie(c, handoffCookieSpec(c, await handoffCookieName(token)).name);
+  return getCookie(c, (await handoffCookieSpec(c, token)).name);
 }
 
 export async function clearHandoffCookie(c: Context, token: string): Promise<void> {
-  const { name, secure, domain } = handoffCookieSpec(c, await handoffCookieName(token));
+  const { name, secure, domain } = await handoffCookieSpec(c, token);
   deleteCookie(c, name, { domain, path: "/auth/handoff", secure });
 }
