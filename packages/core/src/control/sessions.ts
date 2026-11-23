@@ -108,7 +108,7 @@ export async function revokeSessionById(db: D1Database, userId: string, scope: s
 }
 
 function handoffHash(token: string, binding?: string): Promise<string> {
-  return sha256Hex(binding ? `${token}.${binding}` : token);
+  return sha256Hex(binding === undefined ? token : `${token}.${binding}`);
 }
 
 export async function createHandoff(db: D1Database, input: { purpose: "session" | "signup"; userId: string; scope: string; ttlMs?: number; binding?: string }): Promise<string> {

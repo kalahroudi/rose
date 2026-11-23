@@ -335,8 +335,20 @@ describe("sessions and handoffs", () => {
     const a = await createTestTenant(env, SELF);
     const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "browser-a" });
     expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-b")).toBeNull();
+    expect(await consumeHandoff(env.DB, token, "session", a.id, "")).toBeNull();
+    expect(await consumeHandoff(env.DB, token, "session", a.id)).toBeNull();
     expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-a")).toBe(a.userId);
     expect(await consumeHandoff(env.DB, token, "session", a.id, "browser-a")).toBeNull();
+  });
+
+  it("a bound handoff sent with an empty handoff cookie is refused and not consumed", async () => {
+    const a = await createTestTenant(env, SELF);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: "nonce" });
+    const name = await handoffCookieName(token);
+    const empty = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=` } });
+    expect(hasCookie(empty, "__Host-rose_session")).toBe(false);
+    const ok = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=nonce` } });
+    expect(hasCookie(ok, "__Host-rose_session")).toBe(true);
   });
 
   it("a handoff for tenant A does not sign you in to tenant B", async () => {
@@ -370,11 +382,11 @@ describe("self-service signup on the root host", () => {
     const { origin = root, send = (req: Request) => SELF.fetch(req) } = opts;
     const ticket = opts.ticket ?? (await createHandoff(env.DB, { purpose: "signup", userId: (await ensureUser(env.DB, `${slug}@example.com`)).id, scope: "root", ttlMs: 15 * 60_000 }));
     const entered = await send(new Request(`${origin}/api/root/enter`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ ticket, create: { name: slug, slug } }), redirect: "manual" }));
-    if (!entered.ok) return { entered, url: "", name: "", set: "", handoffCookie: "" };
+    expect(entered.ok).toBe(true);
     const { url } = await entered.json<{ url: string }>();
     const name = await handoffCookieName(new URL(url).searchParams.get("token")!, origin.startsWith("https:"));
     const set = entered.headers.getSetCookie().find((s) => s.startsWith(`${name}=`)) ?? "";
-    return { entered, url, name, set, handoffCookie: set.split(";")[0]! };
+    return { entered, url, set, handoffCookie: cookiePair(entered, name) };
   };
 
   it("verifies the email, creates a workspace and hands the session to its host", async () => {
