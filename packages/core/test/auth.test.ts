@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { createTenantWorker } from "../src";
 import { requesterKey } from "../src/http/base";
 import { issueLoginCode, verifyLoginCode } from "../src/control/otp";
-import { consumeHandoff, createHandoff, createSession, readSession } from "../src/control/sessions";
+import { sha256Hex } from "../src/crypto";
+import { consumeHandoff, createHandoff, createSession, HANDOFF_TOKEN_MAX, readSession } from "../src/control/sessions";
 import { createTenant } from "../src/control/tenants";
 import { addMembership, ensureUser, getMembership } from "../src/control/users";
 import { maxWorkspacesPerUser } from "../src/env";
@@ -500,6 +501,27 @@ describe("self-service signup on the root host", () => {
       expect(clear).toMatch(/Domain=rose\.test/);
       expect(clear).toMatch(/Path=\/auth\/handoff/);
     }
+  });
+
+  it("an over-long handoff token is refused without reading, consuming or clearing anything", async () => {
+    const a = await createTestTenant(env, SELF);
+    const plant = async (token: string) => {
+      const hash = await sha256Hex(`${token}.nonce`);
+      await env.DB.prepare("INSERT INTO handoffs (token_hash, purpose, user_id, scope, expires_at) VALUES (?, 'session', ?, ?, ?)").bind(hash, a.userId, a.id, Date.now() + 60_000).run();
+      return hash;
+    };
+    const visit = async (token: string) => SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${await handoffCookieName(token)}=nonce` } });
+    const remaining = (hash: string) => env.DB.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE token_hash = ?").bind(hash).first<number>("n");
+    const atCap = "a".repeat(HANDOFF_TOKEN_MAX);
+    const overCap = "b".repeat(HANDOFF_TOKEN_MAX + 1);
+    const atCapHash = await plant(atCap);
+    const overCapHash = await plant(overCap);
+    const refused = await visit(overCap);
+    expect(refused.status).toBe(302);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+    expect(await remaining(overCapHash)).toBe(1);
+    expect(hasCookie(await visit(atCap), "__Host-rose_session")).toBe(true);
+    expect(await remaining(atCapHash)).toBe(0);
   });
 
   it("the sign-in key verifies the email on the root host and returns a ticket", async () => {

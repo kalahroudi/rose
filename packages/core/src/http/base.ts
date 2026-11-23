@@ -185,22 +185,27 @@ export function clearSessionCookie(c: Context, base: string): void {
  * sent only to `/auth/handoff`, and named after the handoff token so concurrent handoffs in one
  * browser do not overwrite each other. Plain-HTTP localhost development drops the prefix.
  */
-async function handoffCookieSpec(c: Context, token: string): Promise<{ name: string; secure: boolean; domain: string }> {
+export interface HandoffCookie {
+  name: string;
+  secure: boolean;
+  domain: string;
+}
+
+export async function handoffCookie(c: Context, token: string): Promise<HandoffCookie> {
   const secure = cookieSecure(c);
   const base = `rose_handoff_${(await sha256Hex(token)).slice(0, 16)}`;
   return { name: secure ? `__Secure-${base}` : base, secure, domain: (c.env as CoreEnv).APP_BASE_DOMAIN };
 }
 
 export async function setHandoffCookie(c: Context, token: string, binding: string, maxAge: number): Promise<void> {
-  const { name, secure, domain } = await handoffCookieSpec(c, token);
+  const { name, secure, domain } = await handoffCookie(c, token);
   setCookie(c, name, binding, { domain, path: "/auth/handoff", httpOnly: true, secure, sameSite: "Lax", maxAge });
 }
 
-export async function readHandoffCookie(c: Context, token: string): Promise<string | undefined> {
-  return getCookie(c, (await handoffCookieSpec(c, token)).name);
+export function readHandoffCookie(c: Context, cookie: HandoffCookie): string | undefined {
+  return getCookie(c, cookie.name);
 }
 
-export async function clearHandoffCookie(c: Context, token: string): Promise<void> {
-  const { name, secure, domain } = await handoffCookieSpec(c, token);
+export function clearHandoffCookie(c: Context, { name, secure, domain }: HandoffCookie): void {
   deleteCookie(c, name, { domain, path: "/auth/handoff", secure });
 }

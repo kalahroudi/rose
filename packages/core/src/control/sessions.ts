@@ -9,6 +9,7 @@ import type { OperatorRole, Role } from "./users";
 export const SESSION_TTL = 7 * 86_400_000;
 export const SESSION_IDLE_TIMEOUT = 12 * 3_600_000;
 export const HANDOFF_TTL_MS = 60_000;
+export const HANDOFF_TOKEN_MAX = 100;
 const TOUCH_INTERVAL = 5 * 60_000;
 
 export interface SessionInfo {
@@ -131,7 +132,7 @@ export async function createHandoff(db: D1Database, input: { purpose: "session" 
 }
 
 export async function consumeHandoff(db: D1Database, token: string, purpose: "session" | "signup", scope: string, binding?: string): Promise<string | null> {
-  if (!token || token.length > 100) return null;
+  if (!token || token.length > HANDOFF_TOKEN_MAX) return null;
   const hash = await handoffHash(token, binding);
   const row = await db
     .prepare("DELETE FROM handoffs WHERE token_hash = ? AND purpose = ? AND scope = ? AND expires_at > ? RETURNING user_id")
