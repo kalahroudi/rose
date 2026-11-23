@@ -125,13 +125,12 @@ export async function runDueJobs<E extends JobEnv>(env: E, handlers: Record<stri
   const types = Object.keys(handlers);
   if (types.length === 0) return 0;
   const t = now();
-  const marks = types.map(() => "?").join(",");
   const due = await env.DB
     .prepare(
-      `SELECT * FROM jobs WHERE type IN (${marks}) AND run_after <= ?
+      `SELECT * FROM jobs WHERE type IN (SELECT value FROM json_each(?)) AND run_after <= ?
        AND (status = 'queued' OR (status = 'running' AND updated_at < ?)) ORDER BY run_after LIMIT ?`,
     )
-    .bind(...types, t, t - STALE_RUNNING, limit)
+    .bind(JSON.stringify(types), t, t - STALE_RUNNING, limit)
     .all<JobRow>();
   let ran = 0;
   for (const job of due.results) if (await runOne(env, handlers, job)) ran++;

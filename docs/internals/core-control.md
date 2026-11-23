@@ -164,8 +164,9 @@ bulk suspend or resume can never revive a tenant that is being deleted. Only
 The id branch binds the ids as one JSON array read through `json_each(?)`. D1 and
 Durable Object SQLite allow 100 bound parameters per statement, and a page of 100 ids
 plus the status and timestamp made 102. One parameter keeps the update a single atomic
-statement at any id count. The contacts bulk route uses the same form. Covered by
-"suspends 1, 99 and 100 tenants by id" (`packages/core/test/control-tenants.test.ts`).
+statement at the 100-id cap the callers enforce. The contacts bulk route uses the same
+form. Covered by "suspends %i tenants by id" in `describe("setTenantStatus")`
+(`packages/core/test/control-tenants.test.ts`, cases 1, 98 and 100).
 
 ### Deletion lifecycle
 

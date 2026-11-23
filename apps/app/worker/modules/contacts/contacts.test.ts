@@ -55,7 +55,7 @@ describe("contacts", () => {
     expect((await t.fetch("/api/m/contacts/bulk", { body: { action: "delete" } })).status).toBe(422);
   });
 
-  it.each([1, 99, 100])("bulk archive and delete handle %i ids", async (n) => {
+  it.each([1, 98, 100])("bulk archive and delete handle %i ids", async (n) => {
     const t = await createTestTenant(env, SELF);
     const ids: string[] = [];
     for (let i = 0; i < n; i++) ids.push((await json<{ id: string }>(t.fetch("/api/m/contacts", { body: { name: `Person ${i}` } }))).id);
