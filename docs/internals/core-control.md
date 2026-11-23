@@ -328,6 +328,31 @@ does not sign you in to tenant B" (`packages/core/test/auth.test.ts`), and by "a
 handoff into a pending tenant mints no session"
 (`packages/core/test/deletion.adversarial.test.ts`).
 
+A session handoff can also be bound to one browser. `createHandoff` and `consumeHandoff`
+take an optional `binding`; when it is set, the stored hash is SHA-256 of
+`<token>.<binding>`, so the token alone matches no row. `POST /api/root/enter` mints a
+random nonce, binds the handoff to it and sets it in a cookie named after the token
+(`__Secure-rose_handoff_<first 16 hex of SHA-256(token)>`), so two handoffs in one browser
+do not overwrite each other. The cookie has `Domain=<APP_BASE_DOMAIN>`, so the workspace
+host receives it, and `Path=/auth/handoff`, `HttpOnly`, `Secure`, `SameSite=Lax` and
+`Max-Age` equal to the handoff TTL. Plain-HTTP development drops the `__Secure-` prefix and
+`Secure` only. `GET /auth/handoff` reads the cookie for that token and consumes the handoff
+with it. A request carrying `Sec-Fetch-Site: cross-site` is treated as having no cookie,
+so it starts no session and leaves the token unspent. Every other
+`Sec-Fetch-Site` value (`same-site`, `same-origin`, `none`) and an absent header are accepted. Root and workspace hosts are same-site in production and in
+development (`rose.localhost` and `<slug>.rose.localhost`), so there is no development
+bypass. The response clears the cookie it was sent, whether it matched or not, except on
+cross-site requests. Covered in `packages/core/test/auth.test.ts` by "a bound handoff is
+consumable only with its binding", "parallel consumes of one bound handoff start exactly
+one session", "the enter response sets a scoped, short-lived handoff cookie", "a handoff
+without its browser cookie starts no session and leaves the token unspent", "two tabs
+entering workspaces at once get distinct handoff cookies that each work", "a handoff with
+another browser's nonce starts no session and leaves the token unspent", "Sec-Fetch-Site
+cross-site starts no session even with the right cookie", "Sec-Fetch-Site same-origin and
+absent are allowed", "the handoff response clears the handoff cookie it was sent, matching
+or not", "an over-long handoff cookie nonce matches nothing, is not consumed, and the cookie is cleared" and "on the dev host shape (http rose.localhost:5174 to acme.rose.localhost:5174)
+the bound handoff works same-site and cross-site is refused".
+
 ### Housekeeping and freshness
 
 `sweepExpired` deletes expired or idle sessions, expired handoffs, expired challenges,

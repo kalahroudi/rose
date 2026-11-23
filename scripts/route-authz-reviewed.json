@@ -1,12 +1,12 @@
 {
   "./http/base:requestContext": {
-    "packages/core/src/http/base.ts": "bacbd19526a0862245a3b458538d7933",
+    "packages/core/src/http/base.ts": "7dfc3726a63e0eea87c389603817d68d",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/control/rate-limit.ts": "07d2887cea0cb9621a3626efcdd3c5c5",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
-    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/errors.ts": "ba762ea394d3e46b515cb30c315b2f83",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
     "packages/core/src/env.ts": "456b22613cbbd3da2519172c5fc01feb",
     "packages/core/src/control/jobs.ts": "f719e16ab1c9ed6cdfe44987479209d5",
@@ -15,13 +15,13 @@
     "cloudflare:workers": "builtin"
   },
   "./http/base:csrfGuard": {
-    "packages/core/src/http/base.ts": "bacbd19526a0862245a3b458538d7933",
+    "packages/core/src/http/base.ts": "7dfc3726a63e0eea87c389603817d68d",
     "npm:hono": "hono@4.13.17/a45462a23588",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/control/rate-limit.ts": "07d2887cea0cb9621a3626efcdd3c5c5",
     "packages/core/src/crypto.ts": "7aa9659947991c4fbf13c6ebfc3950fb",
     "packages/core/src/encoding.ts": "08d4af88e4a9531e91bc9120dbb95c59",
-    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/errors.ts": "ba762ea394d3e46b515cb30c315b2f83",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
     "packages/core/src/env.ts": "456b22613cbbd3da2519172c5fc01feb",
     "packages/core/src/control/jobs.ts": "f719e16ab1c9ed6cdfe44987479209d5",
@@ -32,7 +32,7 @@
   "./env:assertEnvironment": {
     "packages/core/src/env.ts": "456b22613cbbd3da2519172c5fc01feb",
     "packages/core/src/control/jobs.ts": "f719e16ab1c9ed6cdfe44987479209d5",
-    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/errors.ts": "ba762ea394d3e46b515cb30c315b2f83",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
@@ -44,7 +44,7 @@
   "./tenancy/resolve:hostnameOf": {
     "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
     "packages/core/src/control/tenants.ts": "34450d332121c937efa58377e45e8abb",
-    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/errors.ts": "ba762ea394d3e46b515cb30c315b2f83",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
@@ -53,7 +53,7 @@
   "./tenancy/resolve:resolveHost": {
     "packages/core/src/tenancy/resolve.ts": "80ea7b7e9db69438952cf4893c1f6c04",
     "packages/core/src/control/tenants.ts": "34450d332121c937efa58377e45e8abb",
-    "packages/core/src/errors.ts": "eecf104e30d462afe011f5e1a25f9a86",
+    "packages/core/src/errors.ts": "ba762ea394d3e46b515cb30c315b2f83",
     "packages/core/src/http/pagination.ts": "cd10a90838b7b848f4436456ad592d21",
     "npm:zod": "zod@4.6.6+4.6.7/cd050bcb9abd",
     "packages/core/src/ids.ts": "409242a8567e9e04a8b3a48495711ba1",
