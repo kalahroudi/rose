@@ -99,7 +99,7 @@ export async function readJson<T>(c: Context, schema: ZodType<T>): Promise<T> {
     throw badRequest("Send JSON with Content-Type: application/json.");
   }
   if (Number(c.req.header("Content-Length") ?? 0) > MAX_BODY) throw tooLarge();
-  const cache = c.req.bodyCache as { text?: Promise<string> | string };
+  const cache = c.req.bodyCache as unknown as { text?: Promise<string> };
   const text = await (cache.text ??= readCapped(c.req.raw));
   let raw: unknown;
   try {

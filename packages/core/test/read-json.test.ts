@@ -12,7 +12,8 @@ app.post("/", async (c) => c.json(await readJson(c, schema)));
 app.post("/twice", async (c) => {
   const first = await readJson(c, schema);
   const second = await readJson(c, schema);
-  return c.json({ same: first.v === second.v });
+  const viaHono = await c.req.json<{ v: string }>();
+  return c.json({ same: first.v === second.v, viaHono: viaHono.v });
 });
 
 const jsonOfBytes = (bytes: number, filler = "a") => {
@@ -97,7 +98,7 @@ describe("readJson size cap", () => {
       body: '{"v":"x"}',
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ same: true });
+    expect(await res.json()).toEqual({ same: true, viaHono: "x" });
   });
 
   it("answers an empty body with 400", async () => {
