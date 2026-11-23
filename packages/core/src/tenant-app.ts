@@ -304,7 +304,7 @@ export function createTenantApp(options: TenantAppOptions) {
     if (!token || token.length > HANDOFF_TOKEN_MAX) return c.redirect("/", 302);
     const cookie = await handoffCookie(c, token);
     const nonce = c.req.header("Sec-Fetch-Site") === "cross-site" ? undefined : readHandoffCookie(c, cookie);
-    const userId = nonce ? await consumeHandoff(c.env.DB, token, "session", tenant.id, nonce) : null;
+    const userId = nonce && nonce.length <= HANDOFF_TOKEN_MAX ? await consumeHandoff(c.env.DB, token, "session", tenant.id, nonce) : null;
     const user = userId ? await c.env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<UserRow>() : null;
     if (user && (await realm.admit(user))) await startSession(c, realm, user, "code");
     if (nonce !== undefined) clearHandoffCookie(c, cookie);

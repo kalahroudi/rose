@@ -479,7 +479,7 @@ describe("self-service signup on the root host", () => {
 
   it("Sec-Fetch-Site same-origin and absent are allowed", async () => {
     const a = await createTestTenant(env, SELF);
-    for (const site of ["same-origin", undefined] as const) {
+    for (const site of ["same-origin", "none", undefined] as const) {
       const nonce = site ?? "absent";
       const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: nonce });
       const url = `${a.origin}/auth/handoff?token=${token}`;
@@ -522,6 +522,19 @@ describe("self-service signup on the root host", () => {
     expect(await remaining(overCapHash)).toBe(1);
     expect(hasCookie(await visit(atCap), "__Host-rose_session")).toBe(true);
     expect(await remaining(atCapHash)).toBe(0);
+  });
+
+  it("an over-long handoff cookie nonce matches nothing, is not consumed, and the cookie is cleared", async () => {
+    const a = await createTestTenant(env, SELF);
+    const long = "n".repeat(HANDOFF_TOKEN_MAX + 1);
+    const token = await createHandoff(env.DB, { purpose: "session", userId: a.userId, scope: a.id, binding: long });
+    const name = await handoffCookieName(token);
+    const res = await SELF.fetch(`${a.origin}/auth/handoff?token=${token}`, { redirect: "manual", headers: { Cookie: `${name}=${long}` } });
+    expect(res.status).toBe(302);
+    expect(hasCookie(res, "__Host-rose_session")).toBe(false);
+    expect(res.headers.getSetCookie().find((s) => s.startsWith(`${name}=`))).toMatch(/Max-Age=0/);
+    const hash = await sha256Hex(`${token}.${long}`);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE token_hash = ?").bind(hash).first<number>("n")).toBe(1);
   });
 
   it("the sign-in key verifies the email on the root host and returns a ticket", async () => {

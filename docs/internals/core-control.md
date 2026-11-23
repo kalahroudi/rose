@@ -338,8 +338,8 @@ host receives it, and `Path=/auth/handoff`, `HttpOnly`, `Secure`, `SameSite=Lax`
 `Max-Age` equal to the handoff TTL. Plain-HTTP development drops the `__Secure-` prefix and
 `Secure` only. `GET /auth/handoff` reads the cookie for that token and consumes the handoff
 with it. A request carrying `Sec-Fetch-Site: cross-site` is treated as having no cookie,
-so it starts no session and leaves the token unspent. `same-site`, `same-origin` and an
-absent header are accepted. Root and workspace hosts are same-site in production and in
+so it starts no session and leaves the token unspent. Every other
+`Sec-Fetch-Site` value (`same-site`, `same-origin`, `none`) and an absent header are accepted. Root and workspace hosts are same-site in production and in
 development (`rose.localhost` and `<slug>.rose.localhost`), so there is no development
 bypass. The response clears the cookie it was sent, whether it matched or not, except on
 cross-site requests. Covered in `packages/core/test/auth.test.ts` by "a bound handoff is
@@ -350,7 +350,7 @@ entering workspaces at once get distinct handoff cookies that each work", "a han
 another browser's nonce starts no session and leaves the token unspent", "Sec-Fetch-Site
 cross-site starts no session even with the right cookie", "Sec-Fetch-Site same-origin and
 absent are allowed", "the handoff response clears the handoff cookie it was sent, matching
-or not" and "on the dev host shape (http rose.localhost:5174 to acme.rose.localhost:5174)
+or not", "an over-long handoff cookie nonce matches nothing, is not consumed, and the cookie is cleared" and "on the dev host shape (http rose.localhost:5174 to acme.rose.localhost:5174)
 the bound handoff works same-site and cross-site is refused".
 
 ### Housekeeping and freshness
