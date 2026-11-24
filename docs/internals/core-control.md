@@ -161,6 +161,13 @@ select-all. Both branches add `status NOT IN ('pending_deletion', 'deleting')`, 
 bulk suspend or resume can never revive a tenant that is being deleted. Only
 `cancelTenantDeletion` can undo a pending deletion.
 
+The id branch binds the ids as one JSON array read through `json_each(?)`. D1 and
+Durable Object SQLite allow 100 bound parameters per statement, and a page of 100 ids
+plus the status and timestamp made 102. One parameter keeps the update a single atomic
+statement at the 100-id cap the callers enforce. The contacts bulk route uses the same
+form. Covered by "suspends %i tenants by id" in `describe("setTenantStatus")`
+(`packages/core/test/control-tenants.test.ts`, cases 1, 98 and 100).
+
 ### Deletion lifecycle
 
 The lifecycle has four states and one legal path forward:
@@ -644,7 +651,8 @@ the job when it is due.
 
 `runDueJobs` is the safety net: it selects up to `limit` (10) jobs of the registered
 types that are due and either `queued` or stuck `running`, oldest deadline first, and
-runs each through the same claim.
+runs each through the same claim. The type list is bound as one JSON array through
+`json_each(?)`, so more than 100 registered handlers stay under the 100-parameter limit.
 
 ### Listing and retry
 

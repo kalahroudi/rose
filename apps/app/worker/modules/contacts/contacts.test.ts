@@ -55,6 +55,14 @@ describe("contacts", () => {
     expect((await t.fetch("/api/m/contacts/bulk", { body: { action: "delete" } })).status).toBe(422);
   });
 
+  it.each([1, 98, 100])("bulk archive and delete handle %i ids", async (n) => {
+    const t = await createTestTenant(env, SELF);
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) ids.push((await json<{ id: string }>(t.fetch("/api/m/contacts", { body: { name: `Person ${i}` } }))).id);
+    expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "archive", ids } }))).toEqual({ affected: n });
+    expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", ids } }))).toEqual({ affected: n });
+  });
+
   it("members can edit but not delete", async () => {
     const m = await createTestTenant(env, SELF, { role: "member" });
     const c = await json<{ id: string }>(m.fetch("/api/m/contacts", { body: { name: "X" } }));
