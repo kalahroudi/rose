@@ -158,10 +158,9 @@ export async function setTenantStatus(
 ): Promise<number> {
   if ("ids" in target) {
     if (target.ids.length === 0) return 0;
-    const marks = target.ids.map(() => "?").join(",");
     const r = await db
-      .prepare(`UPDATE tenants SET status = ?, updated_at = ? WHERE status NOT IN ('pending_deletion', 'deleting') AND id IN (${marks})`)
-      .bind(status, now(), ...target.ids)
+      .prepare("UPDATE tenants SET status = ?, updated_at = ? WHERE status NOT IN ('pending_deletion', 'deleting') AND id IN (SELECT value FROM json_each(?))")
+      .bind(status, now(), JSON.stringify(target.ids))
       .run();
     return r.meta.changes;
   }

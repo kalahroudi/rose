@@ -10,6 +10,7 @@ import { z } from "zod";
 
 const STATUSES = ["lead", "active", "archived"] as const;
 type Status = (typeof STATUSES)[number];
+const statusFilter = z.enum(STATUSES).or(z.literal("")).default("");
 
 interface Row {
   id: string;
@@ -54,7 +55,7 @@ async function present(ctx: ModuleContext, r: Row, withNotes: boolean) {
 }
 
 /** Shared by the list and by "select all matching" bulk actions, so both see the same rows. */
-async function where(ctx: ModuleContext, f: { q?: string; status?: string }): Promise<{ sql: string; args: SqlValue[] }> {
+async function where(ctx: ModuleContext, f: { q?: string; status?: Status | "" }): Promise<{ sql: string; args: SqlValue[] }> {
   const parts: string[] = [];
   const args: SqlValue[] = [];
   if (f.q) {
@@ -67,7 +68,7 @@ async function where(ctx: ModuleContext, f: { q?: string; status?: string }): Pr
       args.push(likePattern(f.q), likePattern(f.q));
     }
   }
-  if (f.status && (STATUSES as readonly string[]).includes(f.status)) {
+  if (f.status) {
     parts.push("status = ?");
     args.push(f.status);
   }
@@ -156,8 +157,9 @@ export const contacts = defineModule({
       method: "GET", path: "/", permission: "contacts:read",
       handler: async (ctx) => {
         const q = ctx.req.list();
-        const status = ctx.req.query("status");
-        const w = await where(ctx, { q: q.q, ...(status !== undefined && { status }) });
+        const status = statusFilter.safeParse(ctx.req.query("status"));
+        if (!status.success) throw invalid("Unknown status.", { status: "Unknown status." });
+        const w = await where(ctx, { q: q.q, status: status.data });
         const order = orderBy(q.sort, { name: "name", company: "company", created: "created_at", status: "status" }, "created_at DESC");
         const [rows, count] = await ctx.db.batch([
           { sql: `SELECT * FROM contacts ${w.sql} ORDER BY ${order} LIMIT ? OFFSET ?`, params: [...w.args, q.pageSize, offsetOf(q)] },
@@ -202,11 +204,11 @@ export const contacts = defineModule({
             action: z.enum(["delete", "archive", "activate"]),
             ids: z.array(z.string().max(40)).max(100).optional(),
             // "Select all matching": the server re-applies the filter; ids are never loaded into the browser.
-            filter: z.object({ q: searchTermSchema, status: z.string().max(20).default("") }).optional(),
+            filter: z.object({ q: searchTermSchema, status: statusFilter }).optional(),
           }),
         );
         let w: { sql: string; args: SqlValue[] };
-        if (body.ids?.length) w = { sql: `WHERE id IN (${body.ids.map(() => "?").join(",")})`, args: body.ids };
+        if (body.ids?.length) w = { sql: "WHERE id IN (SELECT value FROM json_each(?))", args: [JSON.stringify(body.ids)] };
         else if (body.filter) w = await where(ctx, body.filter);
         else throw invalid("Select at least one contact.");
         const affected =
