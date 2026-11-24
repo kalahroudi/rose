@@ -27,6 +27,7 @@
     "ENVIRONMENT": "production",
     "APP_NAME": "Rose",
     "APP_BASE_DOMAIN": "example.com",
+    "ADMIN_HOST": "admin.example.com",
     "APP_URL_TEMPLATE": "https://{host}",
     "EMAIL_PROVIDER": "cloudflare",
     "BOOTSTRAP_OPERATOR_EMAIL": "admin@example.com",

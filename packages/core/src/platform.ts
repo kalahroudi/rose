@@ -11,7 +11,7 @@ export * from "./control/audit";
 export * from "./control/settings";
 export { assertFreshSession, FRESH_SIGN_IN_MS, sweepExpired } from "./control/sessions";
 export { createAuthRoutes, currentSession, type AuthRealm } from "./auth/routes";
-export { listPasskeys } from "./auth/passkeys";
+export { hasUsablePasskey } from "./auth/passkeys";
 export { clientIp, csrfGuard, errorHandler, parse, rateLimit, readJson, requestContext, type BaseVars } from "./http/base";
 export * as cloudflare from "./cloudflare";
 export { invalidateHostCache } from "./tenancy/resolve";
