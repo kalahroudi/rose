@@ -23,6 +23,7 @@ const helps: Record<(typeof TABS)[number], HelpContent> = {
     why: [
       { q: "Why passkeys instead of passwords?", a: "A passkey can not be guessed, reused on another site, or typed into a fake page: the browser only offers it to the site that created it." },
       { q: "Why is my passkey not offered on another site?", a: "Each passkey belongs to one exact host name. That is the same property that stops a tenant's passkey from working on another tenant." },
+      { q: "What does \"Old address, can't be used\" mean?", a: "The passkey was created on another console address. It can not sign you in here and does not count as your passkey, so the email code works again. Remove it and add a new passkey on this address." },
     ],
     links: [{ label: "About passkeys (FIDO Alliance)", href: "https://fidoalliance.org/passkeys/" }],
   },

@@ -8,13 +8,13 @@ import { etag } from "hono/etag";
 import { z } from "zod";
 import {
   addDomain, addOperator, assertFreshSession, cancelTenantDeletion, clientIp, cloudflare, createAuthRoutes, csrfGuard, currentSession,
-  deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, idempotent, isOperatorEmail, listDomains, listJobs,
-  listMembers, listOperators, listPasskeys, listPlatformAudit, listTenants, normalizeEmail, notifyJob, operatorCount, parse, putSetting,
+  deleteSetting, domainCounts, enqueueJob, errorHandler, getDomain, getOperator, getSetting, getTenant, hasUsablePasskey, idempotent, isOperatorEmail, listDomains, listJobs,
+  listMembers, listOperators, listPlatformAudit, listTenants, normalizeEmail, notifyJob, operatorCount, ownerOperatorEmails, parse, putSetting,
   readJson, removeDomain, removeOperator, requestContext, retryJob, runDueJobs, runJobMessages, setDomainState, setTenantStatus, sweepExpired, tenantCounts,
   requestTenantDeletion, tenantSignupSeries, updateTenant, userCount, validateHostname, writePlatformAudit,
   type AuthRealm, type BaseVars, type JobHandler, type OperatorRole,
 } from "@rose/core/platform";
-import { assertEnvironment, conflict, forbidden, guardFetch, invalid, isDev, listQuerySchema, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
+import { assertEnvironment, conflict, forbidden, guardFetch, invalid, isDev, listQuerySchema, misconfigured, notFound, searchTermSchema, unauthorized, type PlatformWorkerEnv } from "@rose/core";
 import { setupStatus } from "./setup";
 
 const COOKIE = "rose_admin";
@@ -28,7 +28,8 @@ interface Operator {
   method: string;
   createdAt: number;
 }
-type Env = { Bindings: PlatformWorkerEnv; Variables: BaseVars & { operator: Operator } };
+/** `ADMIN_HOST`: the console's hostname, written next to the route by `pnpm setup`. Required in production; development uses the request host. */
+type Env = { Bindings: PlatformWorkerEnv & { ADMIN_HOST?: string }; Variables: BaseVars & { operator: Operator } };
 type Ctx = Context<Env>;
 
 const cfConnection = async (env: PlatformWorkerEnv): Promise<cloudflare.CloudflareConnection | null> => {
@@ -92,10 +93,25 @@ app.use("/api/*", etag());
 const bootstrapEligible = async (env: PlatformWorkerEnv, email: string) =>
   !!env.BOOTSTRAP_OPERATOR_EMAIL && email === env.BOOTSTRAP_OPERATOR_EMAIL.trim().toLowerCase() && (await operatorCount(env.DB)) === 0;
 
+/** The one host the console serves. Production reads it from configuration; development has no fixed host and uses the request's. */
+const consoleHost = (c: Ctx): string => {
+  if (isDev(c.env)) return new URL(c.req.url).hostname.toLowerCase();
+  const configured = c.env.ADMIN_HOST?.trim().toLowerCase();
+  if (!configured) throw misconfigured("ADMIN_HOST is missing.");
+  return configured;
+};
+
+app.use("/api/auth/*", async (c, next) => {
+  if (new URL(c.req.url).hostname.toLowerCase() !== consoleHost(c)) throw notFound();
+  await next();
+});
+
 const realm = (c: Ctx): AuthRealm => ({
   scope: SCOPE,
   displayName: `${c.env.APP_NAME} Admin`,
   cookie: COOKIE,
+  homeHost: consoleHost(c),
+  admins: (exceptUserId) => ownerOperatorEmails(c.env.DB, exceptUserId),
   enforcePasskey: true,
   eligible: async (email) => (await isOperatorEmail(c.env.DB, email)) || bootstrapEligible(c.env, email),
   admit: async (user) => {
@@ -112,8 +128,8 @@ app.get("/api/bootstrap", async (c) => {
   const s = await currentSession(c, { scope: SCOPE, cookie: COOKIE });
   const base = { app: { name: c.env.APP_NAME, baseDomain: c.env.APP_BASE_DOMAIN, appUrlTemplate: c.env.APP_URL_TEMPLATE ?? "https://{host}" }, dev: isDev(c.env) };
   if (!s) return c.json({ ...base, session: null });
-  const passkeys = await listPasskeys(c.env.DB, s.userId, SCOPE);
-  return c.json({ ...base, session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, hasPasskey: passkeys.length > 0, method: s.method } });
+  const hasPasskey = await hasUsablePasskey(c.env.DB, s.userId, SCOPE, realm(c).homeHost);
+  return c.json({ ...base, session: { user: { id: s.userId, email: s.email, name: s.name }, role: s.role, hasPasskey, method: s.method } });
 });
 
 app.route("/api/auth", createAuthRoutes((c) => Promise.resolve(realm(c as unknown as Ctx))) as never);

@@ -72,6 +72,7 @@ export function SettingsPage() {
       terms: terms("passkey", "signInCode", "session"),
       why: [
         { q: "Why is my passkey only valid for this workspace?", a: "A passkey is bound to the address it was created on. If you belong to several workspaces you add one in each; a passkey from one can not open another." },
+        { q: "What does \"Old address, can't be used\" mean?", a: "The passkey was created on an address this workspace no longer uses, such as a custom domain that was removed. It can not sign you in and does not count as your passkey, so the email code works again. Remove it and add a new passkey here." },
         { q: "Why is there no password?", a: "Passwords get reused, guessed and phished. Passkeys and one-time codes remove that whole class of problem." },
         { q: "What does signing out a device do?", a: "It ends that session on the server immediately. The device has to sign in again." },
       ],

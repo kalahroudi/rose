@@ -98,9 +98,22 @@ Changing a person's passkeys needs a recent sign-in, and once they have at least
 passkey, it must be a passkey sign-in. A first enrolment needs only the fresh sign-in,
 otherwise a person could never add their first passkey.
 
-`listPasskeys` for the session's user and realm decides which rule applies, and
+`hasUsablePasskey` for the session's user and realm decides which rule applies, and
 `assertFreshSession` (in `control/sessions.ts`) enforces it: at most 10 minutes since the
-session was created, and, when a passkey exists, a session whose method is `passkey`. The
+session was created, and, when a usable passkey exists, a session whose method is
+`passkey`.
+
+A passkey is usable when its RP ID is a host the realm still serves: the realm's
+`homeHost`, or any row in `tenant_domains` for the passkey's own scope, whatever its
+status (a domain that is `pending` or flips back to `pending` on a recheck still counts).
+For a tenant, `homeHost` is `<slug>.<APP_BASE_DOMAIN>`; for the operator console it is
+`ADMIN_HOST` (the request's hostname in development only). A passkey on any other host (a
+removed custom domain, an old base domain) can not sign in anywhere, so it does not count: not in `codeDisabled`,
+`assertFreshForPasskeys`, the owner-change and workspace-delete checks in `tenant-app.ts`,
+or `hasPasskey` in both bootstraps. A passkey on another live host of the same tenant
+still counts, so a fresh code session on the base host can not enrol a passkey for
+someone whose passkey lives on the custom domain. `listPasskeys` uses the same rule to
+return `usable` and `host` per row. The
 same check guards passkey registration options, passkey registration verify, and passkey
 deletion. Covered by "a stale session can not enrol or remove passkeys"
 (`apps/admin/worker/test/admin.test.ts`).
@@ -111,12 +124,23 @@ deletion. Covered by "a stale session can not enrol or remove passkeys"
   challenge row is the only state. Login options are rate limited per requester
   (`pk-ip:<requester>`, using `requesterKey`: IPv4 address or IPv6 /64 prefix, not the raw
   IP).
+- `POST /passkey/register/options` and `/passkey/register/verify` are rate limited per
+  person (`pk-reg:<scope>:<userId>`); `finishRegistration` refuses the 51st passkey with
+  409 inside the INSERT itself. The add-passkey emails, including the `realm.admins()`
+  lookup, run inside `waitUntil`, so a failure there can not fail a saved registration.
 - `POST /passkey/register/options`, `/passkey/register/verify` and
   `DELETE /passkeys/:id` require a session plus a fresh, passkey-backed sign-in when a
-  passkey exists.
+  usable passkey exists.
 - `GET /passkeys` requires only a session, so a person can always see what is registered.
+  Each row carries its `host` and `usable`; the account page labels unusable rows "Old
+  address, can't be used".
 - Adding and removing a passkey write `auth.passkey.add` and `auth.passkey.remove` to the
   realm audit log. The credential id and public key are never written to the audit.
+- Adding a passkey also emails the person and the realm's `admins()`: the workspace's
+  owners and admins for a tenant, the other platform owners for the console. Mail is sent
+  in `waitUntil`, and a failed send is logged without the address. When every passkey of
+  an account is on a dead host, a mailbox is enough to enrol a new one, so this email is
+  how the person and the admins notice an enrolment they did not make.
 - **Login verify admits the user through the realm.** After `finishLogin` proves the
   credential, the route looks up the user and calls `realm.admit`. A valid passkey for a
   user who is no longer a member (or an operator who was removed) starts no session, and
@@ -147,18 +171,16 @@ either way.
   offer it on any other host, and the server re-checks the RP ID on the one lookup that
   proves a pending login: `finishLogin` selects the credential by credential id, realm
   scope and RP ID, and also passes `expectedRPID`, so a forged or replayed response for
-  another host fails. The other lookups filter by user id and realm scope only:
-  `listPasskeys`, `deletePasskey`, the `excludeCredentials` query in `beginRegistration`
-  and the `codeDisabled` check. They act on a row that is already the caller's or the
+  another host fails. `deletePasskey` and the `excludeCredentials` query in
+  `beginRegistration` filter by user id and realm scope only; `listPasskeys` and
+  `hasUsablePasskey` also compare the RP ID with the realm's live hosts. They act on a row that is already the caller's or the
   address's in this scope, and the ceremony that created it was RP-ID checked at
   registration. A tenant that moves to a custom domain keeps the old host's rows: the
   browser no longer offers them (wrong RP ID) and `finishLogin` no longer matches them,
-  so they can not sign anyone in on the new host, and because `assertFreshForPasskeys`
-  counts passkeys by user id and scope only, the stale rows still demand a passkey
-  sign-in that the new host can not provide. Passkeys therefore can not be added or
-  removed there ([Authentication](../authentication.md#passkeys), and the known bug in
-  [Known limits](#known-limits)). Covered by the design of `finishLogin`, which filters
-  on all three values.
+  so they can not sign anyone in on the new host. Once the old host is no longer served,
+  those rows stop counting as passkeys (see the usable rule above), so a code session can
+  remove them and enrol new ones. Covered by the design of `finishLogin`, which filters
+  on all three values, and by `packages/core/test/passkey-dead-host.test.ts`.
 - **Discoverable credentials with required user verification.** Registration asks for a
   resident key and user verification, and both registration and login verification pass
   `requireUserVerification: true`. The passkey, not a password plus a second step, is the
@@ -214,12 +236,18 @@ either way.
   rejections, cross-tenant challenges and the challenge-to-user binding on registration.
   Challenge expiry is the one rule with no test. See
   [Authentication](../authentication.md#passkeys).
-- **Known bug: a host change locks passkeys.** After a tenant moves to a new host, the
-  old host's passkey no longer signs in there (its row keeps the old RP ID), but
-  `assertFreshForPasskeys` counts it because it looks up passkeys by user id and scope
-  only, so every passkey change on the new host is refused for lack of a passkey
-  sign-in. The workarounds are to delete the old passkey while still on the old host, or
-  to have an operator delete the row. Tracked separately.
+- **Dead-host passkeys drop an account to the mailbox baseline.** An account whose
+  passkeys are all on hosts the realm no longer serves is protected by its mailbox only,
+  the same as an account with no passkey, until it enrols a new one. The add-passkey
+  email to the person and the admins is the compensating signal.
+- **A passkey on a `pending` or `failed` domain still counts.** Because any row in
+  `tenant_domains` for the workspace keeps its passkeys usable (so a transient DNS or
+  certificate recheck can not drop passkey protection), a custom domain that stays in
+  `pending` or `failed` still counts its passkeys as usable even though they can not sign
+  in on another host. The remedy is an operator removing that domain row.
+- A lost device on a host that is still live is not covered: the passkey still counts,
+  so the person needs it to change passkeys. Admin and operator recovery for that case
+  is separate work.
 - An operator who loses every passkey is recovered by hand: delete that user's rows in
   `passkeys` for scope `platform`. There is deliberately no self-service recovery, since
   it would put mailbox control back in the loop.

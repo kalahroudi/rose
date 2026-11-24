@@ -53,11 +53,20 @@ After the first code sign-in the UI offers to add a passkey. Implementation:
   by the browser on `globex.example.com`, and the server would reject it anyway.
 - Discoverable credentials with user verification required; challenges are single-use
   rows that expire after 5 minutes.
-- If a tenant moves to a custom domain, passkeys registered on the old host can not sign
-  in on the new host. The old rows still exist, and the freshness check counts them, so
-  the new host asks for a passkey sign-in it can not accept and adding or removing a
-  passkey there is refused. Delete the old passkey while still on the old host, or have
-  an operator delete the row. This is a known bug, tracked separately.
+- A passkey counts only while its host is still served: the workspace's own address or
+  one of its custom domains in any state (for the operator console, the address set in
+  `ADMIN_HOST`; the console refuses sign-in on any other host).
+  After a host move, for example when a custom domain is removed, you are signed out of
+  the tenant app and passkeys registered on the old host no longer work. Sign in with an
+  email code and add a new passkey. The account page lists the old ones as "Old address,
+  can't be used", and a code session can remove them. Until you add a new passkey, your
+  mailbox is the only proof of who you are, as for someone who never had a passkey.
+- A passkey is refused with 409 once the person holds 50 in the scope; the check is part
+  of the INSERT, so concurrent registrations can not exceed it.
+- A passkey on a host that is still live keeps counting, so a code session on another
+  address of the same workspace can not add or remove passkeys for you.
+- Adding a passkey emails you and the workspace's owners and admins (other platform
+  owners, in the operator console), and writes `auth.passkey.add` to the audit log.
 - The vitest suite tests only the realm and freshness rules for passkeys. The full
   ceremony is exercised by `pnpm pentest` (PK-01 to PK-03) with a software authenticator:
   replay of a used challenge, forged and cross-site assertions, cross-tenant challenges
@@ -141,17 +150,18 @@ JSON bodies require `Content-Type: application/json`.
 | Limit | Where | Scope |
 |---|---|---|
 | 20 requests / 60 s fixed window per key (`code:<scope>:<email>:<requester>`, `code-ip:<requester>`, `pk-ip:<requester>`, `slug-ip:<requester>`, `key-fail:<requester>`) — up to 2 × 20 - 1 = 39 requests can pass across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
+| 20 requests / 60 s fixed window per key `pk-reg:<scope>:<userId>`, shared by `passkey/register/options` and `passkey/register/verify` (per person and scope, not per requester) | Workers rate limiter binding `RL_AUTH` + D1 `rate_limits` | per server, then global |
 | 5 codes / 15 min per address, scope and requester; 20 / 15 min per address and scope overall | D1 | global |
 | 5 guesses per code by its own requester, plus 3 shared by all other requesters | D1 | global |
 | 10 typed guesses per address and scope across all codes created in the last 70 min | D1 | global |
 | Sign-in key (100-bit, not rate-limited per account) | D1 | global |
 | 20 verifications / 60 s fixed window per key (`verify-ip:<requester>`, `verify:<scope>:<email>:<requester>`) — same fixed 60 s window (up to 2 × 20 - 1 = 39 across a window boundary; per-code OTP caps in `control/otp.ts` are unaffected) | Workers rate limiter binding `RL_AUTH` (cheap per-server first filter) + D1 `rate_limits` (strongly consistent global counter, fixed 60 s window) | per server, then global |
 
-Every rate-limit key (`code`, `code-ip`, `verify`, `verify-ip`, `pk-ip`, `slug-ip`, `key-fail`) is keyed on the requester (`requesterKey`: IPv4 address or IPv6 /64 prefix, with IPv4-mapped IPv6 treated as IPv4), not the raw IP. If `RL_AUTH` is missing in production, auth endpoints fail closed.
+Every rate-limit key except `pk-reg` (`code`, `code-ip`, `verify`, `verify-ip`, `pk-ip`, `slug-ip`, `key-fail`) is keyed on the requester (`requesterKey`: IPv4 address or IPv6 /64 prefix, with IPv4-mapped IPv6 treated as IPv4), not the raw IP. If `RL_AUTH` is missing in production, auth endpoints fail closed.
 
 ## Operators: passkey replaces emailed codes
 
-In the operator console, once an operator registers a passkey, emailed codes stop working
+In the operator console, once an operator registers a passkey on the console's address (`ADMIN_HOST`), emailed codes stop working
 for them (no code is sent, and a code issued earlier is refused). Controlling the mailbox
 is then not enough to control the platform. Register a passkey, and a second one on another
 device, before relying on this. If an operator loses every passkey, recovery is manual: delete that user's rows in
