@@ -63,6 +63,43 @@ describe("contacts", () => {
     expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", ids } }))).toEqual({ affected: n });
   });
 
+  describe("status filter", () => {
+    const seed = async () => {
+      const t = await createTestTenant(env, SELF);
+      await t.fetch("/api/m/contacts", { body: { name: "A", status: "lead" } });
+      await t.fetch("/api/m/contacts", { body: { name: "B", status: "active" } });
+      return t;
+    };
+
+    it.each(["Archived", "bogus"])("bulk rejects unknown status %s and changes nothing", async (status) => {
+      const t = await seed();
+      for (const action of ["delete", "archive", "activate"]) {
+        expect((await t.fetch("/api/m/contacts/bulk", { body: { action, filter: { status } } })).status).toBe(422);
+      }
+      const list = await json<List>(t.fetch("/api/m/contacts"));
+      expect(list.total).toBe(2);
+      expect(list.items.map((i) => i.status).sort()).toEqual(["active", "lead"]);
+    });
+
+    it("bulk with a valid status only touches that status", async () => {
+      const t = await seed();
+      expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { status: "lead" } } }))).toEqual({ affected: 1 });
+      expect((await json<List>(t.fetch("/api/m/contacts"))).total).toBe(1);
+    });
+
+    it("bulk with an empty status matches every contact", async () => {
+      const t = await seed();
+      expect(await json(t.fetch("/api/m/contacts/bulk", { body: { action: "delete", filter: { status: "" } } }))).toEqual({ affected: 2 });
+    });
+
+    it("list rejects an unknown status and still filters by a valid one", async () => {
+      const t = await seed();
+      expect((await t.fetch("/api/m/contacts?status=bogus")).status).toBe(422);
+      expect((await json<List>(t.fetch("/api/m/contacts?status=lead"))).total).toBe(1);
+      expect((await json<List>(t.fetch("/api/m/contacts?status="))).total).toBe(2);
+    });
+  });
+
   it("members can edit but not delete", async () => {
     const m = await createTestTenant(env, SELF, { role: "member" });
     const c = await json<{ id: string }>(m.fetch("/api/m/contacts", { body: { name: "X" } }));
