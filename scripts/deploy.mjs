@@ -10,7 +10,7 @@ import { ADMIN_DIR, APP_DIR, DB_NAME, PLACEHOLDER_DB_ID, PROD_CONFIG, bin, c, fa
 const stripComments = (text) => text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str ?? "");
 
 /** Validate one production wrangler config; returns an error message or null. */
-export function checkProdConfig(cfg, { where, isAdmin = false }) {
+export function checkProdConfig(cfg, { where, isAdmin }) {
   const code = stripComments(cfg);
   if (code.includes(PLACEHOLDER_DB_ID)) return `${where} still has the placeholder database id. Run \`pnpm setup --production\` first.`;
   if (/"APP_BASE_DOMAIN"\s*:\s*"example\.com"/.test(code)) return "APP_BASE_DOMAIN is still example.com. Run `pnpm setup --production` first.";

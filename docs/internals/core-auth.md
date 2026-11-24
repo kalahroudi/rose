@@ -240,11 +240,11 @@ either way.
   passkeys are all on hosts the realm no longer serves is protected by its mailbox only,
   the same as an account with no passkey, until it enrols a new one. The add-passkey
   email to the person and the admins is the compensating signal.
-- **A passkey on a domain stuck in `pending` still counts.** Because any row in
+- **A passkey on a `pending` or `failed` domain still counts.** Because any row in
   `tenant_domains` for the workspace keeps its passkeys usable (so a transient DNS or
-  certificate recheck can not drop passkey protection), a custom domain that stays stuck
-  in `pending` still counts its passkeys as usable even though they can not sign in on
-  another host. The remedy is an operator removing that domain row.
+  certificate recheck can not drop passkey protection), a custom domain that stays in
+  `pending` or `failed` still counts its passkeys as usable even though they can not sign
+  in on another host. The remedy is an operator removing that domain row.
 - A lost device on a host that is still live is not covered: the passkey still counts,
   so the person needs it to change passkeys. Admin and operator recovery for that case
   is separate work.

@@ -291,7 +291,7 @@ export async function removeOperator(db: D1Database, userId: string): Promise<vo
 }
 
 export async function ownerOperatorEmails(db: D1Database, exceptUserId: string): Promise<string[]> {
-  const r = await db.prepare("SELECT u.email AS email FROM operators o JOIN users u ON u.id = o.user_id WHERE o.role = 'owner' AND o.user_id != ? LIMIT 100").bind(exceptUserId).all<{ email: string }>();
+  const r = await db.prepare("SELECT u.email AS email FROM operators o JOIN users u ON u.id = o.user_id WHERE o.role = 'owner' AND o.user_id != ? ORDER BY o.created_at ASC, o.user_id ASC LIMIT 100").bind(exceptUserId).all<{ email: string }>();
   return r.results.map((o) => o.email);
 }
 

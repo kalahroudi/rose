@@ -163,7 +163,7 @@ export function createTenantApp(options: TenantAppOptions) {
   const memberEmails = async (db: D1Database, tenantId: string, roles: readonly [Role, ...Role[]], exceptUserId: string): Promise<string[]> => {
     const placeholders = roles.map(() => "?").join(", ");
     const { results } = await db
-      .prepare(`SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN (${placeholders}) AND m.user_id != ? LIMIT 100`)
+      .prepare(`SELECT u.email AS email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN (${placeholders}) AND m.user_id != ? ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END, m.created_at ASC, m.user_id ASC LIMIT 100`)
       .bind(tenantId, ...roles, exceptUserId)
       .all<{ email: string }>();
     return results.map((r) => r.email);

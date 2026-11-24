@@ -85,7 +85,7 @@ async function codeDisabled(db: D1Database, realm: AuthRealm, email: string): Pr
   return !!user && (await hasUsablePasskey(db, user.id, realm.scope, realm.homeHost));
 }
 
-async function notifyPasskeyAdded(c: Context, realm: AuthRealm, s: SessionInfo): Promise<void> {
+function notifyPasskeyAdded(c: Context, realm: AuthRealm, s: SessionInfo): void {
   const env = c.env as CoreEnv;
   const host = new URL(c.req.url).hostname;
   const logFailure = (err: unknown) => console.error(JSON.stringify({ level: "error", at: "new-credential-email", error: String(err) }));
@@ -179,7 +179,7 @@ export function createAuthRoutes(getRealm: (c: Ctx) => Promise<AuthRealm>) {
     const body = await readJson(c, z.object({ id: z.string().max(64), name: z.string().max(60).default("Passkey"), response: z.looseObject({ id: z.string().max(1024) }) }));
     await finishRegistration(c.env.DB, site(c, realm), s.userId, body.id, body.response as never, body.name);
     await realm.audit({ actor: s.email, action: "auth.passkey.add", ip: clientIp(c) });
-    await notifyPasskeyAdded(c, realm, s);
+    notifyPasskeyAdded(c, realm, s);
     return c.json({ ok: true });
   });
 
