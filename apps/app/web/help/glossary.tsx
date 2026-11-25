@@ -23,7 +23,7 @@ const glossary = {
   gateway: "The /svc path of this workspace. Requests to it are forwarded to the connected service together with a signed statement of which workspace and member they come from.",
 } satisfies Record<string, ReactNode>;
 
-export type Term = keyof typeof glossary;
+type Term = keyof typeof glossary;
 
 const names: Record<Term, string> = {
   workspace: "Workspace", address: "Workspace address", member: "Member", role: "Role", owner: "Owner", invitation: "Invitation",
