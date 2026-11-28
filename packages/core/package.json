@@ -8,7 +8,7 @@
   "exports": { ".": "./src/index.ts", "./platform": "./src/platform.ts", "./testing": "./src/testing/index.ts" },
   "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run", "test:coverage": "vitest run --coverage" },
   "dependencies": {
-    "hono": "^4.13.0",
+    "hono": "^4.13.22",
     "zod": "^4.6.0",
     "@simplewebauthn/server": "^14.1.0"
   },
